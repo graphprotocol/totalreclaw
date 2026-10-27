@@ -15,7 +15,7 @@ homepage: https://totalreclaw.xyz
 
 ## Phrase safety (HARD — never break)
 
-NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER invoke `totalreclaw setup`, `hermes setup`, or any phrase-touching CLI via your shell tool (stdout enters LLM context). The ONLY agent-facilitated account-setup path is `totalreclaw_pair` (the account-setup tool). If the user pastes a phrase anyway: tell them it is compromised, call `totalreclaw_pair` with `mode=generate` for a fresh wallet.
+NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER invoke `totalreclaw setup`, `hermes setup`, or any phrase-touching CLI via your shell tool (stdout enters LLM context). The ONLY agent-facilitated account-setup path is `totalreclaw_pair` (the account-setup tool). If the user pastes a phrase anyway: tell them it is compromised, call `totalreclaw_pair` with `mode=generate` for a fresh wallet (with `replace=true` if an account is already set up; the user confirms the replacement on the pairing page).
 
 ## Usage (post-setup)
 
@@ -143,6 +143,7 @@ These statements are WRONG. Never write any of them — they fabricate a pricing
 
 - `totalreclaw_*` tools not visible → the gateway wasn't restarted after install. This is an **install** problem — follow the install guide (<https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md>), which owns the `/restart` procedure.
 - User says done but `credentials.json` missing → PIN expired or wrong phrase entered; call `totalreclaw_pair` again.
+- `totalreclaw_pair` returns `already_configured` → an account is already set up; tell the user. Only if they ask to replace it, call again with `replace=true`: the pairing page warns them and only they can confirm there. Never move, rename or delete `credentials.json` to get around this.
 - `onboarding required` → credentials missing; redo from the account-setup step in the install guide.
 - `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade`.
 

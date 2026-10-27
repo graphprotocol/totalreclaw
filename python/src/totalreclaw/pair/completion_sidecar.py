@@ -214,6 +214,12 @@ _ENV_HANDSHAKE_ID = "TR_PAIR_SIDECAR_HANDSHAKE_ID"
 _ENV_MODE = "TR_PAIR_SIDECAR_MODE"
 _ENV_SERVER_URL = "TR_PAIR_SIDECAR_SERVER_URL"
 _ENV_OWNER_PROBE = "TR_PAIR_SIDECAR_OWNER_PROBE"
+#: "1" -> open the relay session in replace mode (see
+#: ``remote_client.open_remote_pair_session``).
+_ENV_REPLACE = "TR_PAIR_SIDECAR_REPLACE"
+
+#: ``_HandshakeRecord.error_kind`` when the relay cannot do replace mode.
+_ERROR_KIND_REPLACE_NOT_SUPPORTED = "replace_not_supported"
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +244,8 @@ class _HandshakeRecord:
     # rather than time out).
     status: str
     error_message: str = ""
+    #: Machine-readable error class, so the parent can re-raise a typed error.
+    error_kind: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +270,7 @@ def spawn_completion_sidecar(
     relay_url: Optional[str] = None,
     server_url: Optional[str] = None,
     handshake_timeout_s: float = 15.0,
+    replace: bool = False,
 ) -> _HandshakeRecord:
     """Fork a detached sidecar; block until it reports ``opened``.
 
@@ -272,6 +281,8 @@ def spawn_completion_sidecar(
 
     Raises
     ------
+    ReplaceNotSupportedError
+        If ``replace`` was requested and the relay does not support it.
     RuntimeError
         If the sidecar does not return ``opened`` within
         ``handshake_timeout_s`` OR if the sidecar reports an error.
@@ -292,6 +303,10 @@ def spawn_completion_sidecar(
         env[_ENV_RELAY_URL] = relay_url
     if server_url:
         env[_ENV_SERVER_URL] = server_url
+    if replace:
+        env[_ENV_REPLACE] = "1"
+    else:
+        env.pop(_ENV_REPLACE, None)
     # Carry through TOTALRECLAW_SERVER_URL / TOTALRECLAW_PAIR_RELAY_URL
     # explicitly even if the caller passed nothing — the sidecar runs
     # detached and inherits the parent env, but ``subprocess.Popen``
@@ -376,6 +391,10 @@ def spawn_completion_sidecar(
             ) from err
 
         if record.status == "error":
+            if record.error_kind == _ERROR_KIND_REPLACE_NOT_SUPPORTED:
+                from totalreclaw.pair.remote_client import ReplaceNotSupportedError
+
+                raise ReplaceNotSupportedError(record.error_message)
             raise RuntimeError(
                 f"pair.sidecar: relay open failed: {record.error_message}"
             )
@@ -405,6 +424,7 @@ async def _drive_full_pair_session(
     handshake_id: str,
     mode: Optional[str],
     relay_url: Optional[str],
+    replace: bool = False,
 ) -> None:
     """The end-to-end pair flow that runs INSIDE the detached sidecar.
 
@@ -415,6 +435,7 @@ async def _drive_full_pair_session(
     # Local imports — keep the sidecar's startup cheap. These dependencies
     # only matter inside the sidecar.
     from totalreclaw.pair.remote_client import (
+        ReplaceNotSupportedError,
         await_phrase_upload,
         open_remote_pair_session,
     )
@@ -449,6 +470,7 @@ async def _drive_full_pair_session(
         session = await open_remote_pair_session(
             relay_base_url=relay_url,
             mode=mode,
+            replace=replace,
         )
     except BaseException as err:  # noqa: BLE001 — we want any failure shape
         logger.warning(
@@ -463,13 +485,21 @@ async def _drive_full_pair_session(
                 token="",
                 status="error",
                 error_message=str(err),
+                error_kind=(
+                    _ERROR_KIND_REPLACE_NOT_SUPPORTED
+                    if isinstance(err, ReplaceNotSupportedError)
+                    else ""
+                ),
             )
         )
         return
 
     token_tag = session.token[:8] if session.token else "?"
     logger.info(
-        "pair.sidecar: relay opened token=%s… mode=%s", token_tag, mode or "either"
+        "pair.sidecar: relay opened token=%s… mode=%s replace=%s",
+        token_tag,
+        mode or "either",
+        replace,
     )
 
     # 2. Tell the parent the metadata. After this point the parent is
@@ -484,11 +514,27 @@ async def _drive_full_pair_session(
         )
     )
 
+    # The phrase-configured client from a completed pairing, kept so the
+    # vault can be registered with the relay once the browser has its ack.
+    paired_client = None
+
     # 3. Wait for the encrypted-phrase forward, decrypt, persist.
     async def _complete_pairing(phrase: str) -> dict:
+        nonlocal paired_client
         # Local import to avoid pulling agent + client modules into
         # spawn-time path.
         from totalreclaw.agent.state import AgentState
+
+        if replace:
+            # Only reached once the user confirmed the replacement on the
+            # pairing page (await_phrase_upload checks first). Outside the
+            # try: if the outgoing credentials cannot be kept, raise so the
+            # relay is nacked and nothing is overwritten.
+            from totalreclaw.hermes.auto_migrate import (
+                preserve_credentials_before_replace,
+            )
+
+            preserve_credentials_before_replace()
 
         state = AgentState()
         try:
@@ -500,6 +546,7 @@ async def _drive_full_pair_session(
                 token_tag,
                 eoa or "unknown",
             )
+            paired_client = client
             return {"state": "active", "account_id": eoa}
         except Exception as err:
             logger.error(
@@ -510,7 +557,9 @@ async def _drive_full_pair_session(
             return {"state": "error", "error": str(err)}
 
     # Option E Phase 2 / #581 (P2-10). Sibling of _complete_pairing above,
-    # for payload_type == "derived-bundle-v1". `bundle` has already been
+    # for payload_type == "derived-bundle-v1". Not registered here: per
+    # derived-bundle-v1.md §4.5 a bundle arrives already registered by the
+    # origin that built it. `bundle` has already been
     # through totalreclaw.bundle.parse_bundle_v1 (every §4.7 invariant
     # checked) by the time remote_client.await_phrase_upload calls this —
     # never persist a bundle that did not validate, and this handler only
@@ -522,8 +571,14 @@ async def _drive_full_pair_session(
         from totalreclaw.credential_provider import get_credential_provider
         from totalreclaw.hermes.auto_migrate import (
             bundle_secret_subtree_json,
+            preserve_credentials_before_replace,
             v2_credentials_dict,
         )
+
+        if replace:
+            # Same as the phrase path: keep the outgoing credentials first,
+            # or fail the pairing without touching them.
+            preserve_credentials_before_replace()
 
         try:
             # Defensive check beyond parse_bundle_v1's own validation
@@ -605,12 +660,33 @@ async def _drive_full_pair_session(
             type(err).__name__,
         )
 
+    # 4. Register the new vault with the relay while the phrase is still on
+    #    this host. The next plugin load may swap the phrase for a derived
+    #    bundle, which never registers (derived-bundle-v1.md §4.5), so a
+    #    vault left unregistered here would 401 on every call. After the
+    #    ack, so the browser is not kept waiting; auto_migrate registers
+    #    again (idempotently) and refuses to migrate if this failed.
+    if paired_client is not None:
+        from totalreclaw.pair.registration import register_vault
+
+        registered = await register_vault(paired_client)
+        logger.info(
+            "pair.sidecar: relay register token=%s… outcome=%s",
+            token_tag,
+            "ok" if registered else "failed",
+        )
+        try:
+            await paired_client.close()
+        except Exception:  # noqa: BLE001 — the sidecar is about to exit
+            pass
+
 
 def run_sidecar_inline(
     *,
     handshake_id: str,
     mode: Optional[str],
     relay_url: Optional[str],
+    replace: bool = False,
 ) -> None:
     """Run the sidecar logic in-process (no fork). Used by tests.
 
@@ -623,6 +699,7 @@ def run_sidecar_inline(
             handshake_id=handshake_id,
             mode=mode,
             relay_url=relay_url,
+            replace=replace,
         )
     )
 
@@ -657,6 +734,7 @@ def _main(argv: Optional[list[str]] = None) -> int:
 
     mode = os.environ.get(_ENV_MODE) or None
     relay_url = os.environ.get(_ENV_RELAY_URL) or None
+    replace = os.environ.get(_ENV_REPLACE) == "1"
 
     try:
         asyncio.run(
@@ -664,6 +742,7 @@ def _main(argv: Optional[list[str]] = None) -> int:
                 handshake_id=handshake_id,
                 mode=mode,
                 relay_url=relay_url,
+                replace=replace,
             )
         )
     except KeyboardInterrupt:
