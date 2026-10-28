@@ -451,7 +451,7 @@ This grep-reads `~/.hermes/config.yaml` (or `$HERMES_HOME/config.yaml`) and does
 
 ## Compatibility with Hermes built-in memory
 
-**On Hermes 0.22+, activating TotalReclaw turns off Hermes' built-in memory stores** (`~/.hermes/memories/USER.md` and `MEMORY.md`): `activate-memory-provider` sets `memory.memory_enabled: false` and `memory.user_profile_enabled: false`, and Hermes then doesn't load or write them. Do **not** also run `hermes tools disable memory`: on Hermes 0.22+ it gates off the memory provider's tools and system-prompt block too, so the agent loses sight of TotalReclaw.
+**On Hermes 0.22+, activating TotalReclaw turns off Hermes' built-in memory stores** (`~/.hermes/memories/USER.md` and `MEMORY.md`): `activate-memory-provider` sets `memory.memory_enabled: false` and `memory.user_profile_enabled: false`, and Hermes then doesn't load or write them (`hermes memory status` shows both as disabled). `hermes memory --help` still says built-in memory "is always active"; on Hermes 0.22 these two settings are what turn it off. Do **not** also run `hermes tools disable memory`: on Hermes 0.22+ it gates off the memory provider's tools and system-prompt block too, so the agent loses sight of TotalReclaw.
 
 How the two relate:
 
