@@ -23,6 +23,17 @@ export TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
 **When to override:** always set it once during setup.
 **Security:** treat this like a seed phrase. Losing it means losing access to every memory you have ever stored.
 
+### `TOTALRECLAW_EXTRACTION_MODEL`
+
+**Optional, Python client (Hermes).** Use this model for memory extraction instead of the automatic choice. It must be a model of the LLM provider the agent already uses: the key, base URL and API format stay the same.
+
+```bash
+TOTALRECLAW_EXTRACTION_MODEL=glm-5.3-flash
+```
+
+**Default:** unset. TotalReclaw uses the chat model when its name marks it as small (`flash`, `mini`, `haiku`, …), otherwise a cheap per-provider default (z.ai: `glm-4.5-flash`).
+**When to override:** you want a different speed, cost or quality trade-off for extraction. Versions up to 2.5.3 wrongly log `ignoring removed env var(s): TOTALRECLAW_EXTRACTION_MODEL` at startup; the override still applies.
+
 ### `TOTALRECLAW_SERVER_URL`
 
 **Optional.** Override the relay server URL. Defaults to the managed service.
@@ -198,7 +209,7 @@ These env vars existed in earlier versions and are now silently ignored. Delete 
 | `TOTALRECLAW_CHAIN_ID` | All tiers use Gnosis mainnet; chain selection is no longer user-configurable. |
 | `TOTALRECLAW_EMBEDDING_MODEL` | Harrier-OSS-v1-270M (640d) is the only supported model in v1. |
 | `TOTALRECLAW_STORE_DEDUP` | Store-time near-duplicate detection is always on. |
-| `TOTALRECLAW_LLM_MODEL` / `TOTALRECLAW_EXTRACTION_MODEL` | LLM is picked automatically from the available provider. Model choice is not user-tunable. |
+| `TOTALRECLAW_LLM_MODEL` | The extraction LLM is picked automatically from the available provider. To pick a different extraction model, use `TOTALRECLAW_EXTRACTION_MODEL` (Python client). |
 | `TOTALRECLAW_TAXONOMY_VERSION` | v1 is the only format. No opt-in needed. |
 | `TOTALRECLAW_CLAIM_FORMAT` | Same reason — the v0 `{text, metadata}` shape is gone. |
 | `TOTALRECLAW_DIGEST_MODE` | Digest behaviour is no longer user-configurable. |
