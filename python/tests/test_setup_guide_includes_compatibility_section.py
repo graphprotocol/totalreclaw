@@ -70,23 +70,30 @@ def test_guide_does_not_falsely_claim_to_disable_built_in_memory():
 
 
 def test_guide_includes_honest_compatibility_section():
-    """rc5: the Compatibility section exists and acknowledges the
-    upstream-verified reality that built-in memory cannot be disabled."""
+    """The Compatibility section exists and says how built-in memory is
+    really turned off on Hermes 0.22+: the ``memory_enabled`` /
+    ``user_profile_enabled`` settings that ``activate-memory-provider``
+    writes, NOT ``hermes tools disable memory``, which also hides the
+    memory provider's tools (rc3 QA, #602)."""
     body = _read_guide()
     assert "## Compatibility with Hermes built-in memory" in body, (
         "hermes-setup.md must include a `## Compatibility with Hermes "
         "built-in memory` section explaining the dual-mode reality."
     )
-    # Honest framing: built-in cannot be disabled.
-    assert "cannot be disabled" in body, (
-        "Compatibility section must honestly state that Hermes built-in "
-        "memory CANNOT be disabled (upstream design)."
+    section = body.split("## Compatibility with Hermes built-in memory", 1)[1]
+    assert "memory_enabled: false" in section and "user_profile_enabled: false" in section, (
+        "Compatibility section must name the two settings that turn the "
+        "built-in stores off on Hermes 0.22+."
     )
-    assert "always active" in body, (
-        "Compatibility section must reference the upstream Hermes "
-        "phrase 'always active' that documents the non-disable behaviour."
+    assert "always active" in section, (
+        "Compatibility section must address Hermes' own 'always active' "
+        "wording so readers aren't misled by `hermes memory --help`."
     )
-    assert "USER.md" in body, (
+    assert "Do **not** also run `hermes tools disable memory`" in section, (
+        "Compatibility section must warn against `hermes tools disable "
+        "memory`: on Hermes 0.22+ it gates off the provider's tools."
+    )
+    assert "USER.md" in section, (
         "Compatibility section must name the actual file Hermes writes "
         "to (~/.hermes/memories/USER.md) so users / readers can trace it."
     )

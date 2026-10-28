@@ -15,6 +15,11 @@ already carried the *accurate* stance — validated against Hermes upstream:
     USER.md. So disabling is an OPTIONAL partial mitigation, not a `(CRITICAL)`
     on/off switch.
 
+2026-10-28 (rc3 QA, #602): on Hermes 0.22+ the stance changed again. The
+``memory_enabled`` / ``user_profile_enabled`` settings DO turn the built-in
+stores off, and ``hermes tools disable memory`` became harmful (it also hides
+the memory provider's tools). The install doc now says so.
+
 The `(CRITICAL)` framing in SKILL.md was the overstated side of a drift. These
 tests now pin the accurate coverage in hermes-setup.md, and assert SKILL.md no
 longer carries the install-time disable step (it's not usage). The real
@@ -46,20 +51,21 @@ def test_install_doc_documents_disable_memory_command():
     )
 
 
-def test_install_doc_states_builtin_memory_cannot_be_fully_disabled():
-    """The accurate, validated stance: built-in memory is always active and
-    cannot be fully disabled — `disable memory` only blocks the agent tool.
-    Pin this so a future rewrite doesn't regress to the overstated
-    'disabling turns it off' framing."""
+def test_install_doc_states_how_builtin_memory_is_really_turned_off():
+    """Hermes 0.22+ (rc3 QA, #602): the built-in stores are turned off by the
+    ``memory_enabled`` / ``user_profile_enabled`` settings that
+    ``activate-memory-provider`` writes. ``hermes tools disable memory`` is
+    NOT the switch: it only gates the agent's ``memory`` toolset, and on 0.22+
+    that also hides the memory provider's tools and system-prompt block. Pin
+    both so a rewrite doesn't bring the disable step back."""
     body = _read(INSTALL_DOC)
-    assert "cannot be disabled" in body, (
-        "hermes-setup.md must state built-in memory cannot be fully "
-        "disabled (Hermes upstream: the built-in layer is always active)."
+    assert "memory_enabled: false" in body and "user_profile_enabled: false" in body, (
+        "hermes-setup.md must name the settings that turn the built-in "
+        "stores off on Hermes 0.22+."
     )
-    assert "only blocks" in body.lower() or "does NOT stop" in body, (
-        "hermes-setup.md must clarify `hermes tools disable memory` only "
-        "blocks the AGENT tool and does NOT stop the gateway's USER.md "
-        "writes — otherwise the agent over-promises a full disable."
+    assert "Do **not** also run `hermes tools disable memory`" in body, (
+        "hermes-setup.md must warn against `hermes tools disable memory`: "
+        "on Hermes 0.22+ it gates off the provider's tools."
     )
 
 
