@@ -42,13 +42,15 @@ If that succeeds → follow **[`openclaw-setup.md`](./openclaw-setup.md)**. Tota
 
 ### You are a Hermes agent
 
-You are a **Hermes agent** if you are a Python runtime with the `hermes` CLI / Hermes plugin system and `pip` available:
+You are a **Hermes agent** if the `hermes` CLI is available (your own system prompt usually says so too):
 
 ```bash
-command -v hermes && command -v pip
+command -v hermes && hermes --version
 ```
 
-If both resolve (or you can otherwise import the Hermes runtime) → follow **[`hermes-setup.md`](./hermes-setup.md)**. Install is `pip install totalreclaw`.
+Do **not** also require `pip` on your PATH. Hermes 0.22+ runs on its own bundled Python with a managed virtual environment, so a working Hermes usually has no bare `pip`/`pip3` at all.
+
+If that succeeds → follow **[`hermes-setup.md`](./hermes-setup.md)**. It installs the PyPI package `totalreclaw` into the environment Hermes imports from: its Install procedure step 1 finds that environment and step 2 installs into it. Never run a bare `pip install totalreclaw`; it lands where Hermes doesn't look.
 
 ### You are neither — Claude Desktop, Cursor, Windsurf, Claude Code, or any MCP host
 
