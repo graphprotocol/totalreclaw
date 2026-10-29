@@ -69,6 +69,7 @@ carrying the old bare stub: a single re-pair or one
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -1019,6 +1020,65 @@ def install_and_activate(
         "builtin_disabled": _builtin_memory_off(_read_config_text(hermes_home)),
         "builtin_restored": builtin_restored,
     }
+
+
+def _restore_marker_path(home: Path) -> Path:
+    from .tools import _resolve_state_dir
+
+    scope = hashlib.sha256(str(home.resolve()).encode("utf-8")).hexdigest()[:12]
+    return _resolve_state_dir() / f"hermes-builtin-restore-{scope}.done"
+
+
+def restore_builtin_after_upgrade(hermes_home: Optional[Path] = None) -> bool:
+    """Turn Hermes' built-in memory back on once after upgrading to 2.5.3rc4+.
+
+    Activation before 2.5.3rc4 always set ``memory_enabled`` /
+    ``user_profile_enabled`` to ``false``. Since rc4 the built-in runs
+    alongside TotalReclaw, and :func:`install_and_activate` reverts that
+    pattern, but only when activation runs again. Called at plugin load so
+    existing users get the new behaviour without re-pairing.
+
+    Acts only on exactly the old pattern: ``provider: totalreclaw`` and both
+    switches ``false`` with no exclusive marker (:func:`_builtin_off_by_old_activation`).
+    Runs once per Hermes home: a marker file under the TotalReclaw state dir
+    records that the check happened, so a user who later turns the built-in
+    off by hand is not overridden. Uses the same validated, atomic config
+    write as activation. Hermes reads the config at startup, so the change
+    takes effect at the next gateway restart. Returns True when it restored.
+    Never raises.
+    """
+    try:
+        home = (hermes_home or _hermes_home()).expanduser()
+        if not home.is_dir():
+            return False
+        marker = _restore_marker_path(home)
+        if marker.exists():
+            return False
+        restored = False
+        text = _read_config_text(home)
+        if (
+            (_read_memory_key(text, "provider") or "").strip().lower() == "totalreclaw"
+            and _builtin_off_by_old_activation(text)
+        ):
+            path = _update_memory_keys(
+                {key: "true" for key in _BUILTIN_MEMORY_KEYS}, home
+            )
+            restored = True
+            logger.info(
+                "TotalReclaw: turned Hermes' built-in memory back on in %s "
+                "(memory_enabled / user_profile_enabled: true; a TotalReclaw "
+                "activation before 2.5.3rc4 had turned it off). Takes effect "
+                "at the next gateway restart.",
+                path,
+            )
+        marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("restored\n" if restored else "checked\n")
+        return restored
+    except Exception as exc:
+        logger.warning("TotalReclaw: built-in memory restore check skipped: %s", exc)
+        return False
 
 
 # Providers pairing may replace without asking: nothing configured yet, or

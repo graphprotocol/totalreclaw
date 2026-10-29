@@ -190,6 +190,21 @@ def test_unchanged_files_return_early(env, caplog):
     assert "memory reconcile: no changes" in caplog.text
 
 
+def test_empty_diff_after_restart_logs_no_changes(env, caplog):
+    # After a gateway restart the in-process stat cache is empty: the full
+    # diff finds nothing and must log the same line QA greps for.
+    state = _state()
+    _files(env, user=["One."])
+    vault = Vault(state)
+    vault.run(state)
+    mr._LAST_CLEAN_STAT.clear()
+    caplog.clear()
+    caplog.set_level(logging.INFO, logger="totalreclaw.hermes.memory_reconcile")
+    vault.run(state, force=False)
+    assert "memory reconcile: no changes" in caplog.text
+    assert "first_run=" not in caplog.text
+
+
 def test_removal_never_forgets(env):
     # Hermes evicts entries to stay under its char limits; the vault keeps them.
     state = _state()

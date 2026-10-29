@@ -59,6 +59,7 @@ def register(ctx):
         logger.debug("auto-migration skipped", exc_info=True)
 
     _refresh_provider_sidecar()
+    _restore_builtin_memory_after_upgrade()
 
     # Register tools. Descriptions mirror the schemas — they are the
     # text the Hermes agent sees when selecting a tool, so they need to
@@ -321,6 +322,22 @@ def register(ctx):
     # memory-provider hooks only fire when TR is the active provider.
 
     logger.info("TotalReclaw plugin registered (14+ tools, 6 hooks)")
+
+
+def _restore_builtin_memory_after_upgrade() -> None:
+    """Once per Hermes home, undo the built-in-memory switch-off a TotalReclaw
+    activation before 2.5.3rc4 wrote (see
+    ``install_memory_provider.restore_builtin_after_upgrade``), so existing
+    users run alongside Hermes' built-in memory without re-pairing. Only
+    inside a real Hermes process."""
+    if "hermes_cli" not in sys.modules:
+        return
+    try:
+        from .install_memory_provider import restore_builtin_after_upgrade
+
+        restore_builtin_after_upgrade()
+    except Exception:  # pragma: no cover — best-effort
+        logger.debug("built-in memory restore skipped", exc_info=True)
 
 
 def _refresh_provider_sidecar() -> None:
