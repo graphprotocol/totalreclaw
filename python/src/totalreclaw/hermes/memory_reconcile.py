@@ -15,13 +15,16 @@ provider), and compares the result with a snapshot of the entries last
 reconciled:
 
 - a new entry is stored (exact copies already in the vault are skipped);
-- a changed entry (a removed entry paired with a similar new one) is
-  superseded: the new text is stored, then the old fact is forgotten;
-- a removed entry is forgotten with the mirror's conservative match;
+- a changed entry (a removed entry paired with a similar new one) stores
+  the new text; the old fact is forgotten only when the two entries are
+  clearly the same fact (``memory_provider._same_fact``) and the vault match
+  is confident, so a merge keeps the old facts;
+- a removed entry is NOT forgotten: the files are size-capped and Hermes
+  evicts entries to make room, so a removal is not a request to forget;
 - entries Hermes' threat scanner flags are never stored.
 
 The first pass for a Hermes home and account (no snapshot yet) stores every
-current entry once and forgets nothing. A pass does at most
+current entry once. A pass does at most
 :data:`MAX_OPS_PER_PASS` vault operations; the rest wait for the next pass.
 The snapshot only advances for work that is done, so a failed store is
 retried next time.
@@ -254,7 +257,12 @@ def reconcile(
 ) -> Dict[str, Any]:
     """Run one reconcile pass. Returns the summary it logs. Never raises
     for vault errors (those entries are retried next pass)."""
-    from .memory_provider import _find_mirrored_facts, _mirror_forget, _mirror_remember
+    from .memory_provider import (
+        _find_mirrored_facts,
+        _mirror_forget,
+        _mirror_remember,
+        _same_fact,
+    )
 
     if not state.is_configured():
         return {"skipped": "unconfigured"}
@@ -303,12 +311,14 @@ def reconcile(
         for old, new in pairs:
             if not budget():
                 continue
-            try:
-                old_ids = _find_mirrored_facts(state, old)
-            except Exception as exc:
-                logger.debug("memory reconcile: lookup failed: %s", exc)
-                counts["deferred"] += 1
-                continue
+            old_ids: List[str] = []
+            if _same_fact(old, new):
+                try:
+                    old_ids = _find_mirrored_facts(state, old)
+                except Exception as exc:
+                    logger.debug("memory reconcile: lookup failed: %s", exc)
+                    counts["deferred"] += 1
+                    continue
             try:
                 stored = _mirror_remember(state, {"text": new})
             except Exception as exc:
@@ -343,19 +353,12 @@ def reconcile(
             snap.add(target, text)
             snap.save()
 
+        # Removed from the profile (usually evicted for space): kept in the
+        # vault, only the snapshot moves on. No vault operation.
         for old in removed:
-            if not budget():
-                continue
-            try:
-                fact_ids = _find_mirrored_facts(state, old)
-            except Exception as exc:
-                logger.debug("memory reconcile: lookup failed: %s", exc)
-                counts["deferred"] += 1
-                continue
             counts["removed"] += 1
-            counts["forgotten"] += _mirror_forget(state, fact_ids)
-            # Done either way: no confident match means nothing to forget.
             snap.discard(target, old)
+        if removed:
             snap.save()
 
     snap.save()
@@ -363,6 +366,8 @@ def reconcile(
         _LAST_CLEAN_STAT.pop(snap.path, None)
     else:
         _LAST_CLEAN_STAT[snap.path] = stat
+    # removed = left the Hermes files (kept in TotalReclaw); forgotten =
+    # old facts superseded by a same-fact edit.
     logger.info(
         "memory reconcile: first_run=%s added=%d changed=%d removed=%d "
         "forgotten=%d skipped=%d deferred=%d",

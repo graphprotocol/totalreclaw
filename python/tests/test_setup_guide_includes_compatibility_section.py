@@ -85,10 +85,13 @@ def test_guide_includes_honest_compatibility_section():
         "Compatibility section must say the built-in memory stays on beside "
         "TotalReclaw by default (2.5.3rc4)."
     )
-    assert "Built-in memory writes are copied into TotalReclaw" in section, (
-        "Compatibility section must say built-in memory tool writes are "
-        "mirrored, so the two stores don't drift."
+    assert "New and edited built-in entries are copied into TotalReclaw; removals are not" in section, (
+        "Compatibility section must say adds/edits are mirrored but removals "
+        "are not (they are usually evictions for space)."
     )
+    assert "A removal never deletes anything from TotalReclaw" in section
+    assert "the old memories are kept" in section  # merges keep old facts
+    assert "To forget something, the agent calls `totalreclaw_forget`" in section
     assert "Changes Hermes doesn't report are caught at session start and end" in section, (
         "Compatibility section must say the reconcile pass catches the "
         "background review's writes, which Hermes never reports."

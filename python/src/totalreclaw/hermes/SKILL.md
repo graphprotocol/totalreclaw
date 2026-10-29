@@ -33,7 +33,7 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 
 **Don't double-call.** If auto-extraction just fired (recent log lines show extraction), skip the manual `totalreclaw_remember` — embedding dedup will silently drop the duplicate, but you waste a write against quota.
 
-**Hermes' built-in `memory` tool** keeps the short profile (`USER.md` / `MEMORY.md`) Hermes loads every session. It runs alongside TotalReclaw. For "remember X", use `totalreclaw_remember`, not the built-in tool. When you do change the built-in memory (add, replace, remove), TotalReclaw copies the change into the vault by itself, so don't repeat it with `totalreclaw_remember` or `totalreclaw_forget`.
+**Hermes' built-in `memory` tool** keeps the short profile (`USER.md` / `MEMORY.md`) Hermes loads every session. It runs alongside TotalReclaw. For "remember X", use `totalreclaw_remember`, not the built-in tool. Entries you add or edit there are copied into the vault by themselves, so don't repeat them with `totalreclaw_remember`. Removing an entry there only frees room in the profile and does NOT forget it in TotalReclaw.
 
 **Don't store transient noise.** Skip `totalreclaw_remember` for:
 - Casual greetings, banter, acknowledgements
@@ -80,7 +80,7 @@ Hermes provides `session_search` for the local session DB, which has limited ret
 
 Pattern is always **recall first → mutate second**, because the mutation tools need `fact_id`:
 
-- `forget X` → `totalreclaw_recall("X")` → pick the right `fact_id` → `totalreclaw_forget(fact_id)`. Tombstones the fact (still retained for audit; recall filters it out).
+- `forget X` → `totalreclaw_recall("X")` → pick the right `fact_id` → `totalreclaw_forget(fact_id)`. Tombstones the fact (still retained for audit; recall filters it out). If X is also in Hermes' built-in memory, remove it there too (`memory` tool, action `remove`).
 - `pin X as canonical` → recall → `totalreclaw_pin(fact_id)`. Pinned facts surface in every subsequent recall regardless of query similarity.
 - `unpin X` → recall → `totalreclaw_unpin(fact_id)`.
 - `change type of X to <type>` → recall → `totalreclaw_retype(fact_id, type)`. Use when the extractor misclassified.

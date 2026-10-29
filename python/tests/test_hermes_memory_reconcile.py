@@ -170,11 +170,13 @@ def test_added_removed_and_changed_entries(env):
     )
     summary = vault.run(state)
     assert sorted(vault.stored) == ["User has a dog named Rex.", "User prefers green tea."]
-    assert sorted(vault.forgotten) == ["User lives in Lisbon.", "User prefers tea."]
+    # Same fact edited: superseded. Removed (evicted for space): kept.
+    assert vault.forgotten == ["User prefers tea."]
     assert summary["changed"] == 1 and summary["added"] == 1 and summary["removed"] == 1
-    assert summary["forgotten"] == 2 and summary["first_run"] is False
+    assert summary["forgotten"] == 1 and summary["first_run"] is False
     assert sorted(vault.facts.values()) == [
-        "Repo uses pytest.", "User has a dog named Rex.", "User prefers green tea.",
+        "Repo uses pytest.", "User has a dog named Rex.",
+        "User lives in Lisbon.", "User prefers green tea.",
     ]
 
 
@@ -188,19 +190,30 @@ def test_unchanged_files_return_early(env, caplog):
     assert "memory reconcile: no changes" in caplog.text
 
 
-def test_removal_without_confident_match_forgets_nothing_once(env):
+def test_removal_never_forgets(env):
+    # Hermes evicts entries to stay under its char limits; the vault keeps them.
     state = _state()
     _files(env, user=["Entry A.", "Entry B."])
     vault = Vault(state)
     vault.run(state)
-    # The vault's copy was paraphrased; the file entry is then removed.
-    vault.facts = {"x": "Something quite different."}
     _files(env, user=["Entry B."])
     summary = vault.run(state)
-    assert vault.forgotten == []
+    assert vault.forgotten == [] and "Entry A." in vault.facts.values()
     assert summary["removed"] == 1 and summary["forgotten"] == 0
-    # Settled: not retried.
-    assert vault.run(state)["removed"] == 0
+    assert vault.run(state)["removed"] == 0  # snapshot moved on
+
+
+def test_merge_keeps_the_old_facts(env):
+    # Consolidation: two entries folded into one to make room.
+    state = _state()
+    _files(env, user=["User likes tea.", "User likes coffee."])
+    vault = Vault(state)
+    vault.run(state)
+    _files(env, user=["User likes tea and coffee, and avoids dairy."])
+    summary = vault.run(state)
+    assert vault.stored[-1] == "User likes tea and coffee, and avoids dairy."
+    assert vault.forgotten == []
+    assert summary["forgotten"] == 0
 
 
 def test_store_failure_is_retried_next_pass(env):
@@ -214,18 +227,19 @@ def test_store_failure_is_retried_next_pass(env):
     assert vault.stored == ["Entry A."]
 
 
-def test_lookup_failure_on_removal_is_retried(env):
+def test_lookup_failure_on_same_fact_edit_is_retried(env):
     state = _state()
-    _files(env, user=["Entry A.", "Entry B."])
+    _files(env, user=["User prefers tea."])
     vault = Vault(state)
     vault.run(state)
-    _files(env, user=["Entry B."])
+    _files(env, user=["User prefers green tea."])
     vault.recall_error = RuntimeError("reads paused")
     assert vault.run(state)["deferred"] == 1
-    assert vault.forgotten == []
+    assert vault.forgotten == [] and vault.stored == ["User prefers tea."]
     vault.recall_error = None
     vault.run(state)
-    assert vault.forgotten == ["Entry A."]
+    assert vault.forgotten == ["User prefers tea."]
+    assert vault.stored == ["User prefers tea.", "User prefers green tea."]
 
 
 def test_per_pass_cap_defers_the_rest(env):
@@ -339,17 +353,17 @@ def test_mirror_skips_what_a_pass_already_applied(env, caplog):
     caplog.set_level(logging.INFO, logger="totalreclaw.hermes.memory_provider")
     state = _state()
     provider = TotalReclawMemoryProvider(state)
-    _files(env, user=["Entry A.", "Entry B."])
+    _files(env, user=["Likes hiking.", "Owns a red bicycle."])
     vault = Vault(state)
     vault.run(state)
     # A pass ran between Hermes' file write and the queued mirror jobs.
-    _files(env, user=["Entry B.", "Entry C."])
+    _files(env, user=["Owns a red bicycle.", "Speaks Portuguese at home."])
     vault.run(state)
     stored, forgotten = list(vault.stored), list(vault.forgotten)
-    _mirror(provider, vault, "add", "user", "Entry C.")
-    _mirror(provider, vault, "remove", "user", "", metadata={"previous_content": "Entry A."})
-    assert vault.stored == stored and vault.forgotten == forgotten
-    assert caplog.text.count("already reconciled; skipped") == 2
+    _mirror(provider, vault, "add", "user", "Speaks Portuguese at home.")
+    _mirror(provider, vault, "remove", "user", "", metadata={"previous_content": "Likes hiking."})
+    assert vault.stored == stored and vault.forgotten == forgotten == []
+    assert caplog.text.count("already reconciled; skipped") == 1
 
 
 def test_mirror_without_snapshot_still_works(env):
@@ -368,7 +382,8 @@ def test_mirror_logs_one_line_per_write(env, caplog):
     _mirror(provider, vault, "add", "user", "Fact one.")
     _mirror(provider, vault, "remove", "user", "", metadata={"previous_content": "Fact one."})
     assert "memory mirror: add target=user stored=1 forgotten=0" in caplog.text
-    assert "memory mirror: remove target=user stored=0 forgotten=1" in caplog.text
+    assert "memory mirror: remove target=user removed from Hermes profile; kept in TotalReclaw" in caplog.text
+    assert vault.forgotten == []
 
 
 # -- provider triggers ---------------------------------------------------------
