@@ -45,12 +45,20 @@ Activation flow handled by the agent (see ``SKILL.md``):
      upstream ``hermes memory status --json`` is not yet released; see
      spec §"Open questions for upstream").
   2. If ``"none"`` / ``""`` / ``"totalreclaw"``: call
-     :func:`install_sidecar` + :func:`set_active_provider` silently.
+     :func:`install_and_activate` silently (pairing already does this, see
+     :func:`activate_after_pairing`).
   3. If another provider is active: ask the user "switch or tools-only?".
      - **switch** → :func:`install_sidecar` + :func:`set_active_provider`
        (warn that the previous provider deactivates).
      - **tools-only** → :func:`install_sidecar` only; TR tools remain
        available, hooks don't fire because TR isn't the active provider.
+
+Activation keeps Hermes' built-in memory (``USER.md`` / ``MEMORY.md``)
+running beside TotalReclaw: Hermes always keeps its builtin provider next to
+the one external provider, and the provider mirrors the built-in memory
+tool's writes through ``on_memory_write``. ``exclusive=True`` (CLI
+``--exclusive``) also turns the built-in stores off, the pre-2.5.3rc4
+default.
 
 All operations are idempotent: rerunning on an already-installed
 sidecar overwrites with the current shim content (catches package
@@ -672,29 +680,44 @@ def _key_lines(lines: "list[str]", start: int, end: int, indent: str, key: str) 
     return out
 
 
-def _read_memory_key(text: str, key: str) -> Optional[str]:
-    """Value of ``memory.<key>`` (quotes stripped), or None when unset."""
+def _memory_key_entries(text: str, key: str) -> "list[tuple[str, str]]":
+    """Every ``memory.<key>`` line as ``(value, comment)``, in file order.
+
+    Quotes are stripped from the value. More than one entry means the file
+    has a duplicate key (an older TotalReclaw version could leave one).
+    """
     lines = text.splitlines(keepends=True)
     block = _find_block(lines, "memory")
     if block is None:
-        return None
+        return []
     header, end = block
     indent = _child_indent(lines, header + 1, end)
-    hits = _key_lines(lines, header + 1, end, indent, key)
-    if not hits:
+    out = []
+    for idx in _key_lines(lines, header + 1, end, indent, key):
+        m = _TOP_LEVEL_KEY_RE.match(lines[idx].rstrip("\r\n")[len(indent):])
+        value, comment = _split_value_comment(m.group("rest"))
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        out.append((value, comment))
+    return out
+
+
+def _read_memory_key(text: str, key: str) -> Optional[str]:
+    """Value of ``memory.<key>`` (quotes stripped), or None when unset."""
+    entries = _memory_key_entries(text, key)
+    if not entries:
         return None
     # Last occurrence wins, like PyYAML; a duplicate never comes from us.
-    m = _TOP_LEVEL_KEY_RE.match(lines[hits[-1]].rstrip("\r\n")[len(indent):])
-    value, _comment = _split_value_comment(m.group("rest"))
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        value = value[1:-1]
-    return value
+    return entries[-1][0]
 
 
-def _set_memory_key(text: str, key: str, value: str) -> str:
+def _set_memory_key(
+    text: str, key: str, value: str, comment: Optional[str] = None
+) -> str:
     """Return *text* with ``memory.<key>: <value>`` set.
 
-    Replaces the key in place (keeping any trailing comment) and drops any
+    Replaces the key in place (keeping any trailing comment, unless
+    *comment* is given to replace it) and drops any
     further copies of it, appends it after the block's last entry when it is
     missing, or adds a ``memory:`` block when there is none. Raises
     :class:`HermesConfigEditError` for shapes it will not rewrite (a flow
@@ -702,20 +725,21 @@ def _set_memory_key(text: str, key: str, value: str) -> str:
     """
     lines = text.splitlines(keepends=True)
     newline = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+    new_comment = f"  {comment}" if comment else ""
     block = _find_block(lines, "memory")
     if block is None:
         sep = "" if (text == "" or text.endswith("\n")) else newline
-        return text + sep + f"memory:{newline}  {key}: {value}{newline}"
+        return text + sep + f"memory:{newline}  {key}: {value}{new_comment}{newline}"
 
     header, end = block
     m = _TOP_LEVEL_KEY_RE.match(lines[header].rstrip("\r\n"))
-    inline, comment = _split_value_comment(m.group("rest"))
+    inline, header_comment = _split_value_comment(m.group("rest"))
     if inline not in _EMPTY_INLINE_VALUES:
         raise HermesConfigEditError(
             f"`memory:` is written inline ({inline!r}); edit it as a block by hand"
         )
     if inline:
-        lines[header] = f"memory:{comment}{newline}"
+        lines[header] = f"memory:{header_comment}{newline}"
 
     indent = _child_indent(lines, header + 1, end)
     hits = _key_lines(lines, header + 1, end, indent, key)
@@ -723,6 +747,8 @@ def _set_memory_key(text: str, key: str, value: str) -> str:
         first = hits[0]
         km = _TOP_LEVEL_KEY_RE.match(lines[first].rstrip("\r\n")[len(indent):])
         _old, old_comment = _split_value_comment(km.group("rest"))
+        if comment is not None:
+            old_comment = new_comment
         replacement = [f"{indent}{key}: {value}{old_comment}{newline}"]
         # Remove from the bottom up so earlier indices stay valid.
         for idx in reversed(hits[1:]):
@@ -736,7 +762,7 @@ def _set_memory_key(text: str, key: str, value: str) -> str:
             last = i
     if not lines[last].endswith("\n"):
         lines[last] += newline
-    lines.insert(last + 1, f"{indent}{key}: {value}{newline}")
+    lines.insert(last + 1, f"{indent}{key}: {value}{new_comment}{newline}")
     return "".join(lines)
 
 
@@ -784,10 +810,25 @@ def _validate_config(text: str, expected: "dict[str, str]") -> None:
             )
 
 
+def _read_config_text(hermes_home: Optional[Path] = None) -> str:
+    """``config.yaml`` contents, or ``""`` when it is missing or unreadable."""
+    path = config_path(hermes_home)
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
 def _update_memory_keys(
-    values: "dict[str, str]", hermes_home: Optional[Path] = None
+    values: "dict[str, str]",
+    hermes_home: Optional[Path] = None,
+    comments: "Optional[dict[str, str]]" = None,
 ) -> Path:
-    """Set several ``memory.*`` keys in one validated, atomic write."""
+    """Set several ``memory.*`` keys in one validated, atomic write.
+
+    ``comments`` maps a key to the trailing comment its line should carry
+    (replacing any existing one); other keys keep theirs.
+    """
     path = config_path(hermes_home)
     path.parent.mkdir(parents=True, exist_ok=True)
     original = ""
@@ -799,7 +840,7 @@ def _update_memory_keys(
             original = fh.read()
     text = original
     for key, value in values.items():
-        text = _set_memory_key(text, key, value)
+        text = _set_memory_key(text, key, value, (comments or {}).get(key))
     _validate_config(text, values)
     if text == original:
         return path
@@ -827,13 +868,7 @@ def read_active_provider(hermes_home: Optional[Path] = None) -> str:
     Returns a lowercased provider name otherwise (e.g. ``"honcho"``,
     ``"byterover"``, ``"openviking"``, ``"totalreclaw"``, ``"none"``).
     """
-    path = config_path(hermes_home)
-    if not path.exists():
-        return ""
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
+    text = _read_config_text(hermes_home)
     return (_read_memory_key(text, "provider") or "").strip().lower()
 
 
@@ -854,23 +889,65 @@ def set_active_provider(
     return path
 
 
+# Hermes' built-in memory switches. Hermes loads its builtin ``MemoryStore``
+# (``~/.hermes/memories/MEMORY.md`` + ``USER.md``) and offers the ``memory``
+# tool when EITHER is true (``agent/agent_init.py``), so both must be false
+# to turn it off.
+_BUILTIN_MEMORY_KEYS = ("memory_enabled", "user_profile_enabled")
+
+# Trailing comment an exclusive activation writes on both switches. A later
+# default activation reads it as "the user chose exclusive" and leaves the
+# switches alone. Lines without it that read ``false`` next to
+# ``provider: totalreclaw`` are what activation wrote before 2.5.3rc4 (it
+# always turned the built-in off); a default activation turns those back on.
+_EXCLUSIVE_MARKER = "# totalreclaw: --exclusive"
+
+
+def _builtin_off_by_old_activation(text: str) -> bool:
+    """True when both built-in switches are ``false`` the way a TotalReclaw
+    activation before 2.5.3rc4 left them: no exclusive marker on either.
+
+    Any ``false`` copy counts, so the duplicate-key config those versions
+    could produce (one ``false`` they appended, one stock ``true``) matches.
+    """
+    for key in _BUILTIN_MEMORY_KEYS:
+        entries = _memory_key_entries(text, key)
+        if not entries or any(_EXCLUSIVE_MARKER in c for _v, c in entries):
+            return False
+        if not any(v.strip().lower() == "false" for v, _c in entries):
+            return False
+    return True
+
+
+def _builtin_memory_off(text: str) -> bool:
+    """True when Hermes' built-in stores are off: both switches false."""
+    return all(
+        (_read_memory_key(text, key) or "").strip().lower() == "false"
+        for key in _BUILTIN_MEMORY_KEYS
+    )
+
+
 def disable_builtin_memory(hermes_home: Optional[Path] = None) -> Path:
-    """Silence Hermes' builtin local memory so TotalReclaw is the sole system.
+    """Turn Hermes' built-in local memory off (the ``--exclusive`` mode).
 
     Sets ``memory_enabled: false`` AND ``user_profile_enabled: false`` in the
-    ``memory:`` block. Hermes loads its builtin ``MemoryStore`` (which reads +
-    injects ``~/.hermes/memories/MEMORY.md`` and maintains ``~/.hermes/profiles/``)
-    when *either* flag is true (``agent_init.py``), so both must be false to
-    fully quiet it. TotalReclaw's own auto-recall/extract runs via its lifecycle
-    hooks, which are independent of these flags — so disabling the builtin does
-    NOT disable TotalReclaw; it just removes the parallel local store
-    (the 2026-06-10 split-brain). ``provider: builtin`` (set by the user) is the
-    explicit opt-in to switch back to local files.
+    ``memory:`` block, each tagged with :data:`_EXCLUSIVE_MARKER` so a later
+    default activation keeps them. TotalReclaw's own auto-recall/extract runs
+    via its lifecycle hooks and provider methods, which are independent of
+    these flags.
+
+    Not the default since 2.5.3rc4: TotalReclaw now runs alongside the
+    built-in memory and mirrors its writes. This also turns off what the
+    built-in gives: the small always-loaded profile, the memory tool the
+    background review agent writes with, and context when TotalReclaw recall
+    is slow or down.
 
     Returns the config path written.
     """
     path = _update_memory_keys(
-        {"memory_enabled": "false", "user_profile_enabled": "false"}, hermes_home
+        {key: "false" for key in _BUILTIN_MEMORY_KEYS},
+        hermes_home,
+        comments={key: _EXCLUSIVE_MARKER for key in _BUILTIN_MEMORY_KEYS},
     )
     logger.info(
         "TotalReclaw: disabled builtin memory (memory_enabled=false, "
@@ -885,8 +962,18 @@ def install_and_activate(
     *,
     activate: bool = True,
     force: bool = False,
+    exclusive: bool = False,
 ) -> dict:
     """High-level helper combining sidecar drop + optional activation.
+
+    Activation sets ``memory.provider: totalreclaw``. By default it leaves
+    Hermes' built-in memory on, so the two run side by side (Hermes keeps
+    its builtin provider next to the one external provider, and
+    ``on_memory_write`` mirrors the built-in tool's writes into TotalReclaw).
+    If an activation before 2.5.3rc4 turned the built-in off, it is turned
+    back on; switches set by ``exclusive`` are kept.
+
+    ``exclusive=True`` also turns the built-in stores off (the old default).
 
     Returns a status dict with the same keys regardless of branch so
     callers (CLI / agent) can render a consistent confirmation.
@@ -894,34 +981,69 @@ def install_and_activate(
     sidecar = install_sidecar(hermes_home, force=force)
     previous = read_active_provider(hermes_home)
     activated = False
-    builtin_disabled = False
+    builtin_restored = False
     if activate:
-        # Make TotalReclaw the SOLE memory system: silence the builtin local
-        # store so it stops loading/injecting MEMORY.md + maintaining local
-        # profiles in parallel (the split-brain). TR keeps running via its own
-        # lifecycle hooks. Switching back to local files = user sets
-        # `memory.provider: builtin` explicitly. One write for all three keys,
-        # so a config an older version corrupted is repaired in one step.
-        path = _update_memory_keys(
-            {
-                "provider": "totalreclaw",
-                "memory_enabled": "false",
-                "user_profile_enabled": "false",
-            },
-            hermes_home,
-        )
+        values = {"provider": "totalreclaw"}
+        comments: "dict[str, str]" = {}
+        text = _read_config_text(hermes_home)
+        if exclusive:
+            values.update({key: "false" for key in _BUILTIN_MEMORY_KEYS})
+            comments = {key: _EXCLUSIVE_MARKER for key in _BUILTIN_MEMORY_KEYS}
+        elif previous == "totalreclaw" and _builtin_off_by_old_activation(text):
+            values.update({key: "true" for key in _BUILTIN_MEMORY_KEYS})
+            builtin_restored = True
+        else:
+            # Leave the switches as they are, but collapse a duplicate key
+            # (older versions could write one) to the value Hermes would
+            # read, so the result validates.
+            for key in _BUILTIN_MEMORY_KEYS:
+                entries = _memory_key_entries(text, key)
+                if len(entries) > 1:
+                    values[key] = entries[-1][0]
+        # One write for every key, so a config an older version corrupted is
+        # repaired in one step.
+        path = _update_memory_keys(values, hermes_home, comments=comments)
         logger.info(
-            "TotalReclaw: set memory.provider=totalreclaw and disabled builtin "
-            "memory in %s",
-            path,
+            "TotalReclaw: set memory.provider=totalreclaw in %s "
+            "(exclusive=%s, builtin_restored=%s)",
+            path, exclusive, builtin_restored,
         )
         activated = True
-        builtin_disabled = True
 
     return {
         "sidecar_path": str(sidecar),
         "previous_provider": previous or "",
         "active_provider": "totalreclaw" if activated else (previous or ""),
         "activated": activated,
-        "builtin_disabled": builtin_disabled,
+        "exclusive": bool(activate and exclusive),
+        "builtin_disabled": _builtin_memory_off(_read_config_text(hermes_home)),
+        "builtin_restored": builtin_restored,
     }
+
+
+# Providers pairing may replace without asking: nothing configured yet, or
+# TotalReclaw already. Any other provider is the user's choice; the setup
+# guide asks before switching.
+_PAIRING_ACTIVATES_FROM = frozenset({"", "none", "totalreclaw"})
+
+
+def activate_after_pairing(hermes_home: Optional[Path] = None) -> dict:
+    """Activate TotalReclaw (non-exclusive) right after a successful pairing.
+
+    Called by both pairing paths (in-process and the relay completion
+    sidecar, issue #614). Skips, without raising, when there is no Hermes
+    home (not a Hermes host) or when another memory provider is active.
+    May raise what :func:`install_and_activate` raises (e.g. a hand-edited
+    sidecar); callers treat activation as best-effort.
+    """
+    home = (hermes_home or _hermes_home()).expanduser()
+    if not home.is_dir():
+        return {"activated": False, "skipped": "no_hermes_home"}
+    previous = read_active_provider(home)
+    if previous not in _PAIRING_ACTIVATES_FROM:
+        return {
+            "activated": False,
+            "skipped": "other_provider",
+            "previous_provider": previous,
+        }
+    return install_and_activate(home)

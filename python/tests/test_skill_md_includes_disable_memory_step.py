@@ -53,15 +53,21 @@ def test_install_doc_documents_disable_memory_command():
 
 def test_install_doc_states_how_builtin_memory_is_really_turned_off():
     """Hermes 0.22+ (rc3 QA, #602): the built-in stores are turned off by the
-    ``memory_enabled`` / ``user_profile_enabled`` settings that
-    ``activate-memory-provider`` writes. ``hermes tools disable memory`` is
-    NOT the switch: it only gates the agent's ``memory`` toolset, and on 0.22+
-    that also hides the memory provider's tools and system-prompt block. Pin
-    both so a rewrite doesn't bring the disable step back."""
+    ``memory_enabled`` / ``user_profile_enabled`` settings, which since
+    2.5.3rc4 only ``activate-memory-provider --exclusive`` writes (the
+    default keeps the built-in on beside TotalReclaw). ``hermes tools
+    disable memory`` is NOT the switch: it only gates the agent's ``memory``
+    toolset, and on 0.22+ that also hides the memory provider's tools and
+    system-prompt block. Pin both so a rewrite doesn't bring the disable step
+    back."""
     body = _read(INSTALL_DOC)
     assert "memory_enabled: false" in body and "user_profile_enabled: false" in body, (
         "hermes-setup.md must name the settings that turn the built-in "
         "stores off on Hermes 0.22+."
+    )
+    assert "--exclusive" in body, (
+        "hermes-setup.md must say turning the built-in off is the "
+        "`--exclusive` opt-out, not the default."
     )
     assert "Do **not** also run `hermes tools disable memory`" in body, (
         "hermes-setup.md must warn against `hermes tools disable memory`: "
@@ -75,6 +81,17 @@ def test_install_doc_names_the_failure_mode_files():
     body = _read(INSTALL_DOC)
     assert "MEMORY.md" in body
     assert "USER.md" in body
+
+
+def test_skill_md_sets_builtin_memory_role():
+    """2.5.3rc4: the built-in memory runs alongside TotalReclaw. The usage
+    skill says what each is for, steers "remember X" to
+    ``totalreclaw_remember`` (#167), and says built-in writes are copied, so
+    the agent doesn't save or forget the same fact twice."""
+    body = _read(SKILL_MD)
+    assert "**Hermes' built-in `memory` tool**" in body
+    assert 'For "remember X", use `totalreclaw_remember`, not the built-in tool.' in body
+    assert "TotalReclaw copies the change into the vault by itself" in body
 
 
 def test_skill_md_does_not_carry_install_disable_step():

@@ -89,14 +89,16 @@ def _write(home: Path, text: str) -> Path:
     return cfg
 
 
-def test_activation_on_stock_hermes_022_config_stays_valid(tmp_path):
+@pytest.mark.parametrize("exclusive", [False, True])
+def test_activation_on_stock_hermes_022_config_stays_valid(tmp_path, exclusive):
     cfg = _write(tmp_path, _HERMES_022_CONFIG)
-    imp.install_and_activate(hermes_home=tmp_path, activate=True)
+    imp.install_and_activate(hermes_home=tmp_path, activate=True, exclusive=exclusive)
     body = cfg.read_text(encoding="utf-8")
     data = _parse(body)  # no duplicate keys anywhere
     assert data["memory"]["provider"] == "totalreclaw"
-    assert data["memory"]["memory_enabled"] is False
-    assert data["memory"]["user_profile_enabled"] is False
+    # Built-in memory stays on unless --exclusive.
+    assert data["memory"]["memory_enabled"] is not exclusive
+    assert data["memory"]["user_profile_enabled"] is not exclusive
     assert body.count("user_profile_enabled") == 1
     # Untouched settings and every comment survive.
     assert data["model"] == {"provider": "zai", "default": "glm-5-turbo"}
@@ -110,22 +112,26 @@ def test_activation_on_stock_hermes_022_config_stays_valid(tmp_path):
     assert imp.read_active_provider(tmp_path) == "totalreclaw"
 
 
-def test_activation_is_idempotent(tmp_path):
+@pytest.mark.parametrize("exclusive", [False, True])
+def test_activation_is_idempotent(tmp_path, exclusive):
     cfg = _write(tmp_path, _HERMES_022_CONFIG)
-    imp.install_and_activate(hermes_home=tmp_path, activate=True)
+    imp.install_and_activate(hermes_home=tmp_path, activate=True, exclusive=exclusive)
     first = cfg.read_text(encoding="utf-8")
-    imp.install_and_activate(hermes_home=tmp_path, activate=True)
+    imp.install_and_activate(hermes_home=tmp_path, activate=True, exclusive=exclusive)
     assert cfg.read_text(encoding="utf-8") == first
 
 
-def test_activation_repairs_config_corrupted_by_older_version(tmp_path):
+@pytest.mark.parametrize("exclusive", [False, True])
+def test_activation_repairs_config_corrupted_by_older_version(tmp_path, exclusive):
     with pytest.raises(AssertionError):
         _parse(_CORRUPTED_BY_OLD_VERSION)  # sanity: the fixture IS broken
     cfg = _write(tmp_path, _CORRUPTED_BY_OLD_VERSION)
-    imp.install_and_activate(hermes_home=tmp_path, activate=True)
+    imp.install_and_activate(hermes_home=tmp_path, activate=True, exclusive=exclusive)
     body = cfg.read_text(encoding="utf-8")
     data = _parse(body)
-    assert data["memory"]["user_profile_enabled"] is False
+    # The default turns back on what the old version turned off.
+    assert data["memory"]["memory_enabled"] is not exclusive
+    assert data["memory"]["user_profile_enabled"] is not exclusive
     assert data["memory"]["provider"] == "totalreclaw"
     assert body.count("user_profile_enabled") == 1
     assert body.count("provider: totalreclaw") == 1
@@ -222,6 +228,13 @@ def test_no_memory_block_appends_one(tmp_path):
     imp.install_and_activate(hermes_home=tmp_path, activate=True)
     data = _parse(cfg.read_text(encoding="utf-8"))
     assert data["model"] == {"provider": "zai"}
+    assert data["memory"] == {"provider": "totalreclaw"}
+
+
+def test_no_memory_block_appends_one_exclusive(tmp_path):
+    cfg = _write(tmp_path, "model:\n  provider: zai")
+    imp.install_and_activate(hermes_home=tmp_path, activate=True, exclusive=True)
+    data = _parse(cfg.read_text(encoding="utf-8"))
     assert data["memory"] == {
         "provider": "totalreclaw",
         "memory_enabled": False,
@@ -240,7 +253,7 @@ def test_write_keeps_file_mode_and_leaves_no_temp_file(tmp_path):
 def test_invalid_result_is_never_written(tmp_path, monkeypatch):
     cfg = _write(tmp_path, _HERMES_022_CONFIG)
     monkeypatch.setattr(
-        imp, "_set_memory_key", lambda text, key, value: text + "memory:\n  x: 1\n"
+        imp, "_set_memory_key", lambda text, key, value, comment=None: text + "memory:\n  x: 1\n"
     )
     with pytest.raises(imp.HermesConfigEditError, match="duplicate key"):
         imp.set_active_provider("totalreclaw", hermes_home=tmp_path)

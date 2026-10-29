@@ -457,8 +457,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # `activate-memory-provider` — make TotalReclaw the native Hermes
     # MemoryProvider (#351 §5.4). Installs the provider sidecar at the
-    # discoverable path, sets `memory.provider: totalreclaw`, and disables the
-    # builtin local store. Pairing auto-runs this; the subcommand exists for
+    # discoverable path and sets `memory.provider: totalreclaw`. Hermes'
+    # builtin local store keeps running beside it unless --exclusive is
+    # passed. Pairing auto-runs this; the subcommand exists for
     # manual / recovery / existing-user-upgrade use. (The `hermes
     # activate-memory-provider` form referenced by older setup guides was never
     # a real command — that's why activation silently never happened.)
@@ -466,9 +467,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         "activate-memory-provider",
         help=(
             "Activate TotalReclaw as the native Hermes memory provider "
-            "(installs the provider sidecar, sets memory.provider=totalreclaw, "
-            "disables the builtin store). Idempotent."
+            "(installs the provider sidecar, sets memory.provider=totalreclaw; "
+            "Hermes' built-in memory stays on). Idempotent."
         ),
+    )
+    sp_activate.add_argument(
+        "--exclusive", action="store_true", default=False,
+        help="Also turn Hermes' built-in memory off (memory_enabled / "
+             "user_profile_enabled = false), so TotalReclaw is the only "
+             "memory. Default: keep it on beside TotalReclaw.",
     )
     sp_activate.add_argument(
         "--hermes-home", type=Path, default=None,
@@ -528,6 +535,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             result = install_and_activate(
                 hermes_home=getattr(args, "hermes_home", None),
                 force=getattr(args, "force", False),
+                exclusive=getattr(args, "exclusive", False),
             )
         except RuntimeError as exc:
             sys.stderr.write(f"{exc}\n")
@@ -537,6 +545,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"  sidecar:          {result['sidecar_path']}\n"
             f"  active provider:  {result['active_provider']}\n"
             f"  builtin disabled: {result['builtin_disabled']}\n"
+            f"  builtin restored: {result['builtin_restored']}\n"
             f"Restart the gateway for the change to take effect."
         )
         return 0
