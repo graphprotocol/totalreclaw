@@ -378,7 +378,7 @@ filesystem.
 
 ## Extraction model
 
-TotalReclaw extracts memories with the LLM provider Hermes already uses (same key), and picks the model automatically: a tested default per provider (on z.ai: `glm-5.3-flash` on the Coding Plan, `glm-4.5-flash` on the Standard/PAYG endpoint). If that model isn't available on the user's plan, it moves to the next candidate and finally to the chat model. There is nothing to configure.
+TotalReclaw extracts memories with the LLM provider Hermes already uses (same key), and picks the model automatically: a tested default per provider (on z.ai: `glm-5.3-flash` on the Coding Plan, `glm-4.5-flash` on the Standard/PAYG endpoint). If that model isn't available on the user's plan, it moves to the next candidate and finally to the chat model. There is nothing to configure. Extraction calls go to the z.ai endpoint Hermes is configured for (`model.base_url` in `config.yaml`, or `GLM_BASE_URL` / `ZAI_BASE_URL` in `.env`); a configured endpoint is never switched, so Coding-plan calls stay on the Coding endpoint.
 
 If the user asks for a specific model to extract or store memories, call `totalreclaw_set_extraction_model` with that model id (`default` goes back to automatic). It applies from the next turn: no `.env` edit, no restart. `totalreclaw_status` reports the model in use and why (`extraction_model.source`). An operator-set `TOTALRECLAW_EXTRACTION_MODEL` takes precedence over the user's choice.
 
