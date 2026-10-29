@@ -189,7 +189,7 @@ Notes:
   The `rm -rf` targets only the plugin's npm package project dir. It does **not** touch `~/.totalreclaw/credentials.json` (your keys live there, in a different tree) — never read, list, or delete anything under `~/.totalreclaw*`. Then verify the version in Step 2 — it must match the requested build.
 - If either command fails with `command not found` / ENOENT / "not authorized", **do not immediately jump to "managed service" — a missing `openclaw` CLI is the strongest signal that you may simply be the wrong runtime for this guide.** First run a capability probe to check whether you are actually a different runtime:
   ```bash
-  command -v hermes && command -v pip      # Hermes agent (Python)
+  command -v hermes                         # Hermes agent (no bare pip on Hermes 0.22+)
   command -v claude                         # Claude Code / MCP host
   ```
   - If that reveals you are a **Hermes** agent or an **MCP host** (Claude Desktop / Cursor / Windsurf), STOP following this guide and consult the universal dispatcher [`install.md`](./install.md), which routes you to [`hermes-setup.md`](./hermes-setup.md) or [`claude-code-setup.md`](./claude-code-setup.md) instead.
