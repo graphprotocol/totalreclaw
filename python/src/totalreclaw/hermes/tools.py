@@ -725,6 +725,7 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
             "account_id": sa,
             "wallet_address": sa,
             "eoa_address": client.eoa_address,
+            "extraction_model": _extraction_model_info(),
             "reads": {
                 "paused": read_blk is not None,
                 "reason": read_blk.error.kind if read_blk is not None else None,
@@ -743,6 +744,67 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
     except Exception as e:
         logger.error("totalreclaw_status failed: %s", e)
         return json.dumps({"error": str(e)})
+
+
+def _extraction_model_info() -> dict:
+    """Effective extraction model + why (env / setting / default /
+    fallback), resolved from the same chat config auto-extraction uses."""
+    try:
+        from ..agent.llm_client import describe_extraction_model, detect_llm_config
+
+        return describe_extraction_model(_read_hermes_llm_config() or detect_llm_config())
+    except Exception as e:  # status must never fail on this
+        logger.debug("extraction-model status unavailable: %s", e)
+        return {"model": None, "source": "unavailable"}
+
+
+async def set_extraction_model(args: dict, state: "PluginState", **kwargs) -> str:
+    """Persist the user's extraction-model choice (empty / "default" clears).
+
+    Applies on the next extraction: the setting is read per turn, and the
+    in-process fallback memory is reset so the new choice is tried fresh.
+    """
+    from .. import user_settings
+    from ..agent.llm_client import reset_extraction_fallback_state
+
+    raw = args.get("model", "")
+    if raw is None:
+        raw = ""
+    if not isinstance(raw, str):
+        return json.dumps({"error": "model must be a string (use \"default\" to reset)."})
+    try:
+        stored = user_settings.set_extraction_model(raw)
+    except OSError as e:
+        logger.error("totalreclaw_set_extraction_model failed: %s", e)
+        return json.dumps({"error": f"Could not save the setting: {e}"})
+    reset_extraction_fallback_state()
+
+    info = _extraction_model_info()
+    effective = info.get("model")
+    env_override = os.environ.get("TOTALRECLAW_EXTRACTION_MODEL", "").strip()
+    if env_override:
+        message = (
+            f"Saved, but the operator pinned TOTALRECLAW_EXTRACTION_MODEL={env_override}, "
+            f"which takes precedence. Memories are extracted with {effective}."
+        )
+    elif stored:
+        message = (
+            f"Memories will now be extracted with {stored}, starting with the next "
+            "turn (no restart needed). If the provider rejects that model, "
+            "TotalReclaw falls back to the chat model automatically."
+        )
+    else:
+        message = (
+            "Back to automatic selection. Memories are extracted with "
+            f"{effective or 'the default model for your provider'}."
+        )
+    return json.dumps({
+        "ok": True,
+        "setting": stored,
+        "effective_model": effective,
+        "source": info.get("source"),
+        "message": message,
+    })
 
 
 def setup(args: dict, state: "PluginState", **kwargs) -> str:

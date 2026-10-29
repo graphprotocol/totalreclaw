@@ -39,12 +39,15 @@ STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity threshold for near-duplicate d
 # docs/notes/QA-V1CLEAN-VPS-20260418.md Bug #1). Restored in v2.0.2: the
 # RelayClient now reads it (or the equivalent constructor arg) and
 # forwards it to the relay as ``X-TotalReclaw-Session`` on every request.
+#
+# ``TOTALRECLAW_EXTRACTION_MODEL`` was listed here by mistake through
+# 2.5.3rc3 (#609 / #612): it has always been honoured as the operator
+# override in ``llm_client.extraction_model_plan``. Do not re-add it.
 _REMOVED_ENV_VARS = (
     "TOTALRECLAW_CHAIN_ID",
     "TOTALRECLAW_EMBEDDING_MODEL",
     "TOTALRECLAW_STORE_DEDUP",
     "TOTALRECLAW_LLM_MODEL",
-    "TOTALRECLAW_EXTRACTION_MODEL",
     "TOTALRECLAW_TAXONOMY_VERSION",
     "TOTALRECLAW_CLAIM_FORMAT",
     "TOTALRECLAW_DIGEST_MODE",

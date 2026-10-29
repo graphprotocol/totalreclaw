@@ -368,6 +368,7 @@ filesystem.
 | `totalreclaw_forget` | Tombstone a memory. |
 | `totalreclaw_pin` | Pin a memory so it's surfaced in every recall. |
 | `totalreclaw_status` | Report account tier + memory counts. |
+| `totalreclaw_set_extraction_model` | Change the model that extracts memories, only when the user asks for a specific one (`default` resets). Applies next turn, no restart. |
 | `totalreclaw_top_up` | Buy a **one-time top-up pack** of extra memories (`1000` / `5000` / `10000`) — returns a Stripe checkout URL. **Route here whenever the user asks to buy extra memories, a top-up pack, or one-time credits (e.g. before a big import, or when over/near quota).** This is DISTINCT from the Pro subscription upgrade — never substitute the upgrade flow when the user asked for a pack; offer the upgrade only as an additional option. |
 | `totalreclaw_export` | Export the full vault. |
 | `totalreclaw_set_scope` | Switch active scope. |
@@ -377,19 +378,9 @@ filesystem.
 
 ## Extraction model
 
-TotalReclaw extracts memories with the LLM provider Hermes already uses, so there's no extra key. It picks a cheap model from that provider: the chat model itself when its name already marks it as small (`flash`, `mini`, `haiku`, …), otherwise a per-provider default (on z.ai: `glm-4.5-flash`). The gateway log shows the choice as `extraction_model=<name>`.
+TotalReclaw extracts memories with the LLM provider Hermes already uses (same key), and picks the model automatically: a tested default per provider (on z.ai: `glm-5.3-flash` on the Coding Plan, `glm-4.5-flash` on the Standard/PAYG endpoint). If that model isn't available on the user's plan, it moves to the next candidate and finally to the chat model. There is nothing to configure.
 
-To use a different model from the same provider, set `TOTALRECLAW_EXTRACTION_MODEL` in Hermes' env file and restart the gateway (silently; then emit the surface-matched restart line from Install step 4):
-
-```bash
-# Replace the line if it exists, else append it.
-ENVF="${HERMES_HOME:-$HOME/.hermes}/.env"
-grep -q '^TOTALRECLAW_EXTRACTION_MODEL=' "$ENVF" 2>/dev/null \
-  && sed -i 's|^TOTALRECLAW_EXTRACTION_MODEL=.*|TOTALRECLAW_EXTRACTION_MODEL=<model>|' "$ENVF" \
-  || echo 'TOTALRECLAW_EXTRACTION_MODEL=<model>' >> "$ENVF"
-```
-
-For example `glm-5.3-flash` on the z.ai Coding Plan. Versions up to 2.5.3 print `ignoring removed env var(s): TOTALRECLAW_EXTRACTION_MODEL` at startup; that warning is wrong and the override is applied (check the `extraction_model=` log line).
+If the user asks for a specific model to extract or store memories, call `totalreclaw_set_extraction_model` with that model id (`default` goes back to automatic). It applies from the next turn: no `.env` edit, no restart. `totalreclaw_status` reports the model in use and why (`extraction_model.source`). An operator-set `TOTALRECLAW_EXTRACTION_MODEL` takes precedence over the user's choice.
 
 ---
 

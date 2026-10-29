@@ -25,6 +25,12 @@ import {
   resolveLLMConfig,
   deriveCheapModel,
   selectCheapestConfiguredModel,
+  resolveExtractionModel,
+  cheapModelCandidatesFor,
+  CHEAP_MODEL_BY_PROVIDER,
+  CHEAP_MODEL_CANDIDATES_BY_PROVIDER,
+  ZAI_CODING_BASE_URL,
+  ZAI_STANDARD_BASE_URL,
 } from './llm-client.js';
 
 let passed = 0;
@@ -105,18 +111,60 @@ function restoreEnv(stash: Record<string, string | undefined>): void {
 // ---------------------------------------------------------------------------
 
 {
-  assertEq(deriveCheapModel('zai', 'glm-5.1'), 'glm-4.5-flash', 'deriveCheapModel: zai default is glm-4.5-flash');
+  assertEq(deriveCheapModel('zai', 'glm-5.1'), 'glm-5.3-flash', 'deriveCheapModel: zai default (Coding) is glm-5.3-flash');
+  assertEq(
+    deriveCheapModel('zai', 'glm-5.1', ZAI_STANDARD_BASE_URL),
+    'glm-4.5-flash',
+    'deriveCheapModel: zai Standard endpoint default is glm-4.5-flash',
+  );
   assertEq(deriveCheapModel('openai', 'gpt-4.1'), 'gpt-4.1-mini', 'deriveCheapModel: openai default is gpt-4.1-mini');
   assertEq(
     deriveCheapModel('anthropic', 'claude-sonnet-4-5'),
     'claude-haiku-4-5-20251001',
     'deriveCheapModel: anthropic default is claude-haiku-4-5-20251001',
   );
-  assertEq(deriveCheapModel('gemini', 'gemini-2.5-pro'), 'gemini-flash-lite', 'deriveCheapModel: gemini default is gemini-flash-lite');
+  assertEq(deriveCheapModel('gemini', 'gemini-2.5-pro'), 'gemini-2.5-flash-lite', 'deriveCheapModel: gemini default is gemini-2.5-flash-lite');
   assertEq(deriveCheapModel('groq', 'llama-whatever'), 'llama-3.3-70b-versatile', 'deriveCheapModel: groq default');
   // "Already cheap" model passes through
   assertEq(deriveCheapModel('openai', 'gpt-4.1-mini'), 'gpt-4.1-mini', 'deriveCheapModel: cheap model passes through');
   assertEq(deriveCheapModel('anthropic', 'claude-haiku-4-5'), 'claude-haiku-4-5', 'deriveCheapModel: haiku passes through');
+}
+
+// ---------------------------------------------------------------------------
+// 2.5.3rc4 endpoint-aware candidate table (parity with the Python client's
+// _EXTRACTION_MODEL_CANDIDATES_BY_PROVIDER; Python checks entry-for-entry).
+// ---------------------------------------------------------------------------
+
+{
+  assertEq(
+    cheapModelCandidatesFor('zai', ZAI_CODING_BASE_URL).join(','),
+    'glm-5.3-flash,glm-4.5-flash',
+    'cheapModelCandidatesFor: zai Coding = glm-5.3-flash, glm-4.5-flash',
+  );
+  assertEq(
+    cheapModelCandidatesFor('zai', ZAI_STANDARD_BASE_URL + '/').join(','),
+    'glm-4.5-flash',
+    'cheapModelCandidatesFor: zai Standard (trailing slash) = glm-4.5-flash',
+  );
+  assertEq(
+    cheapModelCandidatesFor('zai').join(','),
+    'glm-5.3-flash,glm-4.5-flash',
+    'cheapModelCandidatesFor: zai with no base URL uses the Coding list',
+  );
+  assertEq(cheapModelCandidatesFor('self-hosted').length, 0, 'cheapModelCandidatesFor: unknown provider has no candidates');
+  for (const [provider, candidates] of Object.entries(CHEAP_MODEL_CANDIDATES_BY_PROVIDER)) {
+    assertEq(CHEAP_MODEL_BY_PROVIDER[provider], candidates[0], `CHEAP_MODEL_BY_PROVIDER.${provider} is the first candidate`);
+  }
+  assertEq(
+    resolveExtractionModel('zai', { primaryModelHint: 'glm-5.1', baseUrl: ZAI_STANDARD_BASE_URL }).model,
+    'glm-4.5-flash',
+    'resolveExtractionModel: table tier honours the z.ai Standard endpoint',
+  );
+  assertEq(
+    resolveExtractionModel('zai', { primaryModelHint: 'glm-5.1', baseUrl: ZAI_CODING_BASE_URL }).model,
+    'glm-5.3-flash',
+    'resolveExtractionModel: table tier on z.ai Coding picks glm-5.3-flash',
+  );
 }
 
 // ---------------------------------------------------------------------------

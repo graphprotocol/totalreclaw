@@ -302,14 +302,15 @@ async def test_reasoning_content_ignored_when_content_present() -> None:
 def test_derive_extraction_config_zai_uses_flash_same_endpoint_same_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The derived extraction config swaps to ``glm-4.5-flash`` while
-    keeping the user's endpoint + key (so the thinking-mode fix above runs
-    against the same Coding/Standard endpoint the user is entitled to)."""
+    """The derived extraction config swaps to a flash model (glm-5.3-flash
+    on Coding since 2.5.3rc4) while keeping the user's endpoint + key (so
+    the thinking-mode fix above runs against the same Coding/Standard
+    endpoint the user is entitled to)."""
     monkeypatch.delenv("TOTALRECLAW_EXTRACTION_MODEL", raising=False)
     monkeypatch.delenv("ZAI_BASE_URL", raising=False)
     chat = LLMConfig(api_key="sk-coding", base_url=ZAI_CODING_BASE_URL, model="glm-5.1", api_format="openai")
     ext = derive_extraction_config(chat)
-    assert ext.model == "glm-4.5-flash"
+    assert ext.model == "glm-5.3-flash"
     assert ext.base_url == ZAI_CODING_BASE_URL, "no endpoint flip — key is endpoint-scoped"
     assert ext.api_key == "sk-coding"
     assert ext.api_format == "openai"
@@ -354,8 +355,9 @@ async def test_double_empty_emits_actionable_warning_naming_env_var(
         out = await extract_facts_llm([{"role": "user", "content": _LONG_MSG}], llm_config=chat)
 
     assert out == []
-    # The #376 fallback must have fired: cheap model first, chat model second.
-    assert seen == ["glm-4.5-flash", "glm-5.1"], seen
+    # The #376 fallback must have fired: the cheap candidates first
+    # (glm-5.3-flash, then glm-4.5-flash on Coding), the chat model last.
+    assert seen == ["glm-5.3-flash", "glm-4.5-flash", "glm-5.1"], seen
 
     final = [
         r.getMessage()
@@ -366,7 +368,7 @@ async def test_double_empty_emits_actionable_warning_naming_env_var(
     msg = final[-1]
     assert "TOTALRECLAW_EXTRACTION_MODEL" in msg, "warning must name the override env var (actionable)"
     assert "glm-4.5-flash" in msg, "warning should name the known-good default to try"
-    # Names the cheap model and the chat-model fallback that were tried.
+    # Names the chat model, the last one tried.
     assert "glm-5.1" in msg
 
 
@@ -403,9 +405,11 @@ async def test_thinking_disabled_makes_extraction_produce_facts_end_to_end() -> 
     response (JSON in ``content``) flows through ``extract_facts_llm`` and
     yields a fact, while the issued request carries
     ``thinking: {"type": "disabled"}`` and the cheap model. Guards the
-    efficiency path + request shape against regression.
+    efficiency path + request shape against regression. Uses the Standard
+    endpoint, whose extraction default (glm-4.5-flash) accepts the
+    thinking switch; glm-5.3-flash (the Coding default) always thinks.
     """
-    chat = LLMConfig(api_key="sk-zai", base_url=ZAI_CODING_BASE_URL, model="glm-5.1", api_format="openai")
+    chat = LLMConfig(api_key="sk-zai", base_url=ZAI_STANDARD_BASE_URL, model="glm-5.1", api_format="openai")
     canned = json.dumps(
         {
             "topics": ["identity"],

@@ -90,6 +90,7 @@ Pattern is always **recall first → mutate second**, because the mutation tools
 
 - "status" / "how am I doing on quota" / "what tier am I on" → `totalreclaw_status` (no args). Returns tier, used / limit, and smart-account address.
 - "upgrade" / "go Pro" → `totalreclaw_upgrade` (returns a Stripe checkout URL — paste verbatim, no paraphrase).
+- User asks to change the model that extracts/stores memories ("use glm-5.3-flash for memories") → `totalreclaw_set_extraction_model` with that model id (`default` resets). Never edit `.env` or restart for this; otherwise the model is automatic, so don't bring it up.
 - "import from Mem0 / ChatGPT / Claude / Gemini / mcp-memory-server" → `totalreclaw_import_from` with `dry_run=True` first to surface the count + estimated free-tier impact, then ask the user to confirm before the real run.
 - **One-shot / short-lived sessions** (e.g. `hermes chat -q`): a large import runs in a BACKGROUND task that dies when the process exits, so nothing gets stored. In those contexts, drive `totalreclaw_import_batch` **synchronously in a loop** (increasing `offset` until `is_complete`) instead of relying on the background path — or keep a long-lived gateway/daemon running.
 - **Attached/dropped files**: if the user drops or attaches an export file (ChatGPT export zip, Gemini Takeout HTML), pass its path directly as `file_path` — the ChatGPT zip works as-is, no unzipping.
@@ -153,4 +154,4 @@ These statements are WRONG. Never write any of them — they fabricate a pricing
 
 ## Tool surface
 
-`totalreclaw_pair` (ONLY account-setup path) · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_retype` · `_set_scope` · `_export` · `_status` · `_upgrade` · `_top_up` · `_import_from` · `_import_batch` · `_import_status` · `_import_abort` · `_debrief` · `_report_qa_bug` (RC only).
+`totalreclaw_pair` (ONLY account-setup path) · `_remember` · `_recall` · `_forget` · `_pin` · `_unpin` · `_retype` · `_set_scope` · `_export` · `_status` · `_set_extraction_model` · `_upgrade` · `_top_up` · `_import_from` · `_import_batch` · `_import_status` · `_import_abort` · `_debrief` · `_report_qa_bug` (RC only).

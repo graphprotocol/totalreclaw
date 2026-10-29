@@ -59,6 +59,24 @@ def _no_real_keychain(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_extraction_model_state(monkeypatch, tmp_path_factory):
+    """2.5.3rc4: the extraction model depends on ``~/.totalreclaw/settings.json``
+    and on in-process fallback memory. Point the settings file at an empty
+    per-session temp path (a developer's real setting must not change test
+    outcomes), forget fallback decisions between tests, and drop an exported
+    ``TOTALRECLAW_EXTRACTION_MODEL``. Tests that set either do so locally."""
+    from totalreclaw import user_settings
+    from totalreclaw.agent import llm_client
+
+    path = tmp_path_factory.getbasetemp() / "tr-user-settings" / "settings.json"
+    if path.exists():
+        path.unlink()
+    monkeypatch.setattr(user_settings, "settings_path", lambda: path)
+    monkeypatch.delenv("TOTALRECLAW_EXTRACTION_MODEL", raising=False)
+    llm_client.reset_extraction_fallback_state()
+
+
+@pytest.fixture(autouse=True)
 def _route_import_engine_store_to_fake_recorder(monkeypatch):
     """internal#448 single-pass test shim — keeps existing import-engine unit
     tests (and their assertions) UNCHANGED.

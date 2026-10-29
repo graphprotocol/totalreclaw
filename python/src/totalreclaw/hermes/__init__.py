@@ -103,6 +103,17 @@ def register(ctx):
         is_async=True,
         description=schemas.STATUS["description"],
     )
+    # 2.5.3rc4 — the user picks an extraction model in chat ("use
+    # glm-5.3-flash for memories") instead of editing ~/.hermes/.env and
+    # restarting. Persists to ~/.totalreclaw/settings.json; read per turn.
+    ctx.register_tool(
+        name="totalreclaw_set_extraction_model",
+        toolset="totalreclaw",
+        schema=schemas.SET_EXTRACTION_MODEL,
+        handler=lambda args, **kw: tools.set_extraction_model(args, state, **kw),
+        is_async=True,
+        description=schemas.SET_EXTRACTION_MODEL["description"],
+    )
     # 2.3.1rc4 — `totalreclaw_setup` agent tool REMOVED for phrase-safety.
     #
     # rc.3 registered a `totalreclaw_setup` tool whose handler (a) accepted
