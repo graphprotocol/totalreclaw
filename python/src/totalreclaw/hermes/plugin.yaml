@@ -8,6 +8,7 @@ provides_tools:
   - totalreclaw_forget
   - totalreclaw_export
   - totalreclaw_status
+  - totalreclaw_set_extraction_model
   - totalreclaw_pair
   - totalreclaw_pin
   - totalreclaw_unpin

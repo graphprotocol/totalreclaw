@@ -44,11 +44,11 @@ async def test_empty_cheap_extraction_falls_back_to_chat_model(monkeypatch):
 
     assert out == []
     models = [m for m, _ in seen]
-    assert models[0] == "glm-4.5-flash", "extraction first tries the cheap model"
-    assert "glm-5.1" in models, "on empty, must fall back to the chat model (#376)"
-    assert len(seen) == 2, "exactly one fallback retry"
+    # 2.5.3rc4: each extraction candidate is tried once, ending with the
+    # chat model (#376), and never more than once each.
+    assert models == ["glm-5.3-flash", "glm-4.5-flash", "glm-5.1"], models
     # Pedro's no-endpoint-flip directive: the fallback stays on the same endpoint.
-    assert seen[1][1] == chat.base_url
+    assert {u for _, u in seen} == {chat.base_url}
 
 
 @pytest.mark.asyncio

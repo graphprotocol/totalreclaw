@@ -293,26 +293,24 @@ async def test_extract_facts_llm_warns_when_response_empty(
 # does double duty.
 #
 # Pin examples (kept hand-curated; provider lineups change slowly):
-#   zai      glm-5.1                -> glm-4.5-flash
+#   zai      glm-5.1                -> glm-5.3-flash (Coding) / glm-4.5-flash (Standard)
 #   openai   gpt-4 / gpt-4-turbo    -> gpt-4o-mini
 #   anthropic claude-sonnet-4-5     -> claude-haiku-4-5
 #   groq     llama-3.3-70b          -> llama-3.1-8b-instant
 # ---------------------------------------------------------------------------
 
 
-def test_cheap_extraction_model_for_zai_picks_glm_45_flash() -> None:
-    """Z.AI provider — extraction defaults to glm-4.5-flash regardless
-    of which GLM the user picked for chat.
-
-    Proven on Coding plan per prior QA cycles (Pedro 2026-04-26).
-    Available on BOTH Coding + Standard endpoints, so it works for
-    every zai user without needing endpoint-aware logic.
-    """
-    assert cheap_extraction_model_for("zai", "glm-5.1") == "glm-4.5-flash"
-    assert cheap_extraction_model_for("zai", "glm-4.5") == "glm-4.5-flash"
-    assert cheap_extraction_model_for("zai", "glm-5-turbo") == "glm-4.5-flash"
+def test_cheap_extraction_model_for_zai_is_endpoint_aware() -> None:
+    """Z.AI provider — extraction defaults to glm-5.3-flash on the Coding
+    endpoint (the default; included in the plan, better extractor) and to
+    glm-4.5-flash on Standard (glm-5.3-flash is paid there), regardless of
+    which GLM the user picked for chat (2.5.3rc4)."""
+    assert cheap_extraction_model_for("zai", "glm-5.1") == "glm-5.3-flash"
+    assert cheap_extraction_model_for("zai", "glm-4.5") == "glm-5.3-flash"
+    assert cheap_extraction_model_for("zai", "glm-5-turbo", ZAI_CODING_BASE_URL) == "glm-5.3-flash"
+    assert cheap_extraction_model_for("zai", "glm-5-turbo", ZAI_STANDARD_BASE_URL) == "glm-4.5-flash"
     # Case-insensitive provider name.
-    assert cheap_extraction_model_for("ZAI", "glm-5.1") == "glm-4.5-flash"
+    assert cheap_extraction_model_for("ZAI", "glm-5.1") == "glm-5.3-flash"
 
 
 def test_cheap_extraction_model_for_openai_picks_gpt_41_mini() -> None:
@@ -371,12 +369,12 @@ def test_cheap_extraction_model_no_false_positive_on_gemini_pro() -> None:
     # default for gemini provider takes over.
     assert (
         cheap_extraction_model_for("gemini", "gemini-2.5-pro")
-        == "gemini-flash-lite"
+        == "gemini-2.5-flash-lite"
     )
-    # gemini-flash-lite IS already cheap (via 'flash' + 'lite').
+    # gemini-flash-lite-latest IS already cheap (via 'flash' + 'lite').
     assert (
-        cheap_extraction_model_for("gemini", "gemini-flash-lite")
-        == "gemini-flash-lite"
+        cheap_extraction_model_for("gemini", "gemini-flash-lite-latest")
+        == "gemini-flash-lite-latest"
     )
 
 
@@ -422,20 +420,20 @@ def test_cheap_extraction_model_pinned_defaults_table() -> None:
 
     # Cross-client parity pins (must match
     # ``skill/plugin/llm-client.ts::CHEAP_MODEL_BY_PROVIDER``).
-    assert _DEFAULT_EXTRACTION_MODEL_BY_PROVIDER["zai"] == "glm-4.5-flash"
+    assert _DEFAULT_EXTRACTION_MODEL_BY_PROVIDER["zai"] == "glm-5.3-flash"
     assert (
         _DEFAULT_EXTRACTION_MODEL_BY_PROVIDER["anthropic"]
         == "claude-haiku-4-5-20251001"
     )
     assert _DEFAULT_EXTRACTION_MODEL_BY_PROVIDER["openai"] == "gpt-4.1-mini"
-    assert _DEFAULT_EXTRACTION_MODEL_BY_PROVIDER["gemini"] == "gemini-flash-lite"
-    assert _DEFAULT_EXTRACTION_MODEL_BY_PROVIDER["google"] == "gemini-flash-lite"
+    assert _DEFAULT_EXTRACTION_MODEL_BY_PROVIDER["gemini"] == "gemini-2.5-flash-lite"
+    assert _DEFAULT_EXTRACTION_MODEL_BY_PROVIDER["google"] == "gemini-2.5-flash-lite"
     assert (
         _DEFAULT_EXTRACTION_MODEL_BY_PROVIDER["groq"] == "llama-3.3-70b-versatile"
     )
     assert (
         _DEFAULT_EXTRACTION_MODEL_BY_PROVIDER["openrouter"]
-        == "anthropic/claude-haiku-4-5-20251001"
+        == "anthropic/claude-haiku-4.5"
     )
 
 
@@ -445,8 +443,8 @@ def test_derive_extraction_config_zai_keeps_endpoint() -> None:
     endpoint based on the cheap-model family — that would override
     the user's pinned ``ZAI_BASE_URL`` choice.
 
-    GLM-4.5-flash works on both Coding + Standard, so same-endpoint
-    is safe regardless of which the user runs.
+    The model is picked per endpoint instead (2.5.3rc4): glm-5.3-flash
+    on Coding, glm-4.5-flash on Standard.
     """
     chat_config = LLMConfig(
         api_key="sk-zai",
@@ -455,7 +453,7 @@ def test_derive_extraction_config_zai_keeps_endpoint() -> None:
         api_format="openai",
     )
     ext = derive_extraction_config(chat_config)
-    assert ext.model == "glm-4.5-flash"
+    assert ext.model == "glm-5.3-flash"
     assert ext.base_url == ZAI_CODING_BASE_URL, (
         "extraction config must reuse the chat endpoint, not flip"
     )
@@ -472,6 +470,7 @@ def test_derive_extraction_config_zai_keeps_endpoint() -> None:
     )
     ext_std = derive_extraction_config(chat_config_std)
     assert ext_std.base_url == ZAI_STANDARD_BASE_URL
+    assert ext_std.model == "glm-4.5-flash"
 
 
 def test_derive_extraction_config_openai() -> None:
@@ -525,8 +524,8 @@ def test_derive_extraction_config_unknown_provider_no_op() -> None:
 async def test_extract_facts_llm_uses_cheap_extraction_model() -> None:
     """End-to-end: when ``extract_facts_llm`` receives a chat-side
     LLMConfig (e.g. zai/GLM-5.1), the actual ``chat_completion`` call
-    fires with the cheap extraction model (GLM-4.5-flash) and the
-    user's same key + endpoint.
+    fires with the cheap extraction model (GLM-5.3-flash on Coding since
+    2.5.3rc4) and the user's same key + endpoint.
 
     This is the rc.24 F2 primary fix in action: GLM-5.1 returned empty
     content for the merged-extraction prompt; GLM-4.5-flash works.
@@ -575,8 +574,8 @@ async def test_extract_facts_llm_uses_cheap_extraction_model() -> None:
     assert len(facts) > 0
     assert captured_configs, "chat_completion was never called"
     used = captured_configs[0]
-    assert used.model == "glm-4.5-flash", (
-        f"extraction must call with the cheap zai model glm-4.5-flash, "
+    assert used.model == "glm-5.3-flash", (
+        f"extraction must call with the cheap zai Coding model glm-5.3-flash, "
         f"got {used.model!r}"
     )
     assert used.api_key == chat_cfg.api_key, (
@@ -594,7 +593,8 @@ async def test_extract_facts_llm_uses_cheap_extraction_model() -> None:
 #   1. Token from coding endpoint STAYS on coding endpoint regardless
 #      of which GLM the user picked for chat. No endpoint flip — that
 #      would 401 on a Coding-plan key hitting Standard.
-#   2. Extraction model defaults to glm-4.5-flash for any zai config.
+#   2. Extraction model defaults to a flash model for any zai config
+#      (glm-5.3-flash on Coding, glm-4.5-flash on Standard since 2.5.3rc4).
 #   3. 401/429 on extraction call surfaces a user-actionable error,
 #      not a silent empty.
 # ---------------------------------------------------------------------------
@@ -647,14 +647,15 @@ def test_zai_standard_token_stays_on_standard_endpoint_regardless_of_chat_model(
         assert ext.base_url == ZAI_STANDARD_BASE_URL
 
 
-def test_extraction_model_defaults_to_glm_45_flash_for_any_zai_config(
+def test_extraction_model_defaults_to_flash_for_any_zai_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pedro's assert #2: every zai chat config — regardless of
-    endpoint or chat model — resolves extraction to glm-4.5-flash."""
+    """Pedro's assert #2: every zai chat config — regardless of chat
+    model — resolves extraction to the endpoint's flash default."""
     monkeypatch.delenv("TOTALRECLAW_EXTRACTION_MODEL", raising=False)
 
-    for endpoint in (ZAI_CODING_BASE_URL, ZAI_STANDARD_BASE_URL):
+    expected = {ZAI_CODING_BASE_URL: "glm-5.3-flash", ZAI_STANDARD_BASE_URL: "glm-4.5-flash"}
+    for endpoint, want in expected.items():
         for chat_model in ("glm-5.1", "glm-5", "glm-5-turbo", "glm-4.5"):
             chat = LLMConfig(
                 api_key="sk",
@@ -663,10 +664,9 @@ def test_extraction_model_defaults_to_glm_45_flash_for_any_zai_config(
                 api_format="openai",
             )
             ext = derive_extraction_config(chat)
-            assert ext.model == "glm-4.5-flash", (
-                f"every zai config must default extraction to "
-                f"glm-4.5-flash; got {ext.model!r} for endpoint="
-                f"{endpoint!r} chat_model={chat_model!r}"
+            assert ext.model == want, (
+                f"zai extraction must default to {want}; got {ext.model!r} "
+                f"for endpoint={endpoint!r} chat_model={chat_model!r}"
             )
 
 

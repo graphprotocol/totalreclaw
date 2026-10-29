@@ -169,6 +169,32 @@ STATUS = {
     },
 }
 
+SET_EXTRACTION_MODEL = {
+    "name": "totalreclaw_set_extraction_model",
+    "description": (
+        "Change the LLM model TotalReclaw uses to extract and store memories "
+        "from the conversation. Only call this when the user explicitly asks "
+        "for a specific extraction/memory model (or asks to go back to the "
+        "default). By default the model is chosen automatically from the "
+        "user's chat provider, so there is normally nothing to configure. "
+        "Takes effect on the next extraction; no restart and no .env edit."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "model": {
+                "type": "string",
+                "description": (
+                    "Model id on the user's current chat provider, e.g. "
+                    "'glm-5.3-flash'. Empty string or 'default' returns to "
+                    "automatic selection."
+                ),
+            },
+        },
+        "required": ["model"],
+    },
+}
+
 SETUP = {
     "name": "totalreclaw_setup",
     "description": (
