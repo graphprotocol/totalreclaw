@@ -222,6 +222,12 @@ def _hermes_metadata_mode(provider) -> str:
 class TestOnMemoryWrite:
     """Built-in ``memory`` tool writes are mirrored into the vault."""
 
+    @pytest.fixture(autouse=True)
+    def _isolated_state_dirs(self, tmp_path, monkeypatch):
+        # Mirror jobs read the reconcile snapshot; keep them off real dirs.
+        monkeypatch.setenv("TOTALRECLAW_STATE_DIR", str(tmp_path / "state"))
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+
     @pytest.mark.parametrize("target", ["user", "memory"])
     def test_add_is_stored_for_both_targets(self, target):
         state = _make_state()

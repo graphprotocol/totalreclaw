@@ -45,6 +45,10 @@ vault consistent with what the built-in ``memory`` tool commits: adds are
 stored, replaces store the new entry and forget the old one, removes forget
 the matching fact. A fact is forgotten only on a confident match (see
 :func:`_find_mirrored_facts`); anything less is logged and skipped.
+
+Writes Hermes never reports (its background memory review, hand edits) are
+caught by :mod:`.memory_reconcile`, queued at ``initialize`` and
+``on_session_end`` on the same worker.
 """
 from __future__ import annotations
 
@@ -264,11 +268,13 @@ def _mirror_remember(state: "PluginState", args: Dict[str, Any]) -> bool:
     return True
 
 
-def _mirror_forget(state: "PluginState", fact_ids: List[str]) -> None:
-    """Forget *fact_ids* through ``tools.forget``, one at a time."""
+def _mirror_forget(state: "PluginState", fact_ids: List[str]) -> int:
+    """Forget *fact_ids* through ``tools.forget``, one at a time. Returns
+    how many were forgotten."""
     from .tools import forget as _forget
     from totalreclaw.agent.loop_runner import run_sync
 
+    forgotten = 0
     for fact_id in fact_ids:
         result = _parse_tool_result(run_sync(_forget({"fact_id": fact_id}, state)))
         if result.get("error") or not result.get("deleted", True):
@@ -276,6 +282,32 @@ def _mirror_forget(state: "PluginState", fact_ids: List[str]) -> None:
                 "memory mirror: forget %s failed: %s",
                 fact_id, result.get("error", "not deleted"),
             )
+        else:
+            forgotten += 1
+    return forgotten
+
+
+def _queue_reconcile(state: "PluginState") -> None:
+    """Queue a built-in memory reconcile pass on the mirror worker. Never
+    raises, never blocks."""
+    try:
+        from . import memory_reconcile
+
+        if not memory_reconcile.auto_reconcile_enabled() or not state.is_configured():
+            return
+        if not _MIRROR_WORKER.submit(functools.partial(_run_reconcile, state)):
+            logger.warning("memory reconcile: queue full, pass skipped")
+    except Exception as exc:
+        logger.warning("memory reconcile: not queued: %s", exc)
+
+
+def _run_reconcile(state: "PluginState") -> None:
+    from .memory_reconcile import reconcile
+
+    try:
+        reconcile(state)
+    except Exception as exc:
+        logger.warning("memory reconcile: pass failed: %s", exc)
 
 
 # Mapping of TR tool name → handler in ``totalreclaw.hermes.tools`` or
@@ -361,6 +393,10 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         # recall/extract to us. getattr-default-False elsewhere keeps dormant
         # installs (provider never initialized) on the legacy hook path.
         self._state._provider_active = True  # type: ignore[attr-defined]
+        # Catch up on built-in memory writes that never reached
+        # on_memory_write (background review, hand edits). Queued on the
+        # mirror worker: init never waits on the vault.
+        _queue_reconcile(self._state)
 
     def shutdown(self) -> None:
         """Best-effort flush at agent exit.
@@ -586,15 +622,19 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         return _summarize_facts_for_compression(stored)
 
     def on_session_end(self, messages: Optional[List[Dict[str, Any]]] = None, **kwargs: Any) -> None:
-        """Session-boundary hook — intentionally a no-op (§5.3).
+        """Session-boundary hook: queue a built-in memory reconcile pass.
 
-        Flush + debrief is delegated to the plugin's ``on_session_finalize``
+        The pass picks up what Hermes' background memory review wrote to
+        USER.md / MEMORY.md during the session (those writes never reach
+        ``on_memory_write``). It returns at once when the files haven't
+        changed since the last pass.
+
+        Flush + debrief stay delegated to the plugin's ``on_session_finalize``
         hook, which always runs on Hermes (entry-point plugin) and is the
         single, well-tested session-end path. Running it here too would double
-        the debrief (the old "embedding-deduped alongside" band-aid is no longer
-        needed under the single-driver split).
+        the debrief (§5.3).
         """
-        return
+        _queue_reconcile(self._state)
 
     def on_memory_write(
         self,
@@ -657,6 +697,9 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
             return
         text = text.strip()
         meta = metadata if isinstance(metadata, dict) else {}
+        # previous_content is the full old entry; old_text only the search
+        # span a legacy caller sent (never a snapshot key).
+        exact_previous = bool(meta.get("previous_content"))
         previous = str(meta.get("previous_content") or meta.get("old_text") or "").strip()
 
         if action == "add":
@@ -672,11 +715,13 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
             ):
                 if extra.get(src_key) is not None and dst_key not in args:
                     args[dst_key] = extra[src_key]
-            work = functools.partial(_mirror_remember, self._state, args)
+            work = functools.partial(self._mirror_add, target, args)
         elif action in ("replace", "patch"):
             if not text:
                 return
-            work = functools.partial(self._mirror_replace, previous, text)
+            work = functools.partial(
+                self._mirror_replace, target, previous, text, exact_previous
+            )
         else:  # remove
             old = previous or text  # a legacy caller may pass the entry as content
             if not old:
@@ -685,7 +730,9 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
                     target,
                 )
                 return
-            work = functools.partial(self._mirror_remove, old)
+            work = functools.partial(
+                self._mirror_remove, target, old, exact_previous and bool(previous)
+            )
 
         job = functools.partial(self._mirror_job, action, target, work)
         if not _MIRROR_WORKER.submit(job):
@@ -703,11 +750,45 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
                 action, target, exc,
             )
 
-    def _mirror_replace(self, previous: str, text: str) -> None:
-        from totalreclaw.agent.state import _normalize_for_dedup
+    # Each mirror job keeps the reconcile snapshot in step (when there is
+    # one), so the next reconcile pass doesn't redo the write, and skips a
+    # write a pass already applied. Both run on the mirror worker, in order.
 
+    def _mirror_add(self, target: str, args: Dict[str, Any]) -> None:
+        from .memory_reconcile import snapshot_for
+
+        text = args["text"]
+        snap = snapshot_for(self._state)
+        if snap is not None and snap.exists and snap.has(target, text):
+            logger.info("memory mirror: add target=%s already reconciled; skipped", target)
+            return
+        stored = _mirror_remember(self._state, args)
+        if stored and snap is not None and snap.exists:
+            snap.add(target, text)
+            snap.save()
+        logger.info("memory mirror: add target=%s stored=%d forgotten=0", target, int(stored))
+
+    def _mirror_replace(self, target: str, previous: str, text: str, exact_previous: bool = False) -> None:
+        from totalreclaw.agent.state import _normalize_for_dedup
+        from .memory_reconcile import snapshot_for
+
+        snap = snapshot_for(self._state)
+        tracked = snap is not None and snap.exists
+
+        def _record() -> None:
+            if tracked:
+                if exact_previous:
+                    snap.discard(target, previous)
+                snap.add(target, text)
+                snap.save()
+
+        if tracked and snap.has(target, text) and not (exact_previous and snap.has(target, previous)):
+            logger.info("memory mirror: replace target=%s already reconciled; skipped", target)
+            return
         if previous and _normalize_for_dedup(previous) == _normalize_for_dedup(text):
-            return  # whitespace / punctuation-only edit: same fact
+            _record()  # whitespace / punctuation-only edit: same fact
+            logger.info("memory mirror: replace target=%s stored=0 forgotten=0", target)
+            return
         # Look the old fact up BEFORE storing the new one, so the new fact
         # can never be the one matched and forgotten.
         old_ids: List[str] = []
@@ -717,18 +798,33 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
             except Exception as exc:  # e.g. reads paused: still store the new entry
                 logger.info("memory mirror: old-entry lookup failed: %s", exc)
         if not _mirror_remember(self._state, {"text": text}):
-            return  # keep the old fact rather than lose both
-        if old_ids:
-            _mirror_forget(self._state, old_ids)
-        elif previous:
+            # Keep the old fact rather than lose both.
+            logger.info("memory mirror: replace target=%s stored=0 forgotten=0", target)
+            return
+        forgotten = _mirror_forget(self._state, old_ids) if old_ids else 0
+        if previous and not old_ids:
             logger.info("memory mirror: replace found no confident match for the old entry")
+        _record()
+        logger.info(
+            "memory mirror: replace target=%s stored=1 forgotten=%d", target, forgotten
+        )
 
-    def _mirror_remove(self, previous: str) -> None:
+    def _mirror_remove(self, target: str, previous: str, exact_previous: bool = False) -> None:
+        from .memory_reconcile import snapshot_for
+
+        snap = snapshot_for(self._state)
+        tracked = snap is not None and snap.exists
+        if tracked and exact_previous and not snap.has(target, previous):
+            logger.info("memory mirror: remove target=%s already reconciled; skipped", target)
+            return
         fact_ids = _find_mirrored_facts(self._state, previous)
-        if fact_ids:
-            _mirror_forget(self._state, fact_ids)
-        else:
+        forgotten = _mirror_forget(self._state, fact_ids) if fact_ids else 0
+        if not fact_ids:
             logger.info("memory mirror: remove found no confident match; nothing forgotten")
+        if tracked and exact_previous:
+            snap.discard(target, previous)
+            snap.save()
+        logger.info("memory mirror: remove target=%s stored=0 forgotten=%d", target, forgotten)
 
     def on_delegation(
         self,
