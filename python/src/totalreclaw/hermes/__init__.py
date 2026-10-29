@@ -292,17 +292,12 @@ def register(ctx):
     except Exception:  # pragma: no cover — validation must not crash plugin load
         logger.debug("LLM-config load-time validation skipped", exc_info=True)
 
-    # rc.26 (issue #167 path A): defensive WARN if the user re-enabled
-    # Hermes' built-in `memory` tool after install. The SKILL.md install
-    # flow auto-disables it (`hermes tools disable memory`), but this
-    # belt-and-suspenders check runs on every plugin load to surface the
-    # anti-pattern in logs if someone manually re-enabled the built-in.
-    # Best-effort — never crashes plugin load. Shells out to the `hermes`
-    # CLI; absence of the CLI is silently tolerated.
-    try:
-        _warn_if_built_in_memory_enabled()
-    except Exception:  # pragma: no cover — defensive check must not crash
-        logger.debug("built-in memory enablement check skipped", exc_info=True)
+    # No check on Hermes' built-in `memory` tool here any more (2.5.3rc4).
+    # rc.26 (issue #167) warned when it was enabled, by shelling out to
+    # `hermes tools list` (with a recursion guard: that subprocess loads this
+    # plugin too). TotalReclaw now runs alongside the built-in memory on
+    # purpose and mirrors its writes (``memory_provider.on_memory_write``),
+    # so the enabled tool is the expected state.
 
     # Issue #275 — Path B memory-provider integration.
     # The TotalReclaw provider class lives at
@@ -334,89 +329,3 @@ def _refresh_provider_sidecar() -> None:
         refresh_sidecar(sidecar_path())
     except Exception:  # pragma: no cover — best-effort
         logger.debug("sidecar refresh skipped", exc_info=True)
-
-
-_RECURSION_GUARD_ENV = "_TOTALRECLAW_SKIP_BUILTIN_MEMORY_CHECK"
-
-
-def _warn_if_built_in_memory_enabled() -> None:
-    """Check whether Hermes' built-in `memory` tool is currently enabled.
-
-    Emits a single WARN line if it is. No-op (DEBUG only) if the
-    `hermes` CLI is not on PATH or if `hermes tools list` doesn't
-    expose a parseable enabled-set — we don't want this defensive
-    check to spam logs in environments where it can't be answered
-    cleanly.
-
-    rc.26 fix for the rc.24 NO-GO finding (issue #167): TotalReclaw
-    and Hermes built-in `memory` solve the same problem and compete
-    for "remember X" / "recall X" intents during natural conversation.
-    The install flow disables the built-in via SKILL.md step 3, but
-    this WARN catches users who re-enabled it manually.
-
-    Recursion guard (2.3.7rc2): this function shells out to
-    ``hermes tools list``. That subprocess is ALSO ``hermes`` — it
-    boots the gateway, discovers this plugin, calls ``register()``,
-    which calls this function, which spawns another ``hermes tools
-    list``... fork bomb. The 5s timeout per call does not help, since
-    each call forks multiple children before its own timeout fires.
-    We set a sentinel env var before spawning the subprocess so the
-    child plugin-load short-circuits and the recursion terminates at
-    depth 1.
-    """
-    import os
-    import shutil
-    import subprocess
-
-    # Recursion guard: if we're loading inside the subprocess we
-    # spawned for the check itself, short-circuit.
-    if os.environ.get(_RECURSION_GUARD_ENV) == "1":
-        logger.debug(
-            "built-in memory check skipped — running inside the "
-            "spawned `hermes tools list` subprocess (recursion guard)"
-        )
-        return
-
-    if shutil.which("hermes") is None:
-        logger.debug("hermes CLI not found on PATH; skipping built-in memory check")
-        return
-
-    child_env = {**os.environ, _RECURSION_GUARD_ENV: "1"}
-
-    try:
-        proc = subprocess.run(
-            ["hermes", "tools", "list"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-            env=child_env,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError):
-        logger.debug("hermes tools list failed; skipping built-in memory check", exc_info=True)
-        return
-
-    if proc.returncode != 0:
-        logger.debug(
-            "hermes tools list exited with code %d; skipping built-in memory check",
-            proc.returncode,
-        )
-        return
-
-    output = proc.stdout or ""
-    # Parse heuristically — match `memory` token followed by an
-    # enabled marker. Tolerant of whitespace + alternative formats
-    # (`memory: enabled`, `memory  enabled`, table-style, JSON-style).
-    lower = output.lower()
-    if "memory" in lower and "enabled" in lower:
-        # Tighten the match: only WARN if `memory` and `enabled` co-occur
-        # on the same line.
-        for line in output.splitlines():
-            ll = line.lower()
-            if "memory" in ll and "enabled" in ll and "disabled" not in ll:
-                logger.warning(
-                    "Hermes built-in 'memory' tool is enabled. TotalReclaw "
-                    "recommends disabling it to avoid intent-stealing. "
-                    "Run: hermes tools disable memory"
-                )
-                return

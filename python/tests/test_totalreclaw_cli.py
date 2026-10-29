@@ -149,7 +149,7 @@ class TestMemoryProviderCli:
         assert rc == 0
         act_out = capsys.readouterr().out
         assert "active provider:  totalreclaw" in act_out
-        assert "builtin disabled: True" in act_out
+        assert "builtin disabled: False" in act_out  # kept beside TotalReclaw
 
         rc2 = tr_cli.main(["memory-status", "--hermes-home", str(tmp_path)])
         assert rc2 == 0
@@ -163,9 +163,19 @@ class TestMemoryProviderCli:
         assert (tmp_path / "plugins" / "totalreclaw" / "__init__.py").exists()
         assert not (tmp_path / "plugins" / "memory" / "totalreclaw").exists()
 
-    def test_activate_disables_builtin_in_config(self, tmp_path: Path, capsys):
+    def test_activate_keeps_builtin_in_config(self, tmp_path: Path, capsys):
         tr_cli.main(["activate-memory-provider", "--hermes-home", str(tmp_path)])
         capsys.readouterr()
+        import yaml
+        cfg = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+        assert cfg["memory"] == {"provider": "totalreclaw"}  # built-in switches untouched
+
+    def test_activate_exclusive_disables_builtin_in_config(self, tmp_path: Path, capsys):
+        rc = tr_cli.main(
+            ["activate-memory-provider", "--hermes-home", str(tmp_path), "--exclusive"]
+        )
+        assert rc == 0
+        assert "builtin disabled: True" in capsys.readouterr().out
         import yaml
         cfg = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
         assert cfg["memory"]["provider"] == "totalreclaw"

@@ -70,20 +70,32 @@ def test_guide_does_not_falsely_claim_to_disable_built_in_memory():
 
 
 def test_guide_includes_honest_compatibility_section():
-    """The Compatibility section exists and says how built-in memory is
-    really turned off on Hermes 0.22+: the ``memory_enabled`` /
-    ``user_profile_enabled`` settings that ``activate-memory-provider``
-    writes, NOT ``hermes tools disable memory``, which also hides the
-    memory provider's tools (rc3 QA, #602)."""
+    """The Compatibility section exists and says TotalReclaw runs alongside
+    Hermes' built-in memory (2.5.3rc4). Turning the built-in off is the
+    explicit ``--exclusive`` opt-out, through the ``memory_enabled`` /
+    ``user_profile_enabled`` settings, NOT ``hermes tools disable memory``,
+    which also hides the memory provider's tools (rc3 QA, #602)."""
     body = _read_guide()
     assert "## Compatibility with Hermes built-in memory" in body, (
         "hermes-setup.md must include a `## Compatibility with Hermes "
         "built-in memory` section explaining the dual-mode reality."
     )
     section = body.split("## Compatibility with Hermes built-in memory", 1)[1]
+    assert "TotalReclaw runs alongside Hermes' built-in memory" in section, (
+        "Compatibility section must say the built-in memory stays on beside "
+        "TotalReclaw by default (2.5.3rc4)."
+    )
+    assert "Built-in memory writes are copied into TotalReclaw" in section, (
+        "Compatibility section must say built-in memory tool writes are "
+        "mirrored, so the two stores don't drift."
+    )
+    assert "activate-memory-provider --exclusive" in section, (
+        "Compatibility section must name the opt-out that turns the "
+        "built-in off."
+    )
     assert "memory_enabled: false" in section and "user_profile_enabled: false" in section, (
-        "Compatibility section must name the two settings that turn the "
-        "built-in stores off on Hermes 0.22+."
+        "Compatibility section must name the two settings `--exclusive` "
+        "writes to turn the built-in stores off on Hermes 0.22+."
     )
     assert "always active" in section, (
         "Compatibility section must address Hermes' own 'always active' "
@@ -148,6 +160,18 @@ def test_guide_points_users_to_issue_tracker_for_dual_mode_feedback():
         "Compatibility section must also link to our own tracker so we "
         "can scope demand independently."
     )
+
+
+def test_guide_says_pairing_activates_the_provider():
+    """2.5.3rc4 (#614): both pairing paths activate the provider, so the
+    guide no longer tells the agent pairing doesn't, and activation no
+    longer claims to turn the built-in memory off."""
+    body = _read_guide()
+    assert "Pairing does NOT make TotalReclaw" not in body
+    assert "**Pairing makes TotalReclaw Hermes' memory provider**" in body
+    assert "REQUIRED: pairing does not do this" not in body
+    assert "takes over from Hermes' built-in memory" not in body
+    assert "so Hermes starts using TotalReclaw as its memory provider." in body
 
 
 def test_guide_post_install_steps_renumbered():

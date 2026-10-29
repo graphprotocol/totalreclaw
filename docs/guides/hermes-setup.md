@@ -97,7 +97,7 @@ It fires at most once per 24h across sessions, and only ever when a newer **fina
 
 After the procedure completes (the user replies *"Done — continue setting up TotalReclaw"* or equivalent to the restart request in step 4), **proceed directly to Account setup**. Do not ask the user "is it ready?" — the user's reply IS the signal.
 
-**Order matters on Hermes 0.22+:** install the package (step 2), enable the plugin (step 3), restart once (step 4), check the tools are bound (step 5), and only then run Account setup. Pairing needs the `totalreclaw_pair` tool. **Pairing does NOT make TotalReclaw Hermes' memory provider**, so Account setup ends with a required, silent activation step (Account setup step 5) and one more restart. Do NOT activate the provider before pairing: it turns off Hermes' built-in memory while there is no account to replace it.
+**Order matters on Hermes 0.22+:** install the package (step 2), enable the plugin (step 3), restart once (step 4), check the tools are bound (step 5), and only then run Account setup. Pairing needs the `totalreclaw_pair` tool. **Pairing makes TotalReclaw Hermes' memory provider** unless another provider (Honcho, ...) is already active; Account setup step 5 checks it, and one more restart loads it. Hermes' built-in memory (`USER.md` / `MEMORY.md`) stays on beside TotalReclaw. That is intended: see [Compatibility](#compatibility-with-hermes-built-in-memory).
 
 1. **(SILENT — emit nothing.)** Resolve the Python environment Hermes imports packages from. **Hermes 0.22+ runs on its own bundled Python** (`~/.hermes/tools/python-3.14.*/bin/python3`) and loads its dependencies from a separate managed venv under `~/.hermes/installs/…/venv`; the `hermes` command is a `#!/bin/sh` launcher, so its shebang is NOT the interpreter. Ask Hermes for its import path; fall back to the shebang on older Hermes, where `hermes` is a Python script inside the venv:
    ```bash
@@ -198,9 +198,9 @@ After the procedure completes (the user replies *"Done — continue setting up T
    - If after the second restart `tools list` still shows no `totalreclaw`: surface the failure verbatim (`> Couldn't bind the totalreclaw plugin tools after install. Check 'hermes plugins list' / 'hermes tools list' and the gateway logs.`) and **stop** — do NOT proceed to Account setup with no tools bound (the `totalreclaw_pair` call below would fail and there is no CLI fallback per the phrase-safety rule).
    - If the probe passed on the first restart: proceed silently to Account setup.
 
-The install procedure ends here. Making TotalReclaw Hermes' memory provider happens AFTER pairing, in Account setup step 5.
+The install procedure ends here. Pairing (Account setup) makes TotalReclaw Hermes' memory provider, and Account setup step 5 checks it.
 
-> **Do NOT run `hermes tools disable memory`** (older versions of this guide had it as step 7). On Hermes 0.22+ it also gates off the memory provider's tools and its system-prompt block, so the agent stops seeing TotalReclaw and writes to local memory files instead. Account setup step 5 turns off Hermes' built-in memory stores (`memory_enabled` / `user_profile_enabled`), which is the right switch.
+> **Do NOT run `hermes tools disable memory`** (older versions of this guide had it as step 7). On Hermes 0.22+ it also gates off the memory provider's tools and its system-prompt block, so the agent stops seeing TotalReclaw and writes to local memory files instead. Hermes' built-in memory is meant to stay on beside TotalReclaw (see [Compatibility](#compatibility-with-hermes-built-in-memory)).
 
 ---
 
@@ -232,7 +232,7 @@ The agent never generates the recovery phrase. Only the user's browser does, via
 
    Do not paraphrase the URL or PIN. Do not invent values when the tool fails — surface the failure verbatim and stop. **This single line is the ENTIRE browser instruction.** Do not follow it with a numbered list restating the steps, a "what's done so far" recap, or a trailing "waiting for you to finish…" / "standing by…" line — the line already names every step and `Reply \`done\`` already encodes the wait (auto-QA #340 / #342).
 4. After the user replies `done`, re-check `~/.totalreclaw/credentials.json`. Present → continue to step 5. Absent → the PIN expired; call `totalreclaw_pair` again and resend step 3 once.
-5. **(SILENT — emit nothing except the one question in the table below.) Make TotalReclaw Hermes' memory provider. REQUIRED: pairing does not do this.** Without it, Hermes' built-in memory keeps running beside TotalReclaw (split-brain) and Hermes' native per-turn recall never routes through TotalReclaw. The plugin's own hooks still save and recall in the meantime, so nothing is lost. Hermes activates exactly **one** memory provider at a time. Probe what's active:
+5. **(SILENT — emit nothing except the one question in the table below.) Check that TotalReclaw is Hermes' memory provider.** Pairing activates it on its own when no other provider is configured, and leaves another provider in place for the user to decide; that activation is best-effort, so confirm it here. Without the provider, Hermes' native per-turn recall and the mirroring of its built-in memory writes don't route through TotalReclaw (the plugin's own hooks still save and recall, so nothing is lost). Hermes runs exactly **one** external memory provider at a time, always next to its own built-in memory. Probe what's active:
 
    ```bash
    # After a restart the shell is new: re-run Install step 1 first if HERMES_PYTHON is unset.
@@ -245,7 +245,7 @@ The agent never generates the recovery phrase. Only the user's browser does, via
 
    | `ACTIVE_PROVIDER` | Agent behaviour |
    |---|---|
-   | `"none"` / `""` / `"totalreclaw"` | Silently run `"$TR_CLI" activate-memory-provider`. No prompt. It installs the provider file at `~/.hermes/plugins/totalreclaw/__init__.py`, sets `memory.provider: totalreclaw` and turns off Hermes' built-in stores (`memory_enabled: false`, `user_profile_enabled: false`). It edits `config.yaml` in place, keeps your comments, checks the result parses before writing it, and repairs the duplicate `user_profile_enabled` key that versions before 2.5.3 could leave behind. |
+   | `"none"` / `""` / `"totalreclaw"` | Silently run `"$TR_CLI" activate-memory-provider`. No prompt. It installs the provider file at `~/.hermes/plugins/totalreclaw/__init__.py` and sets `memory.provider: totalreclaw`, leaving Hermes' built-in memory on (if a TotalReclaw version before 2.5.3rc4 turned the built-in stores off, it turns them back on). It edits `config.yaml` in place, keeps your comments, checks the result parses before writing it, and repairs the duplicate `user_profile_enabled` key that versions before 2.5.3 could leave behind. Do NOT add `--exclusive` unless the user asked for TotalReclaw to be their only memory (see [Compatibility](#compatibility-with-hermes-built-in-memory)). |
    | Anything else (`honcho`, `byterover`, `openviking`, ...) | Emit ONE line: *"Hermes is currently using `<X>` as the memory provider. Switch to TotalReclaw (E2E-encrypted, on-chain, cross-device) or install TotalReclaw as tools-only? Reply `switch` or `tools-only`."*<br/>**Branch:**<br/>• `switch` → warn first (*"Switching deactivates `<X>` — your existing `<X>` memories stay on disk but won't be queried by the agent until you switch back."*), then run `"$TR_CLI" activate-memory-provider`.<br/>• `tools-only` → run `"$TR_CLI" install-memory-provider` (provider file only, no activation). TR tools remain available; the active provider stays `<X>`. Skip the restart line in Post-setup. |
 
    If the command refuses because `~/.hermes/plugins/totalreclaw/__init__.py` is not a TotalReclaw-managed file, that file is the git wrapper from the install step-5 fallback: re-run with `--force` (the provider file also registers the tools, so nothing is lost). The commands are idempotent; re-running on an installed provider file is safe.
@@ -270,7 +270,7 @@ Emit verbatim:
 >
 > Account status: `<tier>` tier, `<used>` / `<limit>` memories used. Ask me to remember anything and I'll save it to your encrypted vault.
 >
-> Last step: restart Hermes once more, the same way as before (on Telegram or another chat app, send `/restart`), so TotalReclaw takes over from Hermes' built-in memory.
+> Last step: restart Hermes once more, the same way as before (on Telegram or another chat app, send `/restart`), so Hermes starts using TotalReclaw as its memory provider.
 
 (`<tier>`, `<used>`, `<limit>` from `totalreclaw_status` — do not invent the numbers, and do not name the underlying chain/network to the user.)
 
@@ -280,7 +280,7 @@ This block ships on first successful pair completion. On subsequent install runs
 
 > ✓ TotalReclaw is already set up. Account status: `<tier>` tier, `<used>` / `<limit>` memories used.
 
-If step 5 had to activate the provider on this run (it wasn't `totalreclaw` before), add the same `Last step: restart Hermes once more…` line.
+If step 5 changed anything on this run (the provider wasn't `totalreclaw` before, or `activate-memory-provider` printed `builtin restored: True`), add the same `Last step: restart Hermes once more…` line.
 
 ---
 
@@ -408,9 +408,11 @@ For example `glm-5.3-flash` on the z.ai Coding Plan. Versions up to 2.5.3 print 
   ```bash
   ( cd /tmp && "$HERMES_PYTHON" -c "import totalreclaw" )
   ```
-  If that raises `ModuleNotFoundError`, re-run Install-procedure step 2 with `PIN="totalreclaw==<the version you had>"` and restart the gateway. The memory-provider file (`~/.hermes/plugins/totalreclaw/__init__.py`, written by Account setup step 5) self-heals exactly this on the next gateway start: it reinstalls the version that wrote it, with its dependencies, into the environment Hermes imports from (a pre-release only if that version is one), then re-checks the import. If that fails too, the agent is told memory is OFFLINE on the first turn of each session and `totalreclaw_status` returns `"degraded": true` with the error and the exact fix command. Older installs carrying a previous sidecar can take the one-shot upgrade: `"$(dirname "$HERMES_PYTHON")/totalreclaw" install-memory-provider --force`, or simply re-pair. Credentials and vault data are never affected — this is an availability failure only.
+  If that raises `ModuleNotFoundError`, re-run Install-procedure step 2 with `PIN="totalreclaw==<the version you had>"` and restart the gateway. The memory-provider file (`~/.hermes/plugins/totalreclaw/__init__.py`, written at pairing or by Account setup step 5) self-heals exactly this on the next gateway start: it reinstalls the version that wrote it, with its dependencies, into the environment Hermes imports from (a pre-release only if that version is one), then re-checks the import. If that fails too, the agent is told memory is OFFLINE on the first turn of each session and `totalreclaw_status` returns `"degraded": true` with the error and the exact fix command. Older installs carrying a previous sidecar can take the one-shot upgrade: `"$(dirname "$HERMES_PYTHON")/totalreclaw" install-memory-provider --force`, or simply re-pair. Credentials and vault data are never affected — this is an availability failure only.
 - **The gateway log says `Memory provider 'totalreclaw' is configured but not installed`**, or `memory-status` says `totalreclaw` but Hermes reports no active provider: `config.yaml` names TotalReclaw but `~/.hermes/plugins/totalreclaw/__init__.py` isn't the provider file (usually the git wrapper from the install step-5 fallback is there). Run `"$(dirname "$HERMES_PYTHON")/totalreclaw" activate-memory-provider --force` and restart the gateway.
-- **`memory-status` says `none` after pairing:** expected; pairing doesn't activate the provider. Run Account setup step 5.
+- **`memory-status` says `none` after pairing:** the activation pairing attempts is best-effort and was skipped or failed. The reason is in the gateway log (`memory provider activation`) or, for relay pairing, in `~/.totalreclaw/.pair_sidecar.log`. Run Account setup step 5.
+- **The agent saved "remember X" with Hermes' built-in `memory` tool instead of `totalreclaw_remember`:** nothing is lost. TotalReclaw copies the built-in tool's adds, replaces and removes into the vault (Hermes 0.22+, with TotalReclaw as the active provider). Its system-prompt block tells the agent to prefer `totalreclaw_remember`; if it keeps choosing the built-in tool, report it.
+- **The user wants TotalReclaw to be their only memory** (no local `USER.md` / `MEMORY.md`): run `"$(dirname "$HERMES_PYTHON")/totalreclaw" activate-memory-provider --exclusive` and restart the gateway. To undo it: `hermes config set memory.memory_enabled true`, `hermes config set memory.user_profile_enabled true`, restart.
 - **Hermes says `config.yaml` has a formatting error / `found duplicate key "user_profile_enabled"` and runs on default settings:** a TotalReclaw version before 2.5.3 activated the memory provider by appending keys to the `memory:` block. Install 2.5.3 or later (step 2), then run `"$(dirname "$HERMES_PYTHON")/totalreclaw" activate-memory-provider` once — it rewrites those keys in place and removes the duplicate.
 - **`hermes chat` fails with `Gateway connection failed; no local fallback (TypeError)` right after installing TotalReclaw:** a TotalReclaw version before 2.5.3 capped `websockets` below 14 and downgraded Hermes' copy. Install 2.5.3 or later (step 2), which allows Hermes' version, and restore it: `"$PIP_PYTHON" -m pip --python "$HERMES_PYTHON" install "websockets>=15"`.
 
@@ -422,7 +424,7 @@ Two TotalReclaw paths exist into Hermes; they coexist but serve different surfac
 
 | Mode | What's active | When to use | How to set |
 |---|---|---|---|
-| **Active provider** | Generic plugin tools + lifecycle hooks **+** `MemoryProvider` hooks (`on_pre_compress`, `on_memory_write`, `on_session_end`, `on_turn_start`). Captures Background-Review writes the toolset whitelist would otherwise drop. | The user has no other memory provider configured, or wants TR to be the canonical cross-session store. Default for fresh installs. | `totalreclaw activate-memory-provider` |
+| **Active provider** | Generic plugin tools + lifecycle hooks **+** `MemoryProvider` hooks (`on_pre_compress`, `on_memory_write`, `on_session_end`, `on_turn_start`). `on_memory_write` copies the built-in memory tool's adds, replaces and removes into TotalReclaw. | The user has no other memory provider configured, or wants TR to be the canonical cross-session store. Default for fresh installs. | `totalreclaw activate-memory-provider` |
 | **Tools-only** | Generic plugin tools + lifecycle hooks only. No `MemoryProvider` hooks — they fire on the user's other active provider (Honcho / Byterover / OpenViking / ...). | The user already has another provider configured and wants to keep using it alongside TR's chat tools. | `totalreclaw install-memory-provider` (no `--activate`) |
 
 The two install commands are idempotent. Re-running on an already-installed sidecar overwrites with the current shim content (catches package upgrades) without disturbing the rest of the install. The sidecar refuses to clobber a hand-edited file unless `--force` is passed.
@@ -451,15 +453,18 @@ This grep-reads `~/.hermes/config.yaml` (or `$HERMES_HOME/config.yaml`) and does
 
 ## Compatibility with Hermes built-in memory
 
-**On Hermes 0.22+, activating TotalReclaw turns off Hermes' built-in memory stores** (`~/.hermes/memories/USER.md` and `MEMORY.md`): `activate-memory-provider` sets `memory.memory_enabled: false` and `memory.user_profile_enabled: false`, and Hermes then doesn't load or write them (`hermes memory status` shows both as disabled). `hermes memory --help` still says built-in memory "is always active"; on Hermes 0.22 these two settings are what turn it off. Do **not** also run `hermes tools disable memory`: on Hermes 0.22+ it gates off the memory provider's tools and system-prompt block too, so the agent loses sight of TotalReclaw.
+**TotalReclaw runs alongside Hermes' built-in memory** (`~/.hermes/memories/USER.md` and `MEMORY.md`). Hermes always keeps its built-in memory next to the one external provider (`hermes memory --help` calls it "always active"), and since 2.5.3rc4 `activate-memory-provider` leaves it on. The two have different jobs:
 
-How the two relate:
-
-- **TotalReclaw is the canonical cross-session store**, derived from your recovery phrase. Memories persist on chain, recoverable on any device or container by re-importing the phrase via `totalreclaw_pair`.
-- **Hermes's USER.md (when the built-in stores are on, e.g. in tools-only mode) is a local, per-container context cache.** It is NOT cross-session in the cross-device sense; it lives only inside this Hermes deployment and is wiped on container reset or `hermes memory reset`. Treat it as part of the LLM's working memory, not as a memory store.
+- **Hermes' built-in memory is the short profile loaded into every session** (a few KB, capped by `memory_char_limit` / `user_char_limit`). It is a local, per-container context cache: plaintext, not shared with the user's other agents, and wiped on container reset or `hermes memory reset`. It keeps the agent oriented when TotalReclaw recall is slow or unavailable.
+- **TotalReclaw is the canonical cross-session store**, derived from your recovery phrase: end-to-end encrypted, on chain, shared with the user's other agents, and recoverable on any device or container by re-importing the phrase via `totalreclaw_pair`. The agent is told to remember and recall with `totalreclaw_remember` / `totalreclaw_recall`.
+- **Built-in memory writes are copied into TotalReclaw.** When the agent uses Hermes' `memory` tool, an add is stored, a replace (or patch) stores the new entry and forgets the old one, and a remove forgets the matching memory. A memory is only forgotten when it clearly matches the entry (the same text, or a single memory that is nearly identical); otherwise nothing is deleted. Writes from Hermes' background memory review are not passed to memory providers (Hermes 0.22.5), so those stay in `USER.md` / `MEMORY.md` only.
 - **For any user-facing recall query, the agent calls `totalreclaw_recall`** even when USER.md may already contain a relevant fact in context (see Recall behaviour). This forces the answer through the canonical TotalReclaw read path.
 
-Flag interest in fully-disable-able built-in memory at <https://github.com/NousResearch/hermes-agent/issues> (Hermes upstream). We track interest at <https://github.com/graphprotocol/totalreclaw/issues>.
+**To make TotalReclaw the only memory**, run `activate-memory-provider --exclusive` and restart. It also sets `memory.memory_enabled: false` and `memory.user_profile_enabled: false`, and Hermes then stops loading and writing `USER.md` / `MEMORY.md` (`hermes memory status` shows both as disabled). That also drops the always-loaded profile and the background review's memory writes. A later plain `activate-memory-provider` keeps this choice. TotalReclaw versions before 2.5.3rc4 did this on every activation; running `activate-memory-provider` once on 2.5.3rc4 or later turns those stores back on.
+
+Do **not** also run `hermes tools disable memory`, in either mode: on Hermes 0.22+ it gates off the memory provider's tools and system-prompt block too, so the agent loses sight of TotalReclaw.
+
+Feedback on how the two memories work together: <https://github.com/graphprotocol/totalreclaw/issues>. Changes to the built-in memory itself belong upstream at <https://github.com/NousResearch/hermes-agent/issues>.
 
 ---
 

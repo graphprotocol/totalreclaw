@@ -638,6 +638,7 @@ async def _drive_full_pair_session(
             )
             return {"state": "error", "error": str(err)}
 
+    result = None
     try:
         result = await await_phrase_upload(
             session,
@@ -660,7 +661,34 @@ async def _drive_full_pair_session(
             type(err).__name__,
         )
 
-    # 4. Register the new vault with the relay while the phrase is still on
+    # 4. Make TotalReclaw Hermes' memory provider (#614). This sidecar is
+    #    only spawned by the Hermes pair tool, and the in-process path
+    #    already did this; without it a relay pairing left
+    #    ``memory.provider`` unset. Config + provider-file writes only, no
+    #    key material; best-effort, the pairing has already succeeded.
+    if isinstance(result, dict) and result.get("state") == "active":
+        try:
+            from totalreclaw.hermes.install_memory_provider import (
+                activate_after_pairing,
+            )
+
+            activation = activate_after_pairing()
+            logger.info(
+                "pair.sidecar: memory provider activation token=%s… "
+                "activated=%s skipped=%s",
+                token_tag,
+                activation.get("activated"),
+                activation.get("skipped", ""),
+            )
+        except Exception as err:  # noqa: BLE001 — never fail a done pairing
+            logger.warning(
+                "pair.sidecar: memory provider activation failed token=%s… "
+                "err_type=%s",
+                token_tag,
+                type(err).__name__,
+            )
+
+    # 5. Register the new vault with the relay while the phrase is still on
     #    this host. The next plugin load may swap the phrase for a derived
     #    bundle, which never registers (derived-bundle-v1.md §4.5), so a
     #    vault left unregistered here would 401 on every call. After the
