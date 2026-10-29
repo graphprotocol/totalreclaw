@@ -245,3 +245,77 @@ class TestRelaySidecarActivates:
             side_effect=RuntimeError("Refusing to overwrite hand-edited sidecar"),
         )
         act.assert_called_once_with()
+
+
+class TestRestoreAfterUpgrade:
+    """Plugin load turns the built-in back on once, for exactly the pre-rc4
+    pattern, so existing users don't have to re-pair."""
+
+    @pytest.fixture(autouse=True)
+    def _state_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TOTALRECLAW_STATE_DIR", str(tmp_path / "state"))
+
+    def test_restores_pre_rc4_pattern_once(self, tmp_path: Path, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO, logger="totalreclaw.hermes.install_memory_provider")
+        home = tmp_path / "hermes"
+        cfg = _write(home, _PRE_RC4_ACTIVATED)
+        assert imp.restore_builtin_after_upgrade(home) is True
+        assert _memory(home) == {
+            "provider": "totalreclaw",
+            "memory_enabled": True,
+            "user_profile_enabled": True,
+        }
+        assert "  # Agent's personal notes\n" in cfg.read_text(encoding="utf-8")
+        assert "Takes effect at the next gateway restart" in caplog.text
+        marker = next((tmp_path / "state").glob("hermes-builtin-restore-*.done"))
+        assert stat_mode(marker) == 0o600
+
+        # The user later turns it off by hand: not overridden.
+        _write(home, _PRE_RC4_ACTIVATED)
+        assert imp.restore_builtin_after_upgrade(home) is False
+        assert _memory(home)["memory_enabled"] is False
+
+    @pytest.mark.parametrize("config", [
+        "memory:\n  provider: totalreclaw\n  memory_enabled: true\n  user_profile_enabled: true\n",
+        "memory:\n  provider: honcho\n  memory_enabled: false\n  user_profile_enabled: false\n",
+        "memory:\n  provider: totalreclaw\n  memory_enabled: false\n  user_profile_enabled: true\n",
+        "memory:\n  provider: totalreclaw\n"
+        "  memory_enabled: false  # totalreclaw: --exclusive\n"
+        "  user_profile_enabled: false  # totalreclaw: --exclusive\n",
+    ])
+    def test_other_configs_untouched(self, tmp_path: Path, config):
+        home = tmp_path / "hermes"
+        cfg = _write(home, config)
+        assert imp.restore_builtin_after_upgrade(home) is False
+        assert cfg.read_text(encoding="utf-8") == config
+
+    def test_no_hermes_home_does_nothing(self, tmp_path: Path):
+        assert imp.restore_builtin_after_upgrade(tmp_path / "missing") is False
+        assert not (tmp_path / "state").exists()
+
+    def test_never_raises(self, tmp_path: Path, monkeypatch):
+        home = tmp_path / "hermes"
+        _write(home, _PRE_RC4_ACTIVATED)
+        monkeypatch.setattr(imp, "_update_memory_keys", lambda *a, **k: (_ for _ in ()).throw(OSError("ro fs")))
+        assert imp.restore_builtin_after_upgrade(home) is False
+
+    def test_plugin_load_calls_it_only_inside_hermes(self, monkeypatch):
+        import sys
+
+        import totalreclaw.hermes as hermes_pkg
+
+        with patch.object(imp, "restore_builtin_after_upgrade") as restore:
+            monkeypatch.delitem(sys.modules, "hermes_cli", raising=False)
+            hermes_pkg._restore_builtin_memory_after_upgrade()
+            restore.assert_not_called()
+            monkeypatch.setitem(sys.modules, "hermes_cli", MagicMock())
+            hermes_pkg._restore_builtin_memory_after_upgrade()
+            restore.assert_called_once_with()
+
+
+def stat_mode(path: Path) -> int:
+    import stat
+
+    return stat.S_IMODE(path.stat().st_mode)

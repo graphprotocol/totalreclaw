@@ -366,6 +366,11 @@ def reconcile(
         _LAST_CLEAN_STAT.pop(snap.path, None)
     else:
         _LAST_CLEAN_STAT[snap.path] = stat
+    if not first_run and not any(counts.values()):
+        # Same line as the early return, so a pass after a restart (no
+        # in-process stat cache yet) reads the same as one within a process.
+        logger.info("memory reconcile: no changes")
+        return {"first_run": False, **counts}
     # removed = left the Hermes files (kept in TotalReclaw); forgotten =
     # old facts superseded by a same-fact edit.
     logger.info(
