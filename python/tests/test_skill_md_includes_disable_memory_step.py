@@ -91,7 +91,9 @@ def test_skill_md_sets_builtin_memory_role():
     body = _read(SKILL_MD)
     assert "**Hermes' built-in `memory` tool**" in body
     assert 'For "remember X", use `totalreclaw_remember`, not the built-in tool.' in body
-    assert "TotalReclaw copies the change into the vault by itself" in body
+    assert "copied into the vault by themselves" in body
+    assert "does NOT forget it in TotalReclaw" in body
+    assert "remove it there too" in body
 
 
 def test_skill_md_does_not_carry_install_disable_step():

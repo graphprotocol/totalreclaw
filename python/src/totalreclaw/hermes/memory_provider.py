@@ -40,11 +40,18 @@ Built-in memory mirror
 
 TotalReclaw runs alongside Hermes' built-in memory (``USER.md`` /
 ``MEMORY.md``), which Hermes always keeps next to the one external
-provider. :meth:`TotalReclawMemoryProvider.on_memory_write` keeps the
-vault consistent with what the built-in ``memory`` tool commits: adds are
-stored, replaces store the new entry and forget the old one, removes forget
-the matching fact. A fact is forgotten only on a confident match (see
-:func:`_find_mirrored_facts`); anything less is logged and skipped.
+provider. :meth:`TotalReclawMemoryProvider.on_memory_write` copies what
+the built-in ``memory`` tool commits into the vault: adds and edits are
+stored. Nothing is forgotten for a removal, and only for an edit that is
+clearly the same fact (:func:`_same_fact`) with a confident vault match
+(:func:`_find_mirrored_facts`).
+
+Why removals never forget: the built-in stores are size-capped
+(``memory_char_limit`` 2200, ``user_char_limit`` 1375), and Hermes' memory
+tool and background review remove or merge entries to make room. A removal
+there usually means "evicted from the short profile", not "the user wants
+this forgotten"; mirroring it would delete long-term facts nobody asked to
+delete. Explicit forgetting goes through ``totalreclaw_forget``.
 
 Writes Hermes never reports (its background memory review, hand edits) are
 caught by :mod:`.memory_reconcile`, queued at ``initialize`` and
@@ -105,7 +112,13 @@ def _summarize_facts_for_compression(fact_texts: List[str]) -> str:
 MIRROR_MATCH_THRESHOLD = 0.92
 #: Candidates fetched when looking for the fact behind a built-in entry.
 _MIRROR_MATCH_TOP_K = 5
-#: Most facts one built-in replace/remove may forget (identical-text copies).
+#: difflib ratio (normalized text) at or above which an edited built-in
+#: entry is the same fact as before, so the old vault fact is superseded.
+#: Below it (a merge of several entries, a rewrite) the old facts are kept.
+#: "prefers tea" -> "prefers green tea" is 0.85; a merge such as "likes tea"
+#: -> "likes tea and coffee" is 0.73.
+SAME_FACT_RATIO = 0.8
+#: Most facts one built-in edit may forget (identical-text copies).
 #: More than that is not a match, it's a reason to stop.
 _MIRROR_MAX_FORGETS = 3
 _MIRROR_QUEUE_MAX = 256
@@ -191,6 +204,19 @@ def _similarity(result: Any, embedding: List[float]) -> float:
         except Exception:
             pass
     return float(getattr(result, "cosine_sim", None) or 0.0)
+
+
+def _same_fact(old: str, new: str) -> bool:
+    """True when built-in entry *new* is *old* edited, not a merge or a
+    different fact: normalized difflib ratio >= :data:`SAME_FACT_RATIO`."""
+    import difflib
+
+    from totalreclaw.agent.state import _normalize_for_dedup
+
+    a, b = _normalize_for_dedup(old), _normalize_for_dedup(new)
+    if not a or not b:
+        return False
+    return difflib.SequenceMatcher(None, a, b).ratio() >= SAME_FACT_RATIO
 
 
 def _find_mirrored_facts(state: "PluginState", text: str) -> List[str]:
@@ -504,9 +530,11 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
                 "run. Hermes' built-in memory (USER.md / MEMORY.md) is only "
                 "the short profile loaded each session. Use "
                 "`totalreclaw_remember` to remember and `totalreclaw_recall` "
-                "to recall anything about the user. Writes made with the "
+                "to recall anything about the user. Entries saved with the "
                 "built-in `memory` tool are copied to TotalReclaw "
-                "automatically, so never save the same fact with both."
+                "automatically, so never save the same fact with both. To "
+                "forget something, call `totalreclaw_forget` and also remove "
+                "it from the built-in memory if it's there."
             )
         return (
             "## TotalReclaw setup pending\n"
@@ -653,15 +681,16 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
 
         - ``add``: store ``content`` via ``tools.remember`` (which dedups).
         - ``replace`` (Hermes 0.22 also sends ``patch`` as this, with
-          ``content`` = the whole edited entry): find the fact for the old
-          entry, store the new one, then forget the old fact. Kept if the
-          store fails.
-        - ``remove``: find the fact for the removed entry and forget it.
+          ``content`` = the whole edited entry): always store the new entry.
+          Forget the old fact only when the edit is clearly the same fact
+          (:func:`_same_fact`) AND :func:`_find_mirrored_facts` matches it
+          confidently; a merge or rewrite keeps the old facts.
+        - ``remove``: nothing is forgotten. The built-in stores are capped,
+          so a removal is usually an eviction to make room; the fact stays in
+          TotalReclaw. Explicit forgetting is ``totalreclaw_forget``.
 
         The old entry is ``metadata["previous_content"]`` (the full entry
         Hermes changed) or, from older callers, ``metadata["old_text"]``.
-        :func:`_find_mirrored_facts` decides the match conservatively; no
-        confident match means nothing is forgotten.
 
         Runs on Hermes' tool path, so the work is queued on a background
         worker and this returns at once. Never raises.
@@ -789,10 +818,11 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
             _record()  # whitespace / punctuation-only edit: same fact
             logger.info("memory mirror: replace target=%s stored=0 forgotten=0", target)
             return
+        supersede = bool(previous) and _same_fact(previous, text)
         # Look the old fact up BEFORE storing the new one, so the new fact
         # can never be the one matched and forgotten.
         old_ids: List[str] = []
-        if previous:
+        if supersede:
             try:
                 old_ids = _find_mirrored_facts(self._state, previous)
             except Exception as exc:  # e.g. reads paused: still store the new entry
@@ -802,29 +832,24 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
             logger.info("memory mirror: replace target=%s stored=0 forgotten=0", target)
             return
         forgotten = _mirror_forget(self._state, old_ids) if old_ids else 0
-        if previous and not old_ids:
-            logger.info("memory mirror: replace found no confident match for the old entry")
         _record()
         logger.info(
-            "memory mirror: replace target=%s stored=1 forgotten=%d", target, forgotten
+            "memory mirror: replace target=%s stored=1 forgotten=%d%s",
+            target, forgotten,
+            "" if supersede or not previous else "; old entry kept (not the same fact)",
         )
 
     def _mirror_remove(self, target: str, previous: str, exact_previous: bool = False) -> None:
         from .memory_reconcile import snapshot_for
 
         snap = snapshot_for(self._state)
-        tracked = snap is not None and snap.exists
-        if tracked and exact_previous and not snap.has(target, previous):
-            logger.info("memory mirror: remove target=%s already reconciled; skipped", target)
-            return
-        fact_ids = _find_mirrored_facts(self._state, previous)
-        forgotten = _mirror_forget(self._state, fact_ids) if fact_ids else 0
-        if not fact_ids:
-            logger.info("memory mirror: remove found no confident match; nothing forgotten")
-        if tracked and exact_previous:
+        if snap is not None and snap.exists and exact_previous:
             snap.discard(target, previous)
             snap.save()
-        logger.info("memory mirror: remove target=%s stored=0 forgotten=%d", target, forgotten)
+        logger.info(
+            "memory mirror: remove target=%s removed from Hermes profile; kept in TotalReclaw",
+            target,
+        )
 
     def on_delegation(
         self,

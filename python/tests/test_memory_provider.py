@@ -8,6 +8,7 @@ module (sidecar drop, config write, status read) since Hermes' actual
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -315,14 +316,40 @@ class TestOnMemoryWrite:
         assert vault.events == ["recall", "remember", "forget"]
         assert vault.recall_queries == ["User prefers tea."]
 
-    def test_replace_falls_back_to_old_text_from_older_callers(self):
+    def test_replace_with_only_an_old_text_span_keeps_the_old_fact(self):
+        # old_text is only the search span a legacy caller sent, never the
+        # whole entry: it can't show the edit is the same fact, so keep it.
         state = _make_state()
         vault = _Vault(state, recall_results=[_fact("old-1", "Works at Acme", 0.5)])
         _write(
             TotalReclawMemoryProvider(state), vault, "replace", "memory", "Works at Initech",
-            metadata={"old_text": "works at acme."},
+            metadata={"old_text": "Acme"},
         )
-        assert vault.forgotten == ["old-1"]  # exact after normalization
+        assert vault.remembered == [{"text": "Works at Initech"}]
+        assert vault.forgotten == []
+
+    def test_merge_keeps_the_old_facts(self):
+        # Consolidation folds entries together to make room: not the same
+        # fact edited, so nothing is forgotten.
+        state = _make_state()
+        vault = _Vault(state, recall_results=[_fact("old-1", "User likes tea.", 0.99)])
+        _write(
+            TotalReclawMemoryProvider(state), vault, "replace", "user",
+            "User likes tea and coffee, and avoids dairy.",
+            metadata={"previous_content": "User likes tea."},
+        )
+        assert vault.remembered == [{"text": "User likes tea and coffee, and avoids dairy."}]
+        assert vault.forgotten == []
+        assert vault.recall_queries == []  # no lookup needed
+
+    def test_same_fact_threshold(self):
+        assert mp._same_fact("User prefers tea.", "User prefers green tea.")
+        assert not mp._same_fact("User likes tea.", "User likes tea and coffee.")
+        assert not mp._same_fact(
+            "User has a dog named Rex.",
+            "User has a dog named Rex and a cat named Mia; lives in Lisbon.",
+        )
+        assert not mp._same_fact("", "anything")
 
     def test_replace_without_a_match_only_stores(self):
         state = _make_state()
@@ -369,24 +396,25 @@ class TestOnMemoryWrite:
 
     # -- remove ---------------------------------------------------------------
 
-    def test_remove_forgets_the_matching_fact(self):
+    def test_remove_never_forgets(self, caplog):
+        # The built-in stores are size-capped; a removal is usually an
+        # eviction to make room, not a request to forget.
+        caplog.set_level(logging.INFO, logger="totalreclaw.hermes.memory_provider")
         state = _make_state()
-        vault = _Vault(state, recall_results=[
-            _fact("f1", "User's dog is called Rex.", 0.97),
-            _fact("f2", "User has a cat.", 0.60),
-        ])
+        vault = _Vault(state, recall_results=[_fact("f1", "User's dog is called Rex.", 1.0)])
         _write(
             TotalReclawMemoryProvider(state), vault, "remove", "user", "",
             metadata={"previous_content": "User's dog is called Rex.", "old_text": "Rex"},
         )
-        assert vault.forgotten == ["f1"]
-        assert vault.remembered == []
+        assert vault.forgotten == [] and vault.remembered == []
+        assert vault.recall_queries == []
+        assert "memory mirror: remove target=user removed from Hermes profile; kept in TotalReclaw" in caplog.text
 
-    def test_remove_uses_content_from_legacy_callers(self):
+    def test_remove_from_legacy_callers_never_forgets(self):
         state = _make_state()
-        vault = _Vault(state, recall_results=[_fact("f1", "Old note", 0.9)])
+        vault = _Vault(state, recall_results=[_fact("f1", "Old note", 1.0)])
         _write(TotalReclawMemoryProvider(state), vault, "remove", "memory", "Old note")
-        assert vault.forgotten == ["f1"]
+        assert vault.forgotten == []
 
     def test_remove_without_entry_text_does_nothing(self):
         state = _make_state()
@@ -394,76 +422,55 @@ class TestOnMemoryWrite:
         _write(TotalReclawMemoryProvider(state), vault, "remove", "user", "", metadata={})
         assert vault.recall_queries == [] and vault.forgotten == []
 
-    def test_remove_by_substring_alone_is_not_a_match(self):
-        # old_text is only the search string the model typed: unless it IS a
-        # fact's text, nothing is forgotten.
+    def test_removing_the_last_copy_still_keeps_it(self):
         state = _make_state()
-        vault = _Vault(state, recall_results=[_fact("f1", "User prefers dark mode in editors.", 0.71)])
-        _write(
-            TotalReclawMemoryProvider(state), vault, "remove", "user", "",
-            metadata={"old_text": "dark mode"},
-        )
+        vault = _Vault(state, recall_results=[_fact("f1", "User prefers dark mode.", 1.0)])
+        provider = TotalReclawMemoryProvider(state)
+        _write(provider, vault, "add", "user", "User prefers dark mode.")
+        _write(provider, vault, "remove", "user", "",
+               metadata={"previous_content": "User prefers dark mode."})
         assert vault.forgotten == []
 
     # -- conservative matching ------------------------------------------------
 
-    def test_single_close_semantic_match_is_forgotten(self):
+    @staticmethod
+    def _match(results, text, embedding=(0.1,) * 8):
         state = _make_state()
-        vault = _Vault(state, recall_results=[
+        state._client.recall = AsyncMock(return_value=results)
+        with patch("totalreclaw.embedding.get_embedding",
+                   return_value=list(embedding) if embedding else None):
+            return mp._find_mirrored_facts(state, text)
+
+    def test_match_single_close_semantic(self):
+        assert self._match([
             _fact("f1", "The user is vegetarian.", mp.MIRROR_MATCH_THRESHOLD + 0.01),
             _fact("f2", "User likes pasta.", 0.70),
-        ])
-        _write(
-            TotalReclawMemoryProvider(state), vault, "remove", "user", "",
-            metadata={"previous_content": "User is a vegetarian"},
-        )
-        assert vault.forgotten == ["f1"]
+        ], "User is a vegetarian") == ["f1"]
 
-    def test_close_match_below_threshold_is_kept(self):
-        state = _make_state()
-        vault = _Vault(state, recall_results=[
+    def test_match_below_threshold_is_none(self):
+        assert self._match([
             _fact("f1", "The user is vegetarian.", mp.MIRROR_MATCH_THRESHOLD - 0.01),
-        ])
-        _write(
-            TotalReclawMemoryProvider(state), vault, "remove", "user", "",
-            metadata={"previous_content": "User is a vegetarian"},
-        )
-        assert vault.forgotten == []
+        ], "User is a vegetarian") == []
 
-    def test_two_close_semantic_matches_are_ambiguous(self):
-        state = _make_state()
-        vault = _Vault(state, recall_results=[
+    def test_match_two_close_is_ambiguous(self):
+        assert self._match([
             _fact("f1", "User's sister is Ana.", 0.95),
             _fact("f2", "User's sister Ana lives in Porto.", 0.94),
-        ])
-        _write(
-            TotalReclawMemoryProvider(state), vault, "remove", "user", "",
-            metadata={"previous_content": "User has a sister named Ana"},
-        )
-        assert vault.forgotten == []
+        ], "User has a sister named Ana") == []
 
-    def test_identical_copies_are_all_forgotten(self):
-        state = _make_state()
-        vault = _Vault(state, recall_results=[
+    def test_match_identical_copies(self):
+        assert self._match([
             _fact("f1", "Uses vim.", 0.99),
             _fact("f2", "uses vim", 0.99),
             _fact("f3", "Uses Emacs sometimes.", 0.93),
-        ])
-        _write(
-            TotalReclawMemoryProvider(state), vault, "remove", "memory", "",
-            metadata={"previous_content": "Uses vim."},
-        )
-        assert vault.forgotten == ["f1", "f2"]  # the close non-identical one stays
+        ], "Uses vim.") == ["f1", "f2"]
 
-    def test_too_many_identical_copies_forget_nothing(self):
-        state = _make_state()
+    def test_match_too_many_identical_copies_is_none(self):
         copies = [_fact(f"f{i}", "Uses vim.", 1.0) for i in range(mp._MIRROR_MAX_FORGETS + 1)]
-        vault = _Vault(state, recall_results=copies)
-        _write(
-            TotalReclawMemoryProvider(state), vault, "remove", "memory", "",
-            metadata={"previous_content": "Uses vim."},
-        )
-        assert vault.forgotten == []
+        assert self._match(copies, "Uses vim.") == []
+
+    def test_match_without_embedding_needs_identical_text(self):
+        assert self._match([_fact("f1", "Uses vim a lot.", 0.99)], "Uses vim.", embedding=None) == []
 
     # -- robustness -------------------------------------------------------------
 
@@ -490,15 +497,16 @@ class TestOnMemoryWrite:
 
     def test_mirror_runs_writes_in_order(self):
         state = _make_state()
-        vault = _Vault(state, recall_results=[_fact("f1", "Entry one.", 1.0)])
+        vault = _Vault(state, recall_results=[_fact("f1", "User prefers tea.", 1.0)])
         provider = TotalReclawMemoryProvider(state)
         p1, p2, p3 = vault.patches()
         with p1, p2, p3:
-            provider.on_memory_write("add", "user", "Entry one.")
-            provider.on_memory_write("remove", "user", "", metadata={"previous_content": "Entry one."})
+            provider.on_memory_write("add", "user", "User prefers tea.")
+            provider.on_memory_write("replace", "user", "User prefers green tea.",
+                                     metadata={"previous_content": "User prefers tea."})
             provider.on_memory_write("add", "user", "Entry two.")
             _drain()
-        assert vault.events == ["remember", "recall", "forget", "remember"]
+        assert vault.events == ["remember", "recall", "remember", "forget", "remember"]
 
     def test_no_exception_escapes(self, caplog):
         state = _make_state()
@@ -540,7 +548,8 @@ class TestOnMemoryWrite:
         ])
         provider = TotalReclawMemoryProvider(state)
         _write(provider, vault, "remove", "user", "", metadata={"previous_content": "secret-ish detail"})
-        _write(provider, vault, "replace", "user", "secret-ish new", metadata={"previous_content": "secret-ish old"})
+        _write(provider, vault, "replace", "user", "secret-ish detail two edited",
+               metadata={"previous_content": "secret-ish detail two"})
         assert "secret-ish" not in caplog.text
 
 
@@ -608,6 +617,7 @@ class TestCoreLifecycle:
         assert "USER.md / MEMORY.md" in text
         assert "`totalreclaw_remember`" in text and "`totalreclaw_recall`" in text
         assert "copied to TotalReclaw automatically" in text
+        assert "`totalreclaw_forget`" in text  # explicit forgetting
         assert len(text) < 600  # injected every turn
 
     def test_system_prompt_block_unconfigured(self):
