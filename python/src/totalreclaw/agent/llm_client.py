@@ -21,7 +21,7 @@ import math
 import os
 import re
 import time as _time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dc_replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -55,6 +55,12 @@ class LLMConfig:
     base_url: str
     model: str
     api_format: str  # "openai" or "anthropic"
+    #: True when the endpoint came from the user's own configuration
+    #: (``ZAI_BASE_URL`` / ``GLM_BASE_URL``, Hermes ``config.yaml`` or
+    #: ``auth.json``) rather than our default. :func:`chat_completion` never
+    #: flips a pinned z.ai endpoint: a Coding-plan user's calls stay on the
+    #: Coding endpoint, even when it answers 1113 (its rate-limit code).
+    endpoint_pinned: bool = False
 
 
 # zai exposes TWO public endpoints:
@@ -391,12 +397,7 @@ def derive_extraction_config(
     # (:func:`default_extraction_candidates`); re-resolving the endpoint
     # from the model family would drift from the user's pinned
     # ``ZAI_BASE_URL`` / ``OPENAI_BASE_URL`` and their key's scope.
-    return LLMConfig(
-        api_key=chat_config.api_key,
-        base_url=chat_config.base_url,
-        model=model,
-        api_format=chat_config.api_format,
-    )
+    return _dc_replace(chat_config, model=model)
 
 
 def describe_extraction_model(
@@ -404,13 +405,13 @@ def describe_extraction_model(
 ) -> dict[str, Any]:
     """JSON-safe summary of the extraction model for status surfaces.
 
-    ``{"model", "source", "chat_model", "candidates"}``; ``source`` is
+    ``{"model", "source", "chat_model", "candidates", "base_url"}``; ``source`` is
     ``env`` / ``setting`` / ``chat-model-cheap`` / ``default`` /
     ``chat-model`` / ``fallback``, or ``unavailable`` when no chat config
     resolves (extraction is disabled). Never includes the API key.
     """
     if chat_config is None:
-        return {"model": None, "source": "unavailable", "chat_model": None, "candidates": []}
+        return {"model": None, "source": "unavailable", "chat_model": None, "candidates": [], "base_url": None}
     provider = (provider_hint or _infer_provider_from_base_url(chat_config.base_url)).lower()
     plan = extraction_model_plan(provider, chat_config.model, chat_config.base_url)
     model, source = resolve_extraction_model(chat_config, provider_hint=provider_hint)
@@ -419,6 +420,7 @@ def describe_extraction_model(
         "source": source,
         "chat_model": chat_config.model,
         "candidates": list(plan.candidates),
+        "base_url": chat_config.base_url,
     }
 
 
@@ -456,14 +458,57 @@ def _infer_provider_from_base_url(base_url: str) -> str:
     return ""
 
 
+def _zai_env_base_url(env_vars: Optional[dict] = None) -> str:
+    """Explicit z.ai endpoint from ``ZAI_BASE_URL`` then ``GLM_BASE_URL``
+    (process env, or the Hermes ``.env`` dict when given), or ``""``.
+
+    ``GLM_BASE_URL`` is the variable Hermes itself reads for its zai
+    provider, so a Hermes install configured for the Coding plan
+    typically carries ``GLM_BASE_URL=https://api.z.ai/api/coding/paas/v4``.
+    """
+    env_vars = env_vars or {}
+    for name in ("ZAI_BASE_URL", "GLM_BASE_URL"):
+        raw = (env_vars.get(name) or os.environ.get(name) or "").strip()
+        if raw:
+            return raw.rstrip("/")
+    return ""
+
+
+def resolve_zai_base_url(
+    env_vars: Optional[dict] = None, config_base_url: str = ""
+) -> tuple[str, bool]:
+    """``(base_url, pinned)`` for a z.ai chat config.
+
+    Precedence:
+      1. ``ZAI_BASE_URL`` (env or Hermes ``.env``): TotalReclaw's override.
+      2. The endpoint in Hermes' own config (``config.yaml`` model
+         ``base_url``, or the ``auth.json`` credential's ``base_url``).
+      3. ``GLM_BASE_URL`` (env or Hermes ``.env``).
+      4. The Coding endpoint, NOT pinned, so the 1113 endpoint flip in
+         :func:`chat_completion` can still rescue a PAYG key that never
+         configured an endpoint.
+    """
+    env_vars = env_vars or {}
+    zai_override = (env_vars.get("ZAI_BASE_URL") or os.environ.get("ZAI_BASE_URL") or "").strip()
+    if zai_override:
+        return zai_override.rstrip("/"), True
+    if config_base_url and config_base_url.strip():
+        return config_base_url.strip().rstrip("/"), True
+    explicit = _zai_env_base_url(env_vars)
+    if explicit:
+        return explicit, True
+    return ZAI_CODING_BASE_URL, False
+
+
 def get_zai_base_url() -> str:
     """Resolve the zai base URL for CHAT (user-facing) calls.
 
     Precedence:
       1. ``ZAI_BASE_URL`` env var (explicit operator override)
-      2. Default: coding endpoint (coding-plan-biased; the rc.3
+      2. ``GLM_BASE_URL`` env var (what Hermes itself uses for zai)
+      3. Default: coding endpoint (coding-plan-biased; the rc.3
          auto-fallback hops to the standard endpoint on an
-         "Insufficient balance" 429).
+         "Insufficient balance" 429 unless the endpoint was configured).
 
     Documented in Hermes SKILL.md — GLM Coding Plan users can leave
     unset; PAYG users SHOULD set ``ZAI_BASE_URL=https://api.z.ai/api/paas/v4``
@@ -475,10 +520,7 @@ def get_zai_base_url() -> str:
     reuses the user's provider+endpoint, only the model swaps to the
     cheap pick). This helper is for chat-side resolution only.
     """
-    raw = os.environ.get("ZAI_BASE_URL", "").strip()
-    if raw:
-        return raw.rstrip("/")
-    return ZAI_CODING_BASE_URL
+    return _zai_env_base_url() or ZAI_CODING_BASE_URL
 
 
 # Provider detection: (provider, env_vars, default_base_url, api_format)
@@ -715,18 +757,12 @@ def _read_hermes_llm_config_from_auth_json(
         )
         return None
 
-    # base_url precedence:
-    #   1. Explicit ZAI_BASE_URL override (matches the legacy path).
-    #   2. auth.json credential base_url (Hermes's own chosen endpoint).
-    #   3. Default for this provider.
+    # base_url precedence for zai: see :func:`resolve_zai_base_url`
+    # (ZAI_BASE_URL, then the auth.json credential's endpoint, then
+    # GLM_BASE_URL, then the Coding default).
+    endpoint_pinned = False
     if provider_lower == "zai":
-        zai_override = env_vars.get("ZAI_BASE_URL") or os.environ.get("ZAI_BASE_URL")
-        if zai_override and zai_override.strip():
-            base_url = zai_override.strip().rstrip("/")
-        elif auth_base_url:
-            base_url = auth_base_url.rstrip("/")
-        else:
-            base_url = get_zai_base_url()
+        base_url, endpoint_pinned = resolve_zai_base_url(env_vars, auth_base_url)
     else:
         _, default_base_url = _HERMES_PROVIDER_KEY_MAP.get(provider_lower, ([], ""))
         base_url = (
@@ -743,8 +779,19 @@ def _read_hermes_llm_config_from_auth_json(
         provider, model, base_url,
     )
     return LLMConfig(
-        api_key=api_key, base_url=base_url, model=model, api_format=api_format
+        api_key=api_key, base_url=base_url, model=model, api_format=api_format,
+        endpoint_pinned=endpoint_pinned,
     )
+
+
+def _extract_base_url(cfg: dict) -> str:
+    """The endpoint Hermes' ``config.yaml`` names for the active model:
+    ``model.base_url`` (Hermes' shape) or a top-level ``base_url``."""
+    model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+    for value in (model_cfg.get("base_url"), cfg.get("base_url")):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _extract_provider_and_model(cfg: dict) -> tuple[str, str]:
@@ -881,15 +928,14 @@ def read_hermes_llm_config() -> Optional[LLMConfig]:
             )
             continue
 
-        # For zai, ``ZAI_BASE_URL`` (env or Hermes .env) wins over the
-        # hardcoded coding-endpoint default so users on the PAYG tier can
-        # point at the STANDARD endpoint without the auto-fallback tax.
+        # For zai, honour the endpoint the user configured (ZAI_BASE_URL,
+        # config.yaml ``model.base_url``, GLM_BASE_URL; see
+        # :func:`resolve_zai_base_url`). Before 2.5.3rc4 only ZAI_BASE_URL
+        # was read here, so a Standard endpoint set in config.yaml or
+        # GLM_BASE_URL was silently replaced by the Coding default.
+        endpoint_pinned = False
         if provider_lower == "zai":
-            zai_override = env_vars.get("ZAI_BASE_URL") or os.environ.get("ZAI_BASE_URL")
-            if zai_override and zai_override.strip():
-                base_url = zai_override.strip().rstrip("/")
-            else:
-                base_url = get_zai_base_url()
+            base_url, endpoint_pinned = resolve_zai_base_url(env_vars, _extract_base_url(cfg))
         else:
             base_url = (
                 env_vars.get("GLM_BASE_URL")
@@ -900,10 +946,13 @@ def read_hermes_llm_config() -> Optional[LLMConfig]:
         api_format = "anthropic" if provider_lower == "anthropic" else "openai"
 
         logger.info(
-            "TotalReclaw LLM config resolved from Hermes config: %s (provider=%s, model=%s)",
-            config_path, provider, model,
+            "TotalReclaw LLM config resolved from Hermes config: %s (provider=%s, model=%s, base_url=%s)",
+            config_path, provider, model, base_url,
         )
-        return LLMConfig(api_key=api_key, base_url=base_url, model=model, api_format=api_format)
+        return LLMConfig(
+            api_key=api_key, base_url=base_url, model=model, api_format=api_format,
+            endpoint_pinned=endpoint_pinned,
+        )
 
     return None
 
@@ -965,26 +1014,28 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
                     continue
 
                 # For OpenAI provider, respect OPENAI_BASE_URL
+                endpoint_pinned = False
                 if _provider == "openai" and openai_base_url:
                     resolved_base_url = openai_base_url.rstrip("/")
                 elif _provider == "zai":
-                    # Respect ZAI_BASE_URL env override (rc.3). Coding-plan
-                    # users can leave unset; PAYG users set it explicitly
-                    # to https://api.z.ai/api/paas/v4.
-                    resolved_base_url = get_zai_base_url()
+                    # Respect ZAI_BASE_URL / GLM_BASE_URL (rc.3; GLM_BASE_URL
+                    # since 2.5.3rc4). Coding-plan users can leave both
+                    # unset; PAYG users set one to https://api.z.ai/api/paas/v4.
+                    resolved_base_url, endpoint_pinned = resolve_zai_base_url()
                 else:
                     resolved_base_url = default_base_url
 
                 logger.info(
                     "TotalReclaw LLM config resolved from env vars "
-                    "(provider=%s, model=%s)",
-                    _provider, model,
+                    "(provider=%s, model=%s, base_url=%s)",
+                    _provider, model, resolved_base_url,
                 )
                 return LLMConfig(
                     api_key=api_key,
                     base_url=resolved_base_url,
                     model=model,
                     api_format=api_format,
+                    endpoint_pinned=endpoint_pinned,
                 )
 
     # Last resort: try the Hermes config.yaml + .env pair. This is the
@@ -1183,7 +1234,8 @@ class LLMUpstreamOutageError(RuntimeError):
 class LLMBalanceExhaustedError(RuntimeError):
     """Raised by :func:`chat_completion` with ``fail_fast_on_balance=True``
     when BOTH z.ai endpoints answer 429 / "Insufficient balance" (1113) for
-    the model.
+    the model, or a pinned Standard endpoint does. Never raised for a pinned
+    Coding endpoint, where 1113 is the plan's rate limit.
 
     For an extraction candidate that is not the last resort, this usually
     means the model is not included in the user's plan (e.g. glm-5.3-flash
@@ -1240,12 +1292,7 @@ async def chat_completion(
     """
     # Make a mutable copy so the zai fallback branch can swap base_url
     # without mutating the caller's dataclass.
-    active = LLMConfig(
-        api_key=config.api_key,
-        base_url=config.base_url,
-        model=config.model,
-        api_format=config.api_format,
-    )
+    active = _dc_replace(config)
     budget_s = _default_retry_budget_s()
     cumulative_delay_s = 0.0
     zai_fallback_attempted = False
@@ -1279,9 +1326,27 @@ async def chat_completion(
                 err_body = ""
             err_str = f"{e.response.status_code}: {err_body}"
 
+            # A pinned Standard (PAYG) endpoint has no rate-limit meaning for
+            # 1113: the model is just not covered by the balance. Let the
+            # extraction walk move on instead of backing off.
+            if (
+                fail_fast_on_balance
+                and config.endpoint_pinned
+                and e.response.status_code == 429
+                and is_zai_balance_error(err_body)
+                and active.base_url.rstrip("/") == ZAI_STANDARD_BASE_URL
+            ):
+                raise LLMBalanceExhaustedError(
+                    f"z.ai reports insufficient balance for {active.model} on the Standard endpoint"
+                ) from e
+
             # ── zai "Insufficient balance" auto-fallback ──
+            # Never for a pinned endpoint: the user chose it (a Coding-plan
+            # user's 1113 is a rate limit, and Standard would bill them), so
+            # the 429 is retried on the same endpoint below.
             if (
                 not zai_fallback_attempted
+                and not config.endpoint_pinned
                 and e.response.status_code == 429
                 and is_zai_balance_error(err_body)
             ):
@@ -1508,12 +1573,7 @@ async def complete_with_extraction_fallback(
 
     config = chat_config
     for i, model in enumerate(candidates):
-        config = LLMConfig(
-            api_key=chat_config.api_key,
-            base_url=base_url,
-            model=model,
-            api_format=chat_config.api_format,
-        )
+        config = _dc_replace(chat_config, model=model)
         next_model = candidates[i + 1] if i + 1 < len(candidates) else None
         kwargs: dict[str, Any] = {}
         if next_model is not None and _is_zai_base_url(base_url):

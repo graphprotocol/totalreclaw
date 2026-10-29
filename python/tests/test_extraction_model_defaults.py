@@ -444,6 +444,7 @@ def test_status_payload_includes_extraction_model(zai_chat_config) -> None:
         "source": "default",
         "chat_model": "glm-5.1",
         "candidates": ["glm-5.3-flash", "glm-4.5-flash", "glm-5.1"],
+        "base_url": ZAI_CODING_BASE_URL,
     }
     assert describe_extraction_model(None)["source"] == "unavailable"
 
