@@ -77,6 +77,18 @@ def _isolate_extraction_model_state(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _no_auto_memory_reconcile(monkeypatch):
+    """The Hermes provider queues a built-in memory reconcile pass at
+    ``initialize`` / ``on_session_end``. A pass reads ``$HERMES_HOME/memories``
+    and writes a snapshot under ``~/.totalreclaw``, so left on, provider tests
+    would touch the developer's real files. Tests of the reconcile itself
+    call ``memory_reconcile.reconcile`` directly, or delete this env var
+    after pointing ``HERMES_HOME`` / ``TOTALRECLAW_STATE_DIR`` at tmp dirs.
+    """
+    monkeypatch.setenv("TOTALRECLAW_HERMES_MEMORY_RECONCILE", "0")
+
+
+@pytest.fixture(autouse=True)
 def _route_import_engine_store_to_fake_recorder(monkeypatch):
     """internal#448 single-pass test shim — keeps existing import-engine unit
     tests (and their assertions) UNCHANGED.

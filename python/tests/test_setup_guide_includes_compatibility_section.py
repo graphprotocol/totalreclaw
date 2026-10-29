@@ -89,6 +89,11 @@ def test_guide_includes_honest_compatibility_section():
         "Compatibility section must say built-in memory tool writes are "
         "mirrored, so the two stores don't drift."
     )
+    assert "Changes Hermes doesn't report are caught at session start and end" in section, (
+        "Compatibility section must say the reconcile pass catches the "
+        "background review's writes, which Hermes never reports."
+    )
+    assert "TOTALRECLAW_HERMES_MEMORY_RECONCILE=0" in section
     assert "activate-memory-provider --exclusive" in section, (
         "Compatibility section must name the opt-out that turns the "
         "built-in off."
