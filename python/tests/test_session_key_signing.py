@@ -6,7 +6,8 @@ Two surfaces under test:
     ``totalreclaw.userop.session_key_grant_was_installed``
 
 The EIP-712 typehash constants are duplicated from Solidity
-``SessionKeyModule.sol`` (cred-5 stage 2, PR #272). The cross-language
+``TotalReclawAccount.sol`` (which ported it verbatim from the since-removed
+``SessionKeyModule.sol``, cred-5 stage 2, PR #272). The cross-language
 parity fixture (cred-9) consumes the same inputs from this file.
 
 ``TestKnownAnswerDigest`` below pins ``eip712_digest()`` against that
@@ -92,7 +93,7 @@ def _make_grant(
 
 
 # ---------------------------------------------------------------------------
-# EIP-712 typehash constants — must match Solidity SessionKeyModule.sol
+# EIP-712 typehash constants — must match Solidity TotalReclawAccount.sol
 # ---------------------------------------------------------------------------
 
 
@@ -129,7 +130,7 @@ class TestTypehashConstants:
         assert DOMAIN_VERSION_HASH == keccak(b"1")
 
     def test_execute_selector_matches_solidity_constant(self):
-        # SessionKeyModule.sol: EXECUTE_SELECTOR = 0xb61d27f6
+        # TotalReclawAccount.sol: EXECUTE_SELECTOR = 0xb61d27f6
         assert EXECUTE_SELECTOR == bytes.fromhex("b61d27f6")
         # Sanity: matches keccak("execute(address,uint256,bytes)")[:4]
         assert EXECUTE_SELECTOR == keccak(b"execute(address,uint256,bytes)")[:4]
@@ -277,7 +278,7 @@ class TestKnownAnswerDigest:
 
     Expected-value derivation (NOT copy-pasted blind from this codebase):
 
-    1. Solidity's ``SessionKeyModule._grantDigest`` hashes selectors via
+    1. Solidity's ``TotalReclawAccount._grantDigest`` hashes selectors via
        ``keccak256(abi.encodePacked(g.selectors))`` where
        ``g.selectors`` is ``bytes4[] memory``. ``abi.encodePacked`` on an
        ARRAY argument does not tightly concatenate elements the way it
@@ -287,7 +288,7 @@ class TestKnownAnswerDigest:
        32-byte word before concatenation. Confirmed by compiling and
        running ``abi.encodePacked(bytes4[2])`` in Solidity: length is 64
        bytes, not 8 (see #584 + the header comment of
-       ``contracts/contracts/SessionKeyModule.sol`` /
+       ``contracts/account/contracts/TotalReclawAccount.sol`` /
        ``tests/parity/fixtures/generate-session-key-grant-v1.ts``).
     2. ``EXPECTED_DIGEST_HEX`` below is ``eip712_hash`` from the
        cross-language parity fixture
