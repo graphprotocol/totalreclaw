@@ -1,6 +1,6 @@
 ---
 name: totalreclaw
-description: "Encrypted memory for Hermes — remember, recall, forget, pin, re-type / re-scope, check status & quota, upgrade, and import the user's saved memories. Trigger on 'install / set up TotalReclaw', 'restore my recovery phrase', or ANY request to remember, recall, forget, search, manage, or report on the user's memory or quota — not just remember / recall."
+description: "Encrypted memory for Hermes — remember, recall, forget, pin, re-type / re-scope, check status & quota, upgrade to Pro, update TotalReclaw to a new version, and import the user's saved memories. Trigger on 'install / set up / update TotalReclaw', 'restore my recovery phrase', or ANY request to remember, recall, forget, search, manage, or report on the user's memory or quota — not just remember / recall."
 version: 2.4.4
 author: TotalReclaw Team
 license: MIT
@@ -89,7 +89,8 @@ Pattern is always **recall first → mutate second**, because the mutation tools
 ### Status / upgrade / import
 
 - "status" / "how am I doing on quota" / "what tier am I on" → `totalreclaw_status` (no args). Returns tier, used / limit, and smart-account address.
-- "upgrade" / "go Pro" → `totalreclaw_upgrade` (returns a Stripe checkout URL — paste verbatim, no paraphrase).
+- "upgrade to Pro" / "go Pro" / more memories per month → `totalreclaw_upgrade` (returns a Stripe checkout URL — paste verbatim, no paraphrase).
+- "update / upgrade TotalReclaw" to a newer version ("latest", "the new RC", "rc6", a version number) is a **software update, not Pro** → see [Updating TotalReclaw](#updating-totalreclaw).
 - User asks to change the model that extracts/stores memories ("use glm-5.3-flash for memories") → `totalreclaw_set_extraction_model` with that model id (`default` resets). Never edit `.env` or restart for this; otherwise the model is automatic, so don't bring it up.
 - "import from Mem0 / ChatGPT / Claude / Gemini / mcp-memory-server" → `totalreclaw_import_from` with `dry_run=True` first to surface the count + estimated free-tier impact, then ask the user to confirm before the real run.
 - **One-shot / short-lived sessions** (e.g. `hermes chat -q`): a large import runs in a BACKGROUND task that dies when the process exits, so nothing gets stored. In those contexts, drive `totalreclaw_import_batch` **synchronously in a loop** (increasing `offset` until `is_complete`) instead of relying on the background path — or keep a long-lived gateway/daemon running.
@@ -142,11 +143,25 @@ These statements are WRONG. Never write any of them — they fabricate a pricing
 - **Naming the underlying network / chain to the user** (e.g. "Gnosis", "mainnet", "Base Sepolia", "testnet") — users don't need it and it only confuses. Cite tier + quota via `totalreclaw_status`; never the chain.
 - Inventing `$` amounts. The current Pro monthly price is the one returned by `totalreclaw_status` OR shown at the pricing URL — never anywhere else.
 
+## Updating TotalReclaw
+
+When the user asks to update TotalReclaw to a newer version, follow the **Update prompt** section of the install guide (<https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md>): it installs into the environment Hermes imports from, without narrating `pip` steps. For a named version or RC, pin it (`totalreclaw==<version>`, e.g. `2.5.3rc6`); "latest RC" is the newest pre-release. The new version loads only after Hermes restarts, so finish with the restart request below.
+
+## Restarting Hermes
+
+You cannot restart Hermes yourself. Hermes blocks gateway restart / stop commands from agent sessions: in the terminal, in cron jobs and in scripts. A `/restart` you write in a reply is plain text, not a command. Don't write restart scripts, schedule restarts or look for another way around this. Ask the user, in one line that matches how they're talking to you:
+
+- **In a chat app** (Telegram, Discord, Slack, WhatsApp, Signal, Matrix, ...): *"Send `/restart` here to finish — I'll be back in a few seconds."* This is the default for gateway chats. It works under systemd and launchd too: Hermes exits and the service manager starts it again. Never give a chat-app user shell commands for this.
+- **In the terminal CLI** (`hermes chat` / TUI, no chat app): *"Run `hermes gateway restart` in another terminal, then come back here."*
+- **Hermes in Docker with no chat app**: restart the container from the host (`docker restart <container>`).
+
+Only fall back to a shell command for a chat-app user if `/restart` answered "not authorized" or the gateway didn't come back.
+
 ## Diagnostics
 
 - `totalreclaw_*` tools not visible → the plugin isn't enabled (Hermes 0.22+ loads plugins only after `hermes plugins enable totalreclaw`) or the gateway wasn't restarted after install. This is an **install** problem — follow the install guide (<https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md>), which owns the enable + `/restart` procedure.
 - Your context says TotalReclaw memory is **OFFLINE**, or `totalreclaw_status` returns `"degraded": true` → the totalreclaw package can't be loaded in this Hermes install, so nothing is being saved or recalled. Tell the user in one sentence, don't claim anything was remembered, and give them the `fix` command from `totalreclaw_status` if they want to repair it.
-- `totalreclaw memory-status` says `none` (or another provider), or the gateway log says `Memory provider 'totalreclaw' is configured but not installed` → TotalReclaw isn't Hermes' memory provider yet (pairing sets it unless another provider is active, but only best-effort). Run `totalreclaw activate-memory-provider` (add `--force` if it refuses because the git wrapper owns `~/.hermes/plugins/totalreclaw/__init__.py`), then ask the user to restart the gateway. Don't disable Hermes' `memory` toolset: on Hermes 0.22+ that hides TotalReclaw's provider tools too.
+- `totalreclaw memory-status` says `none` (or another provider), or the gateway log says `Memory provider 'totalreclaw' is configured but not installed` → TotalReclaw isn't Hermes' memory provider yet (pairing sets it unless another provider is active, but only best-effort). Run `totalreclaw activate-memory-provider` (add `--force` if it refuses because the git wrapper owns `~/.hermes/plugins/totalreclaw/__init__.py`), then ask the user to restart Hermes (see [Restarting Hermes](#restarting-hermes): in a chat app, they send `/restart`). Don't disable Hermes' `memory` toolset: on Hermes 0.22+ that hides TotalReclaw's provider tools too.
 - User says done but `credentials.json` missing → PIN expired or wrong phrase entered; call `totalreclaw_pair` again.
 - `totalreclaw_pair` returns `already_configured` → an account is already set up; tell the user. Only if they ask to replace it, call again with `replace=true`: the pairing page warns them and only they can confirm there. Never move, rename or delete `credentials.json` to get around this.
 - `onboarding required` → credentials missing; redo from the account-setup step in the install guide.
