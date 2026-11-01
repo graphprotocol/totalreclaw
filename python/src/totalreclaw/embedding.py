@@ -6,9 +6,13 @@ Client-side only — preserves E2EE guarantee.
 
 Model: onnx-community/harrier-oss-v1-270m-ONNX (q4 quantized)
 Output: pre-pooled sentence_embedding (no manual pooling needed)
+Pooling: last token, so every input must end with <eos>. The ONNX repo's
+tokenizer_config.json omits ``add_eos_token``, and transformers' Gemma
+tokenizer then drops <eos>, which leaves the embedding as the last word's
+state. We force it on; the output then matches the TS clients
+(transformers.js reads tokenizer.json, which appends <eos>).
 Normalization: already L2-normalized
 Dimensions: 640
-No instruction prefix needed.
 """
 from __future__ import annotations
 
@@ -124,7 +128,7 @@ def _ensure_loaded():
     sess_options = ort.SessionOptions()
     sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     _session = ort.InferenceSession(model_path, sess_options)
-    _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+    _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, add_eos_token=True)
 
     if needs_download:
         _emit_download_done()
@@ -144,9 +148,20 @@ def get_embedding(text: str) -> list[float]:
         max_length=512,
     )
 
+    input_ids = inputs["input_ids"].astype(np.int64)
+    attention_mask = inputs["attention_mask"].astype(np.int64)
+    eos_id = tokenizer.eos_token_id
+    if eos_id is not None and input_ids[0, -1] != eos_id:
+        # A transformers version that ignores add_eos_token: append it here.
+        if input_ids.shape[1] >= 512:
+            input_ids[0, -1] = eos_id
+        else:
+            input_ids = np.concatenate([input_ids, [[eos_id]]], axis=1).astype(np.int64)
+            attention_mask = np.concatenate([attention_mask, [[1]]], axis=1).astype(np.int64)
+
     feed: dict[str, np.ndarray] = {
-        "input_ids": inputs["input_ids"].astype(np.int64),
-        "attention_mask": inputs["attention_mask"].astype(np.int64),
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
     }
 
     output_names = [o.name for o in session.get_outputs()]
