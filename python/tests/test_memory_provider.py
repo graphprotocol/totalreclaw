@@ -575,7 +575,9 @@ class TestCoreLifecycle:
     def test_is_available_false_when_unconfigured(self):
         state = _make_state(configured=False)
         provider = TotalReclawMemoryProvider(state)
-        assert provider.is_available() is False
+        # No credentials on disk either (is_available re-reads them, #644).
+        with patch.object(state, "_try_auto_configure"):
+            assert provider.is_available() is False
 
     def test_initialize_sets_provider_active_and_delegates_session_start(self):
         # §5.3: initialize sets the single-driver flag and does NOT call
@@ -1153,3 +1155,34 @@ class TestNativeAutoMemory:
         provider = TotalReclawMemoryProvider(state)
         with patch("totalreclaw.hermes.hooks.ingest_turn", side_effect=RuntimeError("x")):
             provider.sync_turn("u", "a")  # must not raise
+
+
+class TestIsAvailableAfterPairing:
+    """#644 — pairing writes credentials from a sidecar after the plugin loaded.
+    Hermes asks ``is_available()`` at the start of the next turn, before any
+    hook runs the lazy reconfigure, so the check itself must pick them up."""
+
+    def test_picks_up_credentials_written_after_load(self):
+        state = _make_state(configured=False)
+        provider = TotalReclawMemoryProvider(state)
+
+        def _creds_now_on_disk():
+            state._client = MagicMock()
+
+        with patch.object(state, "_try_auto_configure", side_effect=_creds_now_on_disk) as reconf:
+            assert provider.is_available() is True
+        reconf.assert_called_once()
+
+    def test_still_false_without_credentials(self):
+        state = _make_state(configured=False)
+        provider = TotalReclawMemoryProvider(state)
+        with patch.object(state, "_try_auto_configure") as reconf:
+            assert provider.is_available() is False
+        reconf.assert_called_once()
+
+    def test_configured_state_skips_disk(self):
+        state = _make_state(configured=True)
+        provider = TotalReclawMemoryProvider(state)
+        with patch.object(state, "_try_auto_configure") as reconf:
+            assert provider.is_available() is True
+        reconf.assert_not_called()

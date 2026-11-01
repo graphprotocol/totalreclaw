@@ -398,7 +398,18 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         the provider active. Must not make network calls per the ABC
         contract — :meth:`PluginState.is_configured` is a pure
         in-memory check.
+
+        When the state is not configured yet, re-read the credentials file
+        first (local file read + key derivation, no network). Pairing writes
+        it from a sidecar after the plugin loaded, and Hermes asks here at
+        the start of the very next turn — before any hook has had a chance
+        to run the lazy reconfigure — so without this the first turn after
+        pairing disabled the provider for the whole session (#644).
         """
+        if not self._state.is_configured():
+            from .hooks import _maybe_reconfigure_from_disk
+
+            _maybe_reconfigure_from_disk(self._state)
         return self._state.is_configured()
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
@@ -575,7 +586,17 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         try:
             from .hooks import recall_for_query
 
-            return recall_for_query(self._state, query, top_k=self._state.get_recall_top_k()) or ""
+            started = time.monotonic()
+            context = recall_for_query(self._state, query, top_k=self._state.get_recall_top_k()) or ""
+            elapsed = time.monotonic() - started
+            # Hermes abandons a prefetch after 8 s (#647); make slow ones visible.
+            logger.log(
+                logging.INFO if elapsed >= 3.0 else logging.DEBUG,
+                "TotalReclaw prefetch took %.2fs (%d chars of context)",
+                elapsed,
+                len(context),
+            )
+            return context
         except Exception as exc:  # pragma: no cover — non-fatal per ABC contract
             logger.warning("TotalReclaw MemoryProvider.prefetch failed: %s", exc)
             return ""
