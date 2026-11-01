@@ -270,11 +270,22 @@ Emit verbatim:
 >
 > Account status: `<tier>` tier, `<used>` / `<limit>` memories used. Ask me to remember anything and I'll save it to your encrypted vault.
 >
-> Last step: restart Hermes once more, the same way as before (on Telegram or another chat app, send `/restart`), so Hermes starts using TotalReclaw as its memory provider.
+> Last step: restart Hermes once more, the same way as before (`<restart>`), so Hermes starts using TotalReclaw as its memory provider.
 
 (`<tier>`, `<used>`, `<limit>` from `totalreclaw_status` — do not invent the numbers, and do not name the underlying chain/network to the user.)
 
-**Emit this block VERBATIM on the `done` turn.** Do not paraphrase, do not substitute the tier numbers (never render `<limit>` as "50,000 writes", "unlimited", or any figure not returned by `totalreclaw_status` — and if `totalreclaw_status` would show a higher staging limit, still quote what it returns, not a guess), do not add a preamble ("All green. Here's the summary:", "Everything looks good!", "✓ Setup complete. Tier info:"), and do not run any verification command (`hermes doctor`, `hermes plugins list`, a second diagnostic `totalreclaw_status`) on this turn — the credentials check in Account setup step 4 and the provider check in step 5 are the ONLY verification. Adding bullets, recaps, or "standing by…" lines inflates the transcript and is a setup-flow violation (auto-QA #340 / #342).
+`<restart>` is the same surface you picked in Install step 4:
+
+| Surface | `<restart>` |
+|---|---|
+| Telegram / Discord / Slack / other chat app | `send /restart here` |
+| `hermes chat` inside docker, no chat app | `run docker restart <container-name> from a host shell, then reopen hermes chat` |
+| `hermes chat` with a gateway service (systemd / launchd) | `run hermes gateway restart in a second terminal` |
+| Standalone `hermes chat`, no gateway daemon | `exit and re-run hermes chat` |
+
+Never tell a chat-app user to run shell commands for this, and never tell a docker or CLI user to send `/restart`.
+
+**Emit this block VERBATIM on the `done` turn**, filling in only the placeholders. Do not paraphrase, do not substitute the tier numbers (never render `<limit>` as "50,000 writes", "unlimited", or any figure not returned by `totalreclaw_status` — and if `totalreclaw_status` would show a higher staging limit, still quote what it returns, not a guess), do not add a preamble ("All green. Here's the summary:", "Everything looks good!", "✓ Setup complete. Tier info:"), and do not run any verification command (`hermes doctor`, `hermes plugins list`, a second diagnostic `totalreclaw_status`) on this turn — the credentials check in Account setup step 4 and the provider check in step 5 are the ONLY verification. Adding bullets, recaps, or "standing by…" lines inflates the transcript and is a setup-flow violation (auto-QA #340 / #342).
 
 This block ships on first successful pair completion. On subsequent install runs where credentials already exist (early-exit in Account setup step 1), instead emit just:
 
