@@ -5,7 +5,7 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.6.1] - Unreleased
+## [2.6.1] - 2026-11-02
 
 Packaging-only release for the PyPI wheel. No source, API or output changes:
 the Rust code is the same as 2.6.0, and a fixed set of deterministic outputs
