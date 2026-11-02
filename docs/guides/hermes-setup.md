@@ -60,10 +60,10 @@ TotalReclaw has NO native Hermes update path (`hermes plugins update` is git-clo
 Update TotalReclaw. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md
 ```
 
-The agent updates to the newest **stable** and re-binds — **silently**, exactly like install (same HARD RULE: no `pip` / `venv` / interpreter narration). Reuse the **Install procedure below**:
+The agent updates to the newest **stable** and re-binds, keeping the chat as short as an install (see [Keeping the chat short](#keeping-the-chat-short)). Reuse the **Install procedure below**:
 
-1. **Steps 1–2 with `PIN="totalreclaw"`** (stable channel — `pip install --upgrade` lands the newest final, without `--pre`). Run the same `(a)`/`(b)`/`(c)` install-and-verify block. Emit the one `✓ Installed totalreclaw <version>` line only after `(c)`'s RUNTIME verify confirms the Hermes interpreter now imports the new version (guards the same shadow-install trap as a fresh install).
-2. **Step 4 restart request** — re-emit the surface-matched restart line verbatim (Telegram / docker / systemd / launchd / standalone `hermes chat`) so the freshly-upgraded plugin binds. There is no hot-reload for an updated plugin either.
+1. **Steps 1–2 with `PIN="totalreclaw"`** (stable channel — `pip install --upgrade` lands the newest final, without `--pre`). Run the same `(a)`/`(b)`/`(c)` install-and-verify block. Send the `✓ Installed totalreclaw <version>` line only after `(c)`'s RUNTIME verify confirms the Hermes interpreter now imports the new version (guards the same shadow-install trap as a fresh install).
+2. **Step 4 restart request** — send the restart line for the user's surface again (Telegram / docker / systemd / launchd / standalone `hermes chat`) so the freshly-upgraded plugin binds. There is no hot-reload for an updated plugin either.
 
 **Budget: ≤3 user-visible lines** — the `✓ Installed` line, the restart line, and (optionally) a one-line "you're up to date on <version>" confirmation after the user's continuation reply. Account setup / pairing is **skipped** on an update (credentials already exist); do NOT re-run it.
 
@@ -77,29 +77,32 @@ It fires at most once per 24h across sessions, and only ever when a newer **fina
 
 ---
 
-## Conversational style — HARD RULE for install + setup
+## Keeping the chat short
 
-**The user must NOT see install mechanics. Narrating shell / `pip` / `venv` / interpreter-detection / "let me verify…" during install or setup is a DEFECT** — it spams the chat with garbage (QA regression, 2026-06). This is not aspirational: run every tool/shell step **silently** and emit ONLY the short verbatim lines each procedure names. **Budget for a full install + setup: ≤6 short user-visible lines, total.** If you wrote more than that, you narrated something that should have been silent — delete it.
+The user asked for this install by pasting the prompt, so there is no need to ask permission step by step. Most of the work below is shell commands that mean nothing to the user: interpreter paths, pip output, verification probes. Installs that narrated them filled the chat with dozens of lines (QA, 2026-06). So:
 
-(Post-setup usage replies are normal conversation — this hard rule governs the install + account-setup path specifically.)
+- Run the commands with your tools and tell the user outcomes, not mechanics. A fresh install plus account setup usually takes about six short messages: the installed version, the restart request, the pairing link, the post-setup summary and the second restart.
+- The quoted lines in each step are suggested wording. They are short and tell the user exactly what to do next. Adapt them if your surface needs it, but keep versions, URLs, PINs and account numbers exactly as your tools returned them, and never invent them.
+- If the user asks what you are doing, or a step fails, explain plainly. Nothing here is hidden from the user. This guide lives in the public [graphprotocol/totalreclaw](https://github.com/graphprotocol/totalreclaw) repo, so check anything you are unsure about.
 
-- Do not surface tool-call mechanics verbatim to the user. The user does not need to see `🐍 execute_code: "from hermes_tools import terminal..."` or `📚 skill_view: "..."` or `📋 todo: "planning N tasks"`. Run the tools silently and emit only the user-visible lines listed in the procedures below.
-- Use the explicit verbatim emit lines where the procedure provides them. Otherwise keep replies short and to-the-point.
-- Do not narrate "Now I'll do X, then Y, then Z." Do the work.
-- **Budget: a fresh install + setup should be ~5–6 short user-visible lines total.** Anything beyond that is almost always narration that should have stayed silent.
-- **Forbidden vocabulary during install / setup** (unless the user explicitly asks how it works): `Python`, `interpreter`, `venv`, `pip`, `ensurepip`, `bootstrap`, `detect`, `probing` — plus narration openers: "Let me check…", "Let me verify…", "Now installing…", "Plugin loaded, let me verify…", "Quick fix…", "One sec…", "Got it, doing X…", and any "I'm going to do X" / "About to do X" pre-narration of a tool call. These are tool-call mechanics, not user-facing prose. If the user asks ("what's it doing?", "show me the commands"), narrate freely — this only governs the default silent path.
+Two things are requirements, not suggestions, because they protect the user's recovery phrase (see [Phrase safety](#phrase-safety)):
+
+- **The pairing message** (Account setup step 3) carries the URL and PIN exactly as `totalreclaw_pair` returned them. The phrase is created or pasted only on that browser page and encrypted to this device there, so it never passes through the chat or the model. Never ask the user to type or paste their phrase into the chat.
+- **No phrase-producing commands.** Don't run a command that generates or prints a recovery phrase (for example `totalreclaw setup`), and don't send the user to one. Pairing is the only setup path.
+
+(Post-setup usage replies are normal conversation.)
 
 ---
 
 ## Install procedure
 
-**The ENTIRE install procedure (steps 1–5) is SILENT except for exactly TWO user-visible lines:** (1) `✓ Installed totalreclaw <version>` after step 2 verifies, and (2) the restart request from step 4. Steps 1, 3, 5 and the shell/verify mechanics of step 2 produce **zero** chat output — run them with your shell tool and say nothing about them. No `pip`, no `venv`, no "let me verify", no "resolving the interpreter".
+**What the user sees during install:** two messages, `✓ Installed totalreclaw <version>` once step 2 verifies, and the restart request from step 4. Steps 1, 3 and 5 are background checks: mention them only if one fails.
 
 After the procedure completes (the user replies *"Done — continue setting up TotalReclaw"* or equivalent to the restart request in step 4), **proceed directly to Account setup**. Do not ask the user "is it ready?" — the user's reply IS the signal.
 
 **Order matters on Hermes 0.22+:** install the package (step 2), enable the plugin (step 3), restart once (step 4), check the tools are bound (step 5), and only then run Account setup. Pairing needs the `totalreclaw_pair` tool. **Pairing makes TotalReclaw Hermes' memory provider** unless another provider (Honcho, ...) is already active; Account setup step 5 checks it, and one more restart loads it. Hermes' built-in memory (`USER.md` / `MEMORY.md`) stays on beside TotalReclaw. That is intended: see [Compatibility](#compatibility-with-hermes-built-in-memory).
 
-1. **(SILENT — emit nothing.)** Resolve the Python environment Hermes imports packages from. **Hermes 0.22+ runs on its own bundled Python** (`~/.hermes/tools/python-3.14.*/bin/python3`) and loads its dependencies from a separate managed venv under `~/.hermes/installs/…/venv`; the `hermes` command is a `#!/bin/sh` launcher, so its shebang is NOT the interpreter. Ask Hermes for its import path; fall back to the shebang on older Hermes, where `hermes` is a Python script inside the venv:
+1. **(Background step.)** Resolve the Python environment Hermes imports packages from. **Hermes 0.22+ runs on its own bundled Python** (`~/.hermes/tools/python-3.14.*/bin/python3`) and loads its dependencies from a separate managed venv under `~/.hermes/installs/…/venv`; the `hermes` command is a `#!/bin/sh` launcher, so its shebang is NOT the interpreter. Ask Hermes for its import path; fall back to the shebang on older Hermes, where `hermes` is a Python script inside the venv:
    ```bash
    # Hermes 0.22+: the first site-packages on Hermes' own sys.path is its managed venv.
    HERMES_SITE="$(hermes --run-module site 2>/dev/null | sed -n "s|^ *'\(/[^']*/site-packages\)',*$|\1|p" | head -1)"
@@ -115,7 +118,7 @@ After the procedure completes (the user replies *"Done — continue setting up T
      PIP_PYTHON="$HERMES_PYTHON"
    fi
    ```
-2. **(SILENT except the single `✓ Installed totalreclaw <version>` line, emitted only AFTER (c) verifies.) Install the package into that environment — with its dependencies — and VERIFY the runtime version actually landed there.** Use pip's `--python` option so the install lands in `$HERMES_PYTHON`'s environment even when that venv has no pip. Do **not** use a bare `pip`/`pip3`, `pip --user`, or the system Python: the package then lands where Hermes never looks, or an older copy shadows it (rc6 QA). Do **not** pass `--no-deps`. Do **not** use `uv pip install` on Hermes 0.22+: Hermes' uv refuses packages published in the last few days.
+2. **(One message, after (c) verifies: `✓ Installed totalreclaw <version>`.) Install the package into that environment — with its dependencies — and VERIFY the runtime version actually landed there.** Use pip's `--python` option so the install lands in `$HERMES_PYTHON`'s environment even when that venv has no pip. Do **not** use a bare `pip`/`pip3`, `pip --user`, or the system Python: the package then lands where Hermes never looks, or an older copy shadows it (rc6 QA). Do **not** pass `--no-deps`. Do **not** use `uv pip install` on Hermes 0.22+: Hermes' uv refuses packages published in the last few days.
    ```bash
    # Stable (default): PIN="totalreclaw" and no --pre.
    # Latest RC (user gave NO version): PIN="totalreclaw" plus PRE="--pre" — resolves the newest pre-release.
@@ -132,7 +135,7 @@ After the procedure completes (the user replies *"Done — continue setting up T
    ( cd /tmp && "$HERMES_PYTHON" -c "import totalreclaw as t, websockets as w; print('RUNTIME', t.__version__, t.__file__, 'websockets', w.__version__)" )
    ```
    The printed `RUNTIME` `__file__` MUST be under `$HERMES_PYTHON`'s own site-packages (on Hermes 0.22+, under `~/.hermes/installs/…/venv/`; NOT `~/.local/...` and NOT the bundled `~/.hermes/tools/python-*/` tree), and — for an explicit `==` pin — the version MUST equal it. (For the unpinned latest-RC path, just confirm the version is a pre-release, i.e. contains `rc`.) `websockets` must still be the version Hermes shipped (15.x on Hermes 0.22); TotalReclaw no longer caps it. If `websockets` is missing, older or newer than that (e.g. 13.x left by a TotalReclaw version before 2.5.3, or 17.x when Hermes' copy was already gone), run `hermes pm repair` to restore Hermes' own dependencies, then repeat this step: the repair also removes TotalReclaw from Hermes' environment. If `__file__` points elsewhere or the version is an OLDER build than expected, the package landed in the wrong site — re-run (a) with `--force-reinstall`, or remove the stale copy, until `RUNTIME` loads from the Hermes environment. **Do NOT proceed to setup on a shadow / version mismatch** — the whole flow silently runs old code (the rc6 NO-GO root cause).
-3. **(SILENT — emit nothing.) Enable the plugin.** On Hermes 0.22+ plugins are opt-in: the package's `hermes_agent.plugins` entry point is discovered automatically, but its tools only load once the plugin is in `plugins.enabled`. `hermes plugins list` shows `totalreclaw … not enabled … entrypoint` until then.
+3. **(Background step.) Enable the plugin.** On Hermes 0.22+ plugins are opt-in: the package's `hermes_agent.plugins` entry point is discovered automatically, but its tools only load once the plugin is in `plugins.enabled`. `hermes plugins list` shows `totalreclaw … not enabled … entrypoint` until then.
    ```bash
    hermes plugins enable totalreclaw 2>/dev/null || true
    ```
@@ -147,7 +150,7 @@ After the procedure completes (the user replies *"Done — continue setting up T
 
    A user-typed `/restart` triggers a graceful SIGUSR1 exit that respawns ONLY under a process supervisor (systemd / launchd / s6). In bare docker or an ephemeral `hermes chat` there is no supervisor, so the user restarts the process / container out-of-band. Pick the line below by surface:
 
-   Probe the surface before emitting:
+   Probe the surface before picking a line:
 
    ```bash
    # /proc/1/cgroup names docker only on cgroup v1; the marker files cover cgroup v2 hosts and podman.
@@ -165,15 +168,15 @@ After the procedure completes (the user replies *"Done — continue setting up T
    HAS_LAUNCHCTL=$(command -v launchctl >/dev/null 2>&1 && echo yes || echo no)
    ```
 
-   Emit ONE user-visible line per the matrix below. **In every case the user is asked to reply with an unambiguous continuation phrase** — bare `done` is insufficient because, after a restart, chat history is gone and the agent needs both a system-injected nudge (rc.27+ ships this automatically when credentials are absent) AND an explicit user message to reliably resume the setup flow.
+   Send ONE line from the matrix below. **In every case the user is asked to reply with an unambiguous continuation phrase** — bare `done` is insufficient because, after a restart, chat history is gone and the agent needs both a system-injected nudge (rc.27+ ships this automatically when credentials are absent) AND an explicit user message to reliably resume the setup flow.
 
-   | Surface | Detected by | Emit (verbatim) |
+   | Surface | Detected by | Line to send |
    |---|---|---|
    | Messaging platform — user is chatting via Telegram / Discord / Slack / Matrix / Feishu / WhatsApp | `HAS_MSG_BOT != ""` | `> Send /restart in chat now. Once you see the gateway-restart confirmation, reply: "Done — continue setting up TotalReclaw".` |
    | `hermes chat` inside docker | `IN_DOCKER=yes` AND `HAS_MSG_BOT == ""` | `> Don't use /restart here — this container has no supervisor to bring the gateway back. Open a host shell (outside the container) and run: docker restart <container-name>. Wait for the container to come back up, reopen hermes chat, and reply: "Done — continue setting up TotalReclaw".` |
    | `hermes chat` native install with systemd | `IN_DOCKER=no` AND `HAS_SYSTEMCTL=yes` AND `HAS_MSG_BOT == ""` | `> The /restart slash command won't work from this CLI. Open a second terminal and run: hermes gateway restart. When it returns, reply here: "Done — continue setting up TotalReclaw".` |
    | `hermes chat` native install on macOS / launchd | `IN_DOCKER=no` AND `HAS_LAUNCHCTL=yes` AND `HAS_MSG_BOT == ""` | `> The /restart slash command won't work from this CLI. Open a second terminal and run: hermes gateway restart. When it returns, reply here: "Done — continue setting up TotalReclaw".` |
-   | Detection fails / ambiguous | none of the above match | Ask the user how they're chatting with Hermes (Telegram / Discord / Slack / Matrix / Feishu / WhatsApp / `hermes chat` in docker / `hermes chat` native), then emit the matching line above. |
+   | Detection fails / ambiguous | none of the above match | Ask the user how they're chatting with Hermes (Telegram / Discord / Slack / Matrix / Feishu / WhatsApp / `hermes chat` in docker / `hermes chat` native), then send the matching line above. |
 
    Use the systemd / launchd rows only when that service manager was actually found. When `HAS_SYSTEMCTL=no` and `HAS_LAUNCHCTL=no` and there is no messaging bot, take the "ambiguous" row and ask: inside a container, `hermes gateway restart` runs the gateway in the foreground and never returns.
 
@@ -183,20 +186,20 @@ After the procedure completes (the user replies *"Done — continue setting up T
 
    Wait for the user's reply containing "continue" / "set up" / similar resumption language. Do NOT proceed to Account setup until the user confirms. Do NOT issue any restart yourself.
 
-5. **(SILENT — emit nothing on the GO path.) Verify the plugin tools bound after restart (#390).** With the plugin enabled (step 3), entry-point discovery is usually fine. On Hermes 0.22+ `hermes tools list` shows `✓ enabled  totalreclaw` once it is. A small fraction of Hermes deployments don't re-scan entry points on a single restart, leaving `totalreclaw_pair` and the rest unregistered — and the agent then can't proceed because *every* Account-setup step routes through plugin-registered tools. Probe + auto-fallback to the manual manifest install:
+5. **(Background step; message only if another restart is needed or it fails.) Verify the plugin tools bound after restart (#390).** With the plugin enabled (step 3), entry-point discovery is usually fine. On Hermes 0.22+ `hermes tools list` shows `✓ enabled  totalreclaw` once it is. A small fraction of Hermes deployments don't re-scan entry points on a single restart, leaving `totalreclaw_pair` and the rest unregistered — and the agent then can't proceed because *every* Account-setup step routes through plugin-registered tools. Probe + auto-fallback to the manual manifest install:
    ```bash
    if ! ( hermes tools list 2>/dev/null | grep -q '\btotalreclaw' \
           || "$(dirname "$HERMES_PYTHON")/hermes" tools list 2>/dev/null | grep -q '\btotalreclaw' ); then
      hermes plugins install graphprotocol/totalreclaw-hermes --enable 2>/dev/null \
        || "$(dirname "$HERMES_PYTHON")/hermes" plugins install graphprotocol/totalreclaw-hermes --enable
-     # Manifest write requires ANOTHER restart for the tools to bind. Re-emit the
-     # surface-matched restart line from step 4 ONCE and wait for the user.
+     # Manifest write requires ANOTHER restart for the tools to bind. Send the
+     # restart line for the user's surface from step 4 ONCE and wait for the user.
      NEEDS_SECOND_RESTART=yes
    fi
    ```
-   - If `NEEDS_SECOND_RESTART=yes`: re-emit the matching restart line from the step-4 matrix verbatim (same surface — Telegram / docker / systemd / launchd / standalone), wait for the user's continuation reply, then re-run the `tools list | grep` probe ONE MORE time.
-   - If after the second restart `tools list` still shows no `totalreclaw`: surface the failure verbatim (`> Couldn't bind the totalreclaw plugin tools after install. Check 'hermes plugins list' / 'hermes tools list' and the gateway logs.`) and **stop** — do NOT proceed to Account setup with no tools bound (the `totalreclaw_pair` call below would fail and there is no CLI fallback per the phrase-safety rule).
-   - If the probe passed on the first restart: proceed silently to Account setup.
+   - If `NEEDS_SECOND_RESTART=yes`: send the matching restart line from the step-4 matrix again (same surface — Telegram / docker / systemd / launchd / standalone), wait for the user's continuation reply, then re-run the `tools list | grep` probe ONE MORE time.
+   - If after the second restart `tools list` still shows no `totalreclaw`: tell the user (`> Couldn't bind the totalreclaw plugin tools after install. Check 'hermes plugins list' / 'hermes tools list' and the gateway logs.`) and **stop** — do NOT proceed to Account setup with no tools bound (the `totalreclaw_pair` call below would fail and there is no CLI fallback per the phrase-safety rule).
+   - If the probe passed on the first restart: go straight to Account setup.
 
 The install procedure ends here. Pairing (Account setup) makes TotalReclaw Hermes' memory provider, and Account setup step 5 checks it.
 
@@ -216,7 +219,7 @@ The agent never generates the recovery phrase. Only the user's browser does, via
    ```bash
    test -s ~/.totalreclaw/credentials.json && echo "already set up"
    ```
-   If present, run step 5 below (silently), then emit `✓ TotalReclaw is already set up.` and skip to the Post-setup section below.
+   If present, run step 5 below, then send `✓ TotalReclaw is already set up.` and skip to the Post-setup section below.
 
    > **cred-2 (keychain wrap):** on a desktop with an OS keychain, the `mnemonic` /
    > `recovery_phrase` field in `credentials.json` holds a non-secret marker
@@ -226,13 +229,13 @@ The agent never generates the recovery phrase. Only the user's browser does, via
    > check above is unchanged, and the agent must never read, echo, or pipe that
    > field — see the phrase-safety rules below.
 2. Call the `totalreclaw_pair` tool. **Inputs: none required.** The tool defaults to `mode=either` — the browser pair page will render BOTH "Generate new" and "Import existing" tabs so the user picks at pair time. Do NOT pass `mode=generate` or `mode=import` explicitly unless the user has specifically asked for one path (e.g. *"restore my account"* → `mode=import`). The tool returns a JSON object: `{url, pin, expires_at_ms}`.
-3. Emit ONE user-visible line containing the URL and PIN verbatim:
+3. Send ONE message with the URL and PIN exactly as the tool returned them. **This is required** (see [Keeping the chat short](#keeping-the-chat-short)): the browser page is the only place the phrase is created or pasted, so the user needs the real link and PIN, and nothing else. Suggested wording:
 
    > Open `<url>` in your browser. Enter PIN `<pin>`. On the page, choose **Generate new** (creates a fresh 12-word recovery phrase) OR **Import existing** (paste a phrase you already have). This link expires in 10 minutes (at `<HH:MM UTC>` — from the tool's `expires_at_ms`). Reply `done` once the page says it's sealed.
 
-   Do not paraphrase the URL or PIN. Do not invent values when the tool fails — surface the failure verbatim and stop. **This single line is the ENTIRE browser instruction.** Do not follow it with a numbered list restating the steps, a "what's done so far" recap, or a trailing "waiting for you to finish…" / "standing by…" line — the line already names every step and `Reply \`done\`` already encodes the wait (auto-QA #340 / #342).
+   Do not alter the URL or PIN. If the tool fails, report its error and stop; do not invent values. One message is enough: it names every step and ends with what to reply, so skip numbered restatements, "what's done so far" recaps and "standing by…" lines (auto-QA #340 / #342).
 4. After the user replies `done`, re-check `~/.totalreclaw/credentials.json`. Present → continue to step 5. Absent → the PIN expired; call `totalreclaw_pair` again and resend step 3 once.
-5. **(SILENT — emit nothing except the one question in the table below.) Check that TotalReclaw is Hermes' memory provider.** Pairing activates it on its own when no other provider is configured, and leaves another provider in place for the user to decide; that activation is best-effort, so confirm it here. Without the provider, Hermes' native per-turn recall and the mirroring of its built-in memory writes don't route through TotalReclaw (the plugin's own hooks still save and recall, so nothing is lost). Hermes runs exactly **one** external memory provider at a time, always next to its own built-in memory. Probe what's active:
+5. **(Background step; the only message is the question in the table below, when it applies.) Check that TotalReclaw is Hermes' memory provider.** Pairing activates it on its own when no other provider is configured, and leaves another provider in place for the user to decide; that activation is best-effort, so confirm it here. Without the provider, Hermes' native per-turn recall and the mirroring of its built-in memory writes don't route through TotalReclaw (the plugin's own hooks still save and recall, so nothing is lost). Hermes runs exactly **one** external memory provider at a time, always next to its own built-in memory. Probe what's active:
 
    ```bash
    # After a restart the shell is new: re-run Install step 1 first if HERMES_PYTHON is unset.
@@ -245,8 +248,8 @@ The agent never generates the recovery phrase. Only the user's browser does, via
 
    | `ACTIVE_PROVIDER` | Agent behaviour |
    |---|---|
-   | `"none"` / `""` / `"totalreclaw"` | Silently run `"$TR_CLI" activate-memory-provider`. No prompt. It installs the provider file at `~/.hermes/plugins/totalreclaw/__init__.py` and sets `memory.provider: totalreclaw`, leaving Hermes' built-in memory on (if a TotalReclaw version before 2.5.3rc4 turned the built-in stores off, it turns them back on). It edits `config.yaml` in place, keeps your comments, checks the result parses before writing it, and repairs the duplicate `user_profile_enabled` key that versions before 2.5.3 could leave behind. Do NOT add `--exclusive` unless the user asked for TotalReclaw to be their only memory (see [Compatibility](#compatibility-with-hermes-built-in-memory)). |
-   | Anything else (`honcho`, `byterover`, `openviking`, ...) | Emit ONE line: *"Hermes is currently using `<X>` as the memory provider. Switch to TotalReclaw (E2E-encrypted, on-chain, cross-device) or install TotalReclaw as tools-only? Reply `switch` or `tools-only`."*<br/>**Branch:**<br/>• `switch` → warn first (*"Switching deactivates `<X>` — your existing `<X>` memories stay on disk but won't be queried by the agent until you switch back."*), then run `"$TR_CLI" activate-memory-provider`.<br/>• `tools-only` → run `"$TR_CLI" install-memory-provider` (provider file only, no activation). TR tools remain available; the active provider stays `<X>`. Skip the restart line in Post-setup. |
+   | `"none"` / `""` / `"totalreclaw"` | Run `"$TR_CLI" activate-memory-provider`. No prompt. It installs the provider file at `~/.hermes/plugins/totalreclaw/__init__.py` and sets `memory.provider: totalreclaw`, leaving Hermes' built-in memory on (if a TotalReclaw version before 2.5.3rc4 turned the built-in stores off, it turns them back on). It edits `config.yaml` in place, keeps your comments, checks the result parses before writing it, and repairs the duplicate `user_profile_enabled` key that versions before 2.5.3 could leave behind. Do NOT add `--exclusive` unless the user asked for TotalReclaw to be their only memory (see [Compatibility](#compatibility-with-hermes-built-in-memory)). |
+   | Anything else (`honcho`, `byterover`, `openviking`, ...) | Send ONE line: *"Hermes is currently using `<X>` as the memory provider. Switch to TotalReclaw (E2E-encrypted, on-chain, cross-device) or install TotalReclaw as tools-only? Reply `switch` or `tools-only`."*<br/>**Branch:**<br/>• `switch` → warn first (*"Switching deactivates `<X>` — your existing `<X>` memories stay on disk but won't be queried by the agent until you switch back."*), then run `"$TR_CLI" activate-memory-provider`.<br/>• `tools-only` → run `"$TR_CLI" install-memory-provider` (provider file only, no activation). TR tools remain available; the active provider stays `<X>`. Skip the restart line in Post-setup. |
 
    If the command refuses because `~/.hermes/plugins/totalreclaw/__init__.py` is not a TotalReclaw-managed file, that file is the git wrapper from the install step-5 fallback: re-run with `--force` (the provider file also registers the tools, so nothing is lost). The commands are idempotent; re-running on an installed provider file is safe.
 
@@ -256,13 +259,13 @@ The agent never generates the recovery phrase. Only the user's browser does, via
 
 ## Post-setup
 
-After credentials.json is confirmed present (step 4 above), call `totalreclaw_status` once and emit a single user-visible block containing:
+After credentials.json is confirmed present (step 4 above), call `totalreclaw_status` once and send a single message containing:
 
-- A recovery-phrase backup reminder (verbatim — the user just generated it in their browser; this is the reminder to actually save it somewhere durable).
+- A recovery-phrase backup reminder (the user just created or pasted it in their browser; this reminds them to save it somewhere durable).
 - Current account state from `totalreclaw_status` (tier, memory count, free-tier memory limit). Do NOT surface the underlying chain/network to the user.
 - A short confirmation that the agent will now use TotalReclaw for memory operations.
 
-Emit verbatim:
+Suggested wording:
 
 > ✓ TotalReclaw set up.
 >
@@ -285,9 +288,9 @@ Emit verbatim:
 
 Never tell a chat-app user to run shell commands for this, and never tell a docker or CLI user to send `/restart`.
 
-**Emit this block VERBATIM on the `done` turn**, filling in only the placeholders. Do not paraphrase, do not substitute the tier numbers (never render `<limit>` as "50,000 writes", "unlimited", or any figure not returned by `totalreclaw_status` — and if `totalreclaw_status` would show a higher staging limit, still quote what it returns, not a guess), do not add a preamble ("All green. Here's the summary:", "Everything looks good!", "✓ Setup complete. Tier info:"), and do not run any verification command (`hermes doctor`, `hermes plugins list`, a second diagnostic `totalreclaw_status`) on this turn — the credentials check in Account setup step 4 and the provider check in step 5 are the ONLY verification. Adding bullets, recaps, or "standing by…" lines inflates the transcript and is a setup-flow violation (auto-QA #340 / #342).
+**Send this block on the `done` turn.** Keep the backup reminder and the restart line. The numbers must be the ones `totalreclaw_status` returned: never render `<limit>` as "50,000 writes", "unlimited" or any figure it didn't return (on staging, quote what it returns). Skip preambles ("All green. Here's the summary:") and recaps, and don't run extra checks (`hermes doctor`, `hermes plugins list`, a second `totalreclaw_status`) on this turn: Account setup steps 4 and 5 already verified everything (auto-QA #340 / #342).
 
-This block ships on first successful pair completion. On subsequent install runs where credentials already exist (early-exit in Account setup step 1), instead emit just:
+This block ships on first successful pair completion. On subsequent install runs where credentials already exist (early-exit in Account setup step 1), instead send just:
 
 > ✓ TotalReclaw is already set up. Account status: `<tier>` tier, `<used>` / `<limit>` memories used.
 
@@ -310,7 +313,7 @@ If you see *"Memory lookups are paused"*, your memories are safe. TotalReclaw ca
 
 ## Phrase safety
 
-These are hard rules. None of them are negotiable.
+These are hard rules. The phrase unlocks the user's whole encrypted vault, and anything that passes through the chat can end up in model-provider logs, so none of them are negotiable.
 
 1. The recovery phrase is generated only in the user's browser via `totalreclaw_pair`. The agent never sees it.
 2. The agent does not run `totalreclaw setup` from its shell. The CLI refuses to run from an agent runtime (exit code 3 with a stderr redirect to `totalreclaw_pair`). The agent does not bypass the gate with `--allow-non-tty`.
