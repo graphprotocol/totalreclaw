@@ -894,7 +894,9 @@ async function handleRememberSubgraph(
   // For batch mode (multiple facts from auto-extraction), apply full skip/supersede logic.
   const isExplicitRemember = !!(input?.fact as string);
 
-  const results: Array<{ success: boolean; fact_id: string; tx_hash?: string; action?: string }> = [];
+  const results: Array<{ success: boolean; fact_id: string; tx_hash?: string; action?: string; error?: string }> = [];
+  // #689: why the batch was not sent (e.g. DataEdge unresolved), returned to the caller, not just logged.
+  let batchError: string | undefined;
   let dedupSkipped = 0;
   let dedupSuperseded = 0;
 
@@ -1196,8 +1198,9 @@ async function handleRememberSubgraph(
       console.error(`Batch submitted ${batchResult.batchSize} payloads in 1 UserOp (tx=${batchResult.txHash.slice(0, 10)}...)`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
+      batchError = message;
       for (const meta of pendingFactMeta) {
-        results.push({ success: false, fact_id: meta.factId, tx_hash: undefined });
+        results.push({ success: false, fact_id: meta.factId, tx_hash: undefined, error: message });
       }
       console.error(`Batch submission failed: ${message}`);
     }
@@ -1217,6 +1220,7 @@ async function handleRememberSubgraph(
         dedup_skipped: dedupSkipped,
         dedup_superseded: dedupSuperseded,
         mode: 'subgraph',
+        ...(batchError ? { error: batchError } : {}),
       }),
     }],
   };
@@ -1362,7 +1366,8 @@ async function handleDebriefSubgraph(
     }
   }
 
-  const results: Array<{ success: boolean; fact_id: string; tx_hash?: string }> = [];
+  const results: Array<{ success: boolean; fact_id: string; tx_hash?: string; error?: string }> = [];
+  let batchError: string | undefined;
 
   if (pendingPayloads.length > 0) {
     try {
@@ -1373,16 +1378,17 @@ async function handleDebriefSubgraph(
       }
       console.error(`Debrief: submitted ${batchResult.batchSize} items (tx=${batchResult.txHash.slice(0, 10)}...)`);
     } catch (error) {
+      batchError = error instanceof Error ? error.message : String(error);
       for (const meta of pendingFactMeta) {
-        results.push({ success: false, fact_id: meta.factId });
+        results.push({ success: false, fact_id: meta.factId, error: batchError });
       }
-      console.error(`Debrief batch submission failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`Debrief batch submission failed: ${batchError}`);
     }
   }
 
   const stored = results.filter((r) => r.success).length;
   return {
-    content: [{ type: 'text', text: JSON.stringify({ success: stored > 0, stored, total: validated.length, results }) }],
+    content: [{ type: 'text', text: JSON.stringify({ success: stored > 0, stored, total: validated.length, results, ...(batchError ? { error: batchError } : {}) }) }],
   };
 }
 
