@@ -36,7 +36,8 @@ pub fn wasm_rerank(
 /// candidates without `source` use the v0 fallback weight).
 ///
 /// When `pin_boost` is a number > 1.0, candidates carrying `"pinned": true`
-/// are multiplied by it (ignored when `query_embedding` is empty). Omitted,
+/// rank as if their BM25 and cosine scores were multiplied by it (ignored when
+/// `query_embedding` is empty). Omitted,
 /// `undefined` or `null` keeps the pre-DEP-5 ranking bit-for-bit.
 ///
 /// `candidates_json`: JSON array of `{ id, text, embedding, timestamp, source?, pinned? }` objects.

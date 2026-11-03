@@ -43,7 +43,8 @@ pub(crate) fn py_rerank(
 /// Legacy candidates without ``source`` receive the v0 fallback weight.
 ///
 /// When ``pin_boost`` is a float > 1.0, candidates carrying ``"pinned": true``
-/// are multiplied by it (ignored when ``query_embedding`` is empty). ``None``
+/// rank as if their BM25 and cosine scores were multiplied by it (ignored when
+/// ``query_embedding`` is empty). ``None``
 /// (the default) keeps the pre-DEP-5 ranking bit-for-bit.
 ///
 /// Args:

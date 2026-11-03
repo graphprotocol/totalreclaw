@@ -161,7 +161,8 @@ def rerank(
     score. Importance / recency / MMR signals are no longer applied
     client-side; if you need those, contribute them to core::reranker first.
 
-    ``pin_boost`` (PRD-04 F1 / DEP-5): multiplier for candidates with
+    ``pin_boost`` (PRD-04 F1 / DEP-5): relevance multiplier (BM25 and cosine,
+    applied before ranking) for candidates with
     ``pinned=True``; pass :func:`default_pin_boost`. ``None`` keeps the
     pre-DEP-5 call exactly. Core ignores it when ``query_embedding`` is empty,
     and this wrapper drops it when the installed core predates it.

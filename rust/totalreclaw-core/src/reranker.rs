@@ -22,11 +22,13 @@
 //! # PRD-04 F1: pin boost
 //!
 //! When [`RerankerConfig::pin_boost`] is `Some(b)` with a finite `b > 1.0`
-//! and the query has an embedding, the final score of every candidate whose
-//! [`Candidate::pinned`] flag is set is multiplied by `b` (after source
-//! weighting, before top-k truncation). [`DEFAULT_PIN_BOOST`] is the value
-//! clients enable. `None` — the default — leaves every score bit-for-bit
-//! unchanged. See `docs/specs/totalreclaw/retrieval-v2.md` §Pin boost.
+//! and the query has an embedding, the BM25 and cosine scores of every
+//! candidate whose [`Candidate::pinned`] flag is set are multiplied by `b`
+//! before the RRF ranks are computed. A pin therefore moves up only past
+//! candidates whose relevance is within `b` of its own; an irrelevant pin
+//! stays where it is. [`DEFAULT_PIN_BOOST`] is the value clients enable.
+//! `None` — the default — leaves every score bit-for-bit unchanged. See
+//! `docs/specs/totalreclaw/retrieval-v2.md` §Pin boost.
 
 use std::collections::HashMap;
 
@@ -133,12 +135,12 @@ pub struct RerankerConfig {
     /// intent-weighted formula when `Some`. Default: `None` (adaptive).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vector_weight_override: Option<f64>,
-    /// PRD-04 F1 / DEP-5: multiplicative boost for candidates whose
-    /// [`Candidate::pinned`] is true, applied after source weighting and
-    /// before top-k truncation. `None` (default), a non-finite value or a
-    /// value `<= 1.0` is a no-op, and so is any call with an empty query
-    /// embedding (lexical-only recall has no relevance signal to separate
-    /// non-matching candidates, so a boost would lift every pin to the top).
+    /// PRD-04 F1 / DEP-5: multiplier on the BM25 and cosine scores of
+    /// candidates whose [`Candidate::pinned`] is true, applied before the
+    /// RRF ranks are computed (never to the fused score). `None` (default),
+    /// a non-finite value or a value `<= 1.0` is a no-op, and so is any call
+    /// with an empty query embedding (Hermes auto-recall enables it with
+    /// DEP-8). Reported `bm25_score` / `cosine_score` stay the raw values.
     /// Clients enable it with [`DEFAULT_PIN_BOOST`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_boost: Option<f64>,
@@ -191,7 +193,8 @@ pub struct RankedResult {
     pub id: String,
     /// Decrypted plaintext.
     pub text: String,
-    /// Final fused score (post source-weight and pin-boost multiplication if enabled).
+    /// Final fused score (post source-weight multiplication if enabled; a pin
+    /// boost acts through the ranks that feed it).
     pub score: f64,
     /// BM25 component score.
     pub bm25_score: f64,
@@ -297,13 +300,33 @@ pub fn rerank_with_config(
         cosine_scores.push(sim);
     }
 
-    // Compute RRF ranks
-    let bm25_ranks = compute_ranks(&bm25_scores);
-    let cosine_ranks = compute_ranks(&cosine_scores);
+    // PRD-04 F1 / DEP-5 pin boost. A pinned candidate's BM25 and cosine
+    // scores are multiplied by the boost before ranking, so it moves up only
+    // past candidates whose relevance is within the boost of its own. The
+    // boost is NOT applied to the fused RRF score: RRF scores sit on a
+    // `1 / (60 + rank)` floor, so 1.5x on the fused score lifts any candidate
+    // ranked <= 31 on both signals above rank 1 -- in a small pool every pin
+    // would rank first however irrelevant. Needs a query embedding (see
+    // `RerankerConfig::pin_boost`). Without an active boost the ranking inputs
+    // are the raw scores, so the no-boost path stays bit-identical.
+    let pin_mult = match config.pin_boost {
+        Some(b) if !query_embedding.is_empty() && b.is_finite() && b > 1.0 => Some(b),
+        _ => None,
+    };
+    let boost_for_rank = |scores: &[f64]| -> Vec<f64> {
+        scores
+            .iter()
+            .zip(candidates)
+            .map(|(&s, c)| match pin_mult {
+                Some(b) if c.pinned && s > 0.0 => s * b,
+                _ => s,
+            })
+            .collect()
+    };
 
-    // PRD-04 F1 / DEP-5: the pin boost needs a semantic signal (see
-    // `RerankerConfig::pin_boost`).
-    let semantic_signal = !query_embedding.is_empty();
+    // Compute RRF ranks
+    let bm25_ranks = compute_ranks(&boost_for_rank(&bm25_scores));
+    let cosine_ranks = compute_ranks(&boost_for_rank(&cosine_scores));
 
     // Intent-weighted fusion
     let mut results: Vec<RankedResult> = Vec::with_capacity(candidates.len());
@@ -331,14 +354,7 @@ pub fn rerank_with_config(
             1.0
         };
 
-        // PRD-04 F1 / DEP-5 pin boost (post source weight, pre-truncation).
-        // `x * 1.0 == x` exactly, so the no-boost path stays bit-identical.
-        let pin_mult = match config.pin_boost {
-            Some(b) if candidate.pinned && semantic_signal && b.is_finite() && b > 1.0 => b,
-            _ => 1.0,
-        };
-
-        let final_score = fused * src_weight * pin_mult;
+        let final_score = fused * src_weight;
 
         results.push(RankedResult {
             id: candidate.id.clone(),
@@ -1260,10 +1276,8 @@ mod tests {
 
     #[test]
     fn test_pin_boost_is_ignored_without_query_embedding() {
-        // Lexical-only recall: with no query embedding every candidate ties on
-        // cosine and every non-matching candidate ties on BM25, so a multiplier
-        // would lift every pinned fact above genuine matches. Without this
-        // rule "p" would score 1.5 * (0.6/62 + 0.3/61) = 0.0219 > "a" 0.0148.
+        // Lexical-only recall (Hermes auto-recall today) gets no boost; DEP-8
+        // decides whether it should.
         let base = rerank_with_config("alpha", &[], &pin_fixture(true), 6, RerankerConfig::default()).unwrap();
         let with = rerank_with_config("alpha", &[], &pin_fixture(true), 6, boosted()).unwrap();
         assert_bit_identical(&base, &with);
@@ -1301,34 +1315,78 @@ mod tests {
     }
 
     #[test]
-    fn test_pin_boost_composes_with_source_weights() {
-        let user = cand("u", "dark mode preference", vec![0.9, 0.1, 0.0, 0.0], Some(MemorySource::User));
-        let mut assistant = cand(
-            "a",
-            "dark mode preference",
-            vec![0.9, 0.1, 0.0, 0.0],
-            Some(MemorySource::Assistant),
+    fn test_pin_boost_does_not_surface_an_irrelevant_pinned_fact_in_a_small_pool() {
+        // Same shape as above with 14 matching facts instead of 60. RRF scores
+        // sit on a 1/(60 + rank) floor, so a 1.5x multiplier on the fused score
+        // lifts any candidate ranked <= 31 on both signals above rank 1: in a
+        // pool this small, every pinned candidate would rank first however
+        // irrelevant it is. The boost must scale relevance, not the RRF score.
+        let mut candidates: Vec<Candidate> = (0..14)
+            .map(|i| {
+                cand_pinned(
+                    &format!("m{:02}", i),
+                    &format!("dark mode setting {}", i + 10),
+                    vec![1.0, i as f32 * 0.01, 0.0, 0.0],
+                    false,
+                )
+            })
+            .collect();
+        candidates.push(cand_pinned(
+            "pin",
+            "grocery list for saturday",
+            vec![0.0, 1.0, 0.0, 0.0],
+            true,
+        ));
+        let got = rerank_with_config("dark mode", &[1.0, 0.0, 0.0, 0.0], &candidates, 8, boosted()).unwrap();
+        assert!(
+            got.iter().all(|r| r.id != "pin"),
+            "irrelevant pinned fact entered the top 8: {:?}",
+            ids(&got)
         );
-        assistant.pinned = true;
-        let got = rerank_with_config(
+    }
+
+    #[test]
+    fn test_pin_boost_lifts_a_pin_only_past_candidates_it_is_within_1_5x_of() {
+        // The pin's cosine is 0.6; the others are 0.95 and 0.8. With the boost
+        // its ranking cosine is 0.9: above 0.8, still below 0.95. BM25 ties
+        // (no query token matches), so cosine alone orders the result.
+        let candidates = vec![
+            cand_pinned("hi", "alpha note", vec![0.95, (1.0f32 - 0.95 * 0.95).sqrt(), 0.0, 0.0], false),
+            cand_pinned("mid", "bravo note", vec![0.8, 0.6, 0.0, 0.0], false),
+            cand_pinned("pin", "papa note", vec![0.6, 0.8, 0.0, 0.0], true),
+        ];
+        let base = rerank_with_config("zulu", &[1.0, 0.0, 0.0, 0.0], &candidates, 3, RerankerConfig::default()).unwrap();
+        assert_eq!(ids(&base), vec!["hi", "mid", "pin"]);
+        let with = rerank_with_config("zulu", &[1.0, 0.0, 0.0, 0.0], &candidates, 3, boosted()).unwrap();
+        assert_eq!(ids(&with), vec!["hi", "pin", "mid"]);
+        let pin = with.iter().find(|r| r.id == "pin").unwrap();
+        assert!((pin.cosine_score - 0.6).abs() < 1e-6, "cosine_score reports the raw similarity");
+    }
+
+    #[test]
+    fn test_pin_boost_composes_with_source_weights() {
+        // Two identical user-sourced facts: the pinned one wins the tie, and
+        // source weighting still applies to both.
+        let other = cand("o", "dark mode preference", vec![0.9, 0.1, 0.0, 0.0], Some(MemorySource::User));
+        let mut pinned = cand("z", "dark mode preference", vec![0.9, 0.1, 0.0, 0.0], Some(MemorySource::User));
+        pinned.pinned = true;
+        let cfg = |pin_boost| RerankerConfig {
+            apply_source_weights: true,
+            pin_boost,
+            ..Default::default()
+        };
+        let off = rerank_with_config("dark mode", &[0.9, 0.1, 0.0, 0.0], &[other.clone(), pinned.clone()], 2, cfg(None)).unwrap();
+        assert_eq!(ids(&off), vec!["o", "z"], "tie broken on id without a boost");
+        let on = rerank_with_config(
             "dark mode",
             &[0.9, 0.1, 0.0, 0.0],
-            &[user, assistant],
+            &[other, pinned],
             2,
-            RerankerConfig {
-                apply_source_weights: true,
-                pin_boost: Some(DEFAULT_PIN_BOOST),
-                ..Default::default()
-            },
+            cfg(Some(DEFAULT_PIN_BOOST)),
         )
         .unwrap();
-        // assistant 0.85 x 1.5 = 1.275 beats user 1.0 on an otherwise tied base score.
-        assert_eq!(ids(&got), vec!["a", "u"]);
-        assert!((got[0].score / got[1].score - 0.85 * 1.5).abs() < 1e-9);
-        assert!(
-            (got[0].source_weight - 0.85).abs() < 1e-12,
-            "source_weight reports the source multiplier only"
-        );
+        assert_eq!(ids(&on), vec!["z", "o"]);
+        assert!(on.iter().all(|r| (r.source_weight - 1.0).abs() < 1e-12));
     }
 
     #[test]

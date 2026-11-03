@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Recall pin boost.** Recall ranks pinned facts 1.5× higher through core `rerank_with_config(..., pin_boost=)` (`operations.PIN_BOOST_DEFAULT`). The option is feature-detected: a `totalreclaw-core` wheel without it keeps the old ranking. Core applies no boost when the query has no embedding (Hermes auto-recall until DEP-8).
+- **Recall pin boost.** Recall ranks a pinned fact as if it were 1.5× more relevant (BM25 and cosine), through core `rerank_with_config(..., pin_boost=)` (`operations.PIN_BOOST_DEFAULT`). It moves up past facts that match the query almost as well; it does not put unrelated pins on top. The option is feature-detected: a `totalreclaw-core` wheel without it keeps the old ranking. Core applies no boost when the query has no embedding (Hermes auto-recall until DEP-8).
 - `TotalReclaw.get_fact_pin_status(fact_id)`.
 
 ## [2.5.3] — 2026-11-02

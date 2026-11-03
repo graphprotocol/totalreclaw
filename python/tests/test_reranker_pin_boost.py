@@ -72,3 +72,19 @@ def test_old_core_without_pin_support_ignores_pin_boost(monkeypatch) -> None:
     sent = json.loads(calls[0][2])
     assert sent[3]["pinned"] is True
     assert "pinned" not in sent[0]
+
+
+def test_irrelevant_pin_in_a_small_pool_stays_out_of_top_k() -> None:
+    """The boost scales a pin's relevance, not its RRF score. Mirrors
+    ``test_pin_boost_does_not_surface_an_irrelevant_pinned_fact_in_a_small_pool``
+    in core: with a fused-score multiplier, any pin in a pool of 31 or fewer
+    candidates would rank first, however unrelated to the query."""
+    cands = [
+        RerankerCandidate(id=f"m{i:02d}", text=f"dark mode setting {i + 10}",
+                          embedding=[1.0, i * 0.01, 0.0, 0.0])
+        for i in range(14)
+    ]
+    cands.append(RerankerCandidate(id="pin", text="grocery list for saturday",
+                                   embedding=[0.0, 1.0, 0.0, 0.0], pinned=True))
+    out = rerank("dark mode", [1.0, 0.0, 0.0, 0.0], cands, top_k=8, pin_boost=rr.default_pin_boost())
+    assert "pin" not in [r.id for r in out]
