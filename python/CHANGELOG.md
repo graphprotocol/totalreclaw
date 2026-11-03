@@ -10,11 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Near-duplicate memories are no longer written by the USER.md mirror, reconcile or explicit `totalreclaw_remember` (internal #632, #501).** Every write path now goes through one store-time gate (`totalreclaw/write_gate.py`, core `decide_write`). It compares the new fact with the facts the subgraph returns for it and with a list of facts this process wrote in the last 15 minutes, which covers the subgraph's indexing lag. An exact copy after normalization ("User is vegetarian" vs "User is vegetarian.") is never written twice. A near copy (cosine >= 0.85) is skipped by auto-extraction, returns `possible_duplicate` from `totalreclaw_remember` (the agent retries with `force=true` if the text adds or changes information), and is written by the mirror and reconcile, which cannot tell a paraphrase from a changed value. The list lives in memory only and is never written to disk. A duplicate of a pinned fact never replaces it.
+
 - **[PRD-04 F1 / DEP-5] Pinned facts are protected from auto-extraction.** An auto-extraction UPDATE or DELETE whose target is pinned is now dropped (`agent/pin_guard.py`). When the pin state cannot be read, DELETE is dropped and UPDATE is stored as a plain ADD, so nothing is tombstoned. The contradiction resolver now receives entity refs and pin state, so it actually runs, and a new fact that contradicts a pinned fact is not stored (core `SkipNew { reason: existing_pinned }`). Other resolver outcomes stay log-only until DEP-12. Log lines carry the category only, never fact text or ids.
 - **SKILL.md** no longer claims pinned facts surface in every recall. They rank higher when they match the query.
 
 ### Added
 
+- **[PRD-04 DEP-3] Topical dedup context for auto-extraction.** Before each extraction the LLM now sees the 20 facts most related to the conversation (recall on the last 4 messages, with embeddings), the facts written in the last few minutes and the 10 newest facts, rendered by core `build_dedup_context` (pure-Python fallback for older cores). It replaces `recall("recent context", top_k=50)`, which only covered vaults of about 50 facts. Pinned facts are listed first and marked read-only, with a note to ADD new information instead of updating them. An UPDATE without `existingFactId` is treated as an ADD. `TotalReclaw.fetch_recent_facts(limit)`, `embedding.is_model_available_locally()`.
 - **Recall pin boost.** Recall ranks a pinned fact as if it were 1.5× more relevant (BM25 and cosine), through core `rerank_with_config(..., pin_boost=)` (`operations.PIN_BOOST_DEFAULT`). It moves up past facts that match the query almost as well; it does not put unrelated pins on top. The option is feature-detected: a `totalreclaw-core` wheel without it keeps the old ranking. Core applies no boost when the query has no embedding (Hermes auto-recall until DEP-8).
 - `TotalReclaw.get_fact_pin_status(fact_id)`.
 
