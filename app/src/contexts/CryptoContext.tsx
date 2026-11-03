@@ -26,7 +26,7 @@ import {
   generateRecoveryPhrase,
   bytesToHex,
 } from "../lib/crypto";
-import { hasWebAuthn } from "../lib/auth/prf-support";
+import { assessPasskeySupport } from "../lib/auth/prf-support";
 import { passkeyUserName } from "../lib/auth/passkeyName";
 import { enrolPasskey, getPrfSecret, PrfUnsupportedError } from "../lib/auth/passkey";
 import { wrapKey, unwrapKey, deriveMasterWrapSecret } from "../lib/auth/wrap";
@@ -195,9 +195,10 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
 
   const bootstrap = useCallback<CryptoContextValue["bootstrap"]>(
     async ({ mnemonic, chainId: cid = DEFAULT_CHAIN_ID, userName, escrow = "none" }) => {
-      // Pre-gate is a hint only (support matrix §5.2): block only when WebAuthn
-      // is missing outright. PRF is confirmed authoritatively in enrolPasskey.
-      if (!hasWebAuthn()) throw new PrfUnsupportedError();
+      // Same pre-gate as BootstrapPage (support matrix §5.2): refuse only on a
+      // definitive "no PRF"; an advisory is the user's call. PRF is confirmed
+      // authoritatively in enrolPasskey.
+      if ((await assessPasskeySupport()) === "blocked") throw new PrfUnsupportedError();
 
       const sk = await deriveSessionKeys(mnemonic, SERVER_URL, cid);
       const masterPriv = await deriveEoaPrivateKey(mnemonic); // validated 32 bytes
@@ -292,7 +293,7 @@ export function CryptoProvider({ children }: { children: ReactNode }) {
       await registerSession(sk);
 
       if (opts?.reEnrol) {
-        if (!hasWebAuthn()) throw new PrfUnsupportedError();
+        if ((await assessPasskeySupport()) === "blocked") throw new PrfUnsupportedError();
         const masterPriv = await deriveEoaPrivateKey(mnemonic);
         let prfSecret: Uint8Array | null = null;
         let masterWrapSecret: Uint8Array | null = null;

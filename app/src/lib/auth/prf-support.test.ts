@@ -3,7 +3,9 @@ import {
   isPasskeyPrfAvailable,
   hasWebAuthn,
   assessPasskeySupport,
+  clientPrfCapability,
   detectPasskeyPlatform,
+  platformLacksPrf,
 } from "./prf-support";
 
 afterEach(() => {
@@ -60,23 +62,98 @@ describe("hasWebAuthn", () => {
   });
 });
 
+describe("clientPrfCapability (getClientCapabilities)", () => {
+  it("is undefined when the browser has no getClientCapabilities", async () => {
+    vi.stubGlobal("window", { PublicKeyCredential: {} });
+    expect(await clientPrfCapability()).toBeUndefined();
+  });
+
+  it("reports the browser's extension:prf answer", async () => {
+    vi.stubGlobal("window", {
+      PublicKeyCredential: { getClientCapabilities: async () => ({ "extension:prf": false }) },
+    });
+    expect(await clientPrfCapability()).toBe(false);
+    vi.stubGlobal("window", {
+      PublicKeyCredential: { getClientCapabilities: async () => ({ "extension:prf": true }) },
+    });
+    expect(await clientPrfCapability()).toBe(true);
+  });
+
+  it("is undefined when extension:prf is absent or the call throws", async () => {
+    vi.stubGlobal("window", {
+      PublicKeyCredential: { getClientCapabilities: async () => ({ conditionalGet: true }) },
+    });
+    expect(await clientPrfCapability()).toBeUndefined();
+    vi.stubGlobal("window", {
+      PublicKeyCredential: {
+        getClientCapabilities: async () => {
+          throw new Error("nope");
+        },
+      },
+    });
+    expect(await clientPrfCapability()).toBeUndefined();
+  });
+});
+
+describe("platformLacksPrf (support matrix §2)", () => {
+  it("is true only where no authenticator can deliver PRF", () => {
+    expect(platformLacksPrf("apple-old")).toBe(true);
+    expect(platformLacksPrf("firefox-android")).toBe(true);
+    expect(platformLacksPrf("safari")).toBe(false);
+    expect(platformLacksPrf("windows")).toBe(false);
+    expect(platformLacksPrf("unknown")).toBe(false);
+  });
+});
+
 describe("assessPasskeySupport (support matrix §5.2 pre-gate)", () => {
+  const pkc = (opts: { uvpaa?: boolean; prf?: boolean }) => ({
+    PublicKeyCredential: {
+      isUserVerifyingPlatformAuthenticatorAvailable: async () => opts.uvpaa ?? false,
+      ...(opts.prf === undefined ? {} : { getClientCapabilities: async () => ({ "extension:prf": opts.prf }) }),
+    },
+  });
+
+  it("blocks when the browser says it can't do PRF, even with a platform authenticator", async () => {
+    vi.stubGlobal("window", pkc({ uvpaa: true, prf: false }));
+    expect(await assessPasskeySupport("unknown")).toBe("blocked");
+    vi.stubGlobal("window", pkc({ uvpaa: false, prf: false }));
+    expect(await assessPasskeySupport("unknown")).toBe("blocked");
+  });
+
+  it("blocks on Safari / iOS before 18 and Firefox on Android, whatever the probes say", async () => {
+    vi.stubGlobal("window", pkc({ uvpaa: true }));
+    expect(await assessPasskeySupport("apple-old")).toBe("blocked");
+    expect(await assessPasskeySupport("firefox-android")).toBe("blocked");
+    vi.stubGlobal("window", pkc({ uvpaa: true, prf: true }));
+    expect(await assessPasskeySupport("apple-old")).toBe("blocked");
+  });
+
+  it("is advisory when PRF is possible but no platform authenticator was reported", async () => {
+    vi.stubGlobal("window", pkc({ uvpaa: false, prf: true }));
+    expect(await assessPasskeySupport("unknown")).toBe("advisory");
+  });
+
+  it("is ok when the browser reports PRF and a platform authenticator", async () => {
+    vi.stubGlobal("window", pkc({ uvpaa: true, prf: true }));
+    expect(await assessPasskeySupport("windows")).toBe("ok");
+  });
+
   it("blocks only when WebAuthn is missing outright", async () => {
     vi.stubGlobal("window", {});
     vi.stubGlobal("PublicKeyCredential", undefined);
-    expect(await assessPasskeySupport()).toBe("blocked");
+    expect(await assessPasskeySupport("unknown")).toBe("blocked");
   });
 
   it("is advisory, not a block, when there is no platform authenticator (security keys may work)", async () => {
     vi.stubGlobal("window", {
       PublicKeyCredential: { isUserVerifyingPlatformAuthenticatorAvailable: async () => false },
     });
-    expect(await assessPasskeySupport()).toBe("advisory");
+    expect(await assessPasskeySupport("unknown")).toBe("advisory");
   });
 
   it("is advisory when the platform probe is missing or throws", async () => {
     vi.stubGlobal("window", { PublicKeyCredential: {} });
-    expect(await assessPasskeySupport()).toBe("advisory");
+    expect(await assessPasskeySupport("unknown")).toBe("advisory");
     vi.stubGlobal("window", {
       PublicKeyCredential: {
         isUserVerifyingPlatformAuthenticatorAvailable: async () => {
@@ -84,14 +161,14 @@ describe("assessPasskeySupport (support matrix §5.2 pre-gate)", () => {
         },
       },
     });
-    expect(await assessPasskeySupport()).toBe("advisory");
+    expect(await assessPasskeySupport("unknown")).toBe("advisory");
   });
 
   it("is ok with a user-verifying platform authenticator", async () => {
     vi.stubGlobal("window", {
       PublicKeyCredential: { isUserVerifyingPlatformAuthenticatorAvailable: async () => true },
     });
-    expect(await assessPasskeySupport()).toBe("ok");
+    expect(await assessPasskeySupport("unknown")).toBe("ok");
   });
 });
 

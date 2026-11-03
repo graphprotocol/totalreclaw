@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   PasskeyAdvisoryNotice,
+  PasskeyEnrolFailedNotice,
   PasskeyUnsupportedNotice,
+  KEEP_PHRASE_LINE,
   HERMES_GUIDE_URL,
   UNSUPPORTED_PLATFORM_LINE,
 } from "./PasskeySupportNotice";
@@ -49,5 +51,22 @@ describe("PasskeyAdvisoryNotice (security-key advisory instead of a block)", () 
   it("omits the generic browser line when the platform is unknown", () => {
     const html = text(renderToStaticMarkup(<PasskeyAdvisoryNotice platform="unknown" onContinue={() => {}} />));
     expect(html).not.toContain(UNSUPPORTED_PLATFORM_LINE.unknown);
+  });
+});
+
+describe("PasskeyEnrolFailedNotice (PRF missing at enrol, after the phrase step)", () => {
+  it.each(PLATFORMS)("is recoverable on %s: guidance, keep-the-phrase, retry, Hermes", (platform) => {
+    const html = text(renderToStaticMarkup(<PasskeyEnrolFailedNotice platform={platform} onRetry={() => {}} />));
+    expect(html).toContain("Your browser can’t secure a vault yet");
+    expect(html).toContain(UNSUPPORTED_PLATFORM_LINE[platform]);
+    expect(html).toContain(text(KEEP_PHRASE_LINE));
+    expect(html).toContain("Try a different passkey");
+    expect(html).toContain(`href="${HERMES_GUIDE_URL}"`);
+  });
+
+  it("the plain pre-gate block has no retry and no phrase line (no phrase exists yet)", () => {
+    const html = text(renderToStaticMarkup(<PasskeyUnsupportedNotice platform="unknown" />));
+    expect(html).not.toContain("Try a different passkey");
+    expect(html).not.toContain(text(KEEP_PHRASE_LINE));
   });
 });

@@ -18,7 +18,8 @@ vi.mock("../contexts/CryptoContext", () => ({
 
 const { UnlockPage, NoVaultFrontDoor, createVaultConfirmMessage, CREATE_AFTER_FAILED_RECOVERY_CONFIRM } =
   await import("./UnlockPage");
-const { BootstrapPage, stepAfterSupportCheck } = await import("./BootstrapPage");
+const { BootstrapPage, stepAfterSupportCheck, stepAfterBootstrapError } = await import("./BootstrapPage");
+const { PrfUnsupportedError } = await import("../lib/auth/passkey");
 
 const render = (el: React.ReactElement) => renderToStaticMarkup(<StaticRouter location="/">{el}</StaticRouter>);
 
@@ -70,12 +71,12 @@ describe("create-vault confirm", () => {
 });
 
 describe("browser gate step (support matrix §5.2)", () => {
-  it("blocks only when WebAuthn is missing", () => {
+  it("a definitive no-PRF answer blocks before any phrase, whichever door the user came through", () => {
     expect(stepAfterSupportCheck("blocked", true)).toBe("unsupported");
     expect(stepAfterSupportCheck("blocked", false)).toBe("unsupported");
   });
 
-  it("shows the advisory, not a block, without a platform authenticator", () => {
+  it("shows the advisory, not a block, when PRF support is unknown", () => {
     expect(stepAfterSupportCheck("advisory", true)).toBe("advisory");
     expect(stepAfterSupportCheck("advisory", false)).toBe("advisory");
   });
@@ -92,5 +93,15 @@ describe("browser gate step (support matrix §5.2)", () => {
     const html = render(<BootstrapPage />);
     expect(html).toContain("Checking your browser…");
     expect(html).not.toContain("Write this down");
+  });
+});
+
+describe("PRF missing at enrolment, after the phrase step", () => {
+  it("goes to the recoverable enrol-failed screen, not the pre-gate block", () => {
+    expect(stepAfterBootstrapError(new PrfUnsupportedError())).toBe("enrol-failed");
+  });
+
+  it("any other failure returns to the create-or-restore choice with the error", () => {
+    expect(stepAfterBootstrapError(new Error("relay down"))).toBe("choose");
   });
 });

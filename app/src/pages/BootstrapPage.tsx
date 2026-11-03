@@ -7,11 +7,16 @@ import { PrfUnsupportedError } from "../lib/auth/passkey";
 import { download } from "../lib/download";
 import { escrowFilename } from "../lib/auth/escrow";
 import { recordFileBackup } from "../lib/vault/fileBackupRecord";
-import { PasskeyAdvisoryNotice, PasskeyUnsupportedNotice } from "../components/PasskeySupportNotice";
+import {
+  PasskeyAdvisoryNotice,
+  PasskeyEnrolFailedNotice,
+  PasskeyUnsupportedNotice,
+} from "../components/PasskeySupportNotice";
 
 type Step =
   | "checking"
   | "unsupported"
+  | "enrol-failed"
   | "advisory"
   | "choose"
   | "show-phrase"
@@ -47,11 +52,12 @@ function Shell({ children }: { children: React.ReactNode }) {
 export type BootstrapIntent = { intent?: "create" };
 
 /**
- * Where the browser check sends the user (support matrix §5.2): a hard block
- * only when WebAuthn is missing; an advisory, with "Continue anyway", when no
- * built-in passkey was reported; otherwise straight on — to the new phrase if
- * the front door already chose "Create a vault", else to the create-or-
- * restore choice.
+ * Where the browser check sends the user (support matrix §5.2): a hard block,
+ * before any phrase exists, whenever the browser can say for certain that PRF
+ * won't work (see `assessPasskeySupport`); an advisory, with "Continue
+ * anyway", when that's unknown and no built-in passkey was reported;
+ * otherwise straight on — to the new phrase if the front door already chose
+ * "Create a vault", else to the create-or-restore choice.
  */
 export function stepAfterSupportCheck(
   support: PasskeySupport,
@@ -60,6 +66,15 @@ export function stepAfterSupportCheck(
   if (support === "blocked") return "unsupported";
   if (support === "advisory") return "advisory";
   return wantsCreate ? "create" : "choose";
+}
+
+/**
+ * Where a failed bootstrap sends the user. PRF missing at enrolment comes
+ * AFTER they wrote down a phrase, so it gets a recoverable screen (retry with
+ * another passkey, keep the phrase) rather than the bare pre-gate block.
+ */
+export function stepAfterBootstrapError(e: unknown): "enrol-failed" | "choose" {
+  return e instanceof PrfUnsupportedError ? "enrol-failed" : "choose";
 }
 
 export function BootstrapPage() {
@@ -95,12 +110,9 @@ export function BootstrapPage() {
         }
         goVault();
       } catch (e) {
-        if (e instanceof PrfUnsupportedError) {
-          setStep("unsupported");
-          return;
-        }
-        setError(e instanceof Error ? e.message : String(e));
-        setStep("choose");
+        const next = stepAfterBootstrapError(e);
+        if (next === "choose") setError(e instanceof Error ? e.message : String(e));
+        setStep(next);
       }
     },
     [bootstrap, goVault],
@@ -122,11 +134,12 @@ export function BootstrapPage() {
     else setStep("choose");
   }, [wantsCreate, startCreate]);
 
-  // Support-matrix §5.2 pre-gate. "advisory" warns but lets the user go on;
-  // the enrol-time PRF check stays authoritative (PrfUnsupportedError below).
+  // Support-matrix §5.2 pre-gate. Definitive "no PRF" blocks here, before any
+  // phrase; "advisory" warns but lets the user go on. The enrol-time PRF check
+  // stays authoritative (PrfUnsupportedError → "enrol-failed").
   useEffect(() => {
     let cancelled = false;
-    void assessPasskeySupport().then((support) => {
+    void assessPasskeySupport(platform).then((support) => {
       if (cancelled) return;
       const next = stepAfterSupportCheck(support, wantsCreate);
       if (next === "create") startCreate();
@@ -162,6 +175,14 @@ export function BootstrapPage() {
     return (
       <Shell>
         <PasskeyUnsupportedNotice platform={platform} />
+      </Shell>
+    );
+  }
+
+  if (step === "enrol-failed") {
+    return (
+      <Shell>
+        <PasskeyEnrolFailedNotice platform={platform} onRetry={() => setStep("escrow-consent")} />
       </Shell>
     );
   }

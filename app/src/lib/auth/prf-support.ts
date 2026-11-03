@@ -6,22 +6,32 @@
  * platforms WITHOUT `prf`, bootstrap is HARD-GATED (PRD-02 R-1) — there is no
  * degraded fallback.
  *
- * No browser API answers "does PRF work here?" without a passkey prompt, so
- * the pre-gate is a HINT (webauthn-prf-support-matrix.md §5.2):
+ * No browser API proves "PRF works here" without a passkey prompt, but some
+ * can prove it DOESN'T. The pre-gate (webauthn-prf-support-matrix.md §5.2)
+ * hard-blocks every definitive "no" before any recovery phrase is generated,
+ * and only warns when the answer is genuinely unknown:
  *
- *   - no WebAuthn at all              → "blocked"  (no path, hard block)
- *   - WebAuthn, no platform authn.    → "advisory" (a security key or a
- *                                        passkey manager may still work —
- *                                        warn, but let the user continue)
- *   - both                            → "ok"
+ *   - no WebAuthn at all                       → "blocked"
+ *   - browser says it can't do PRF             → "blocked"
+ *     (`getClientCapabilities()["extension:prf"] === false`)
+ *   - a platform with no PRF on any            → "blocked"
+ *     authenticator (matrix §2: Safari/iOS
+ *     before 18, Firefox on Android)
+ *   - otherwise, no platform authenticator     → "advisory" (a security key
+ *                                                 or passkey manager may still
+ *                                                 work — warn, let them go on)
+ *   - otherwise                                → "ok"
  *
  * The AUTHORITATIVE check is unchanged and lives at enrol time:
  * `getClientExtensionResults().prf.enabled` in passkey.ts, which throws
- * PrfUnsupportedError.
+ * PrfUnsupportedError. An authenticator without `hmac-secret` behind a
+ * PRF-capable browser (e.g. Windows Hello before KB5077181, a CTAP2 key
+ * without the extension) is only detectable there.
  */
 
 type PublicKeyCredentialStatic = {
   isUserVerifyingPlatformAuthenticatorAvailable?: () => Promise<boolean>;
+  getClientCapabilities?: () => Promise<Record<string, boolean | undefined>>;
 };
 
 function publicKeyCredential(): PublicKeyCredentialStatic | undefined {
@@ -52,11 +62,32 @@ export async function isPasskeyPrfAvailable(): Promise<boolean> {
   }
 }
 
+/**
+ * The browser's own answer on PRF (WebAuthn L3 `getClientCapabilities()`):
+ * `false` is definitive, `true` means the browser passes PRF through (the
+ * authenticator may still lack it), `undefined` means it didn't say.
+ */
+export async function clientPrfCapability(): Promise<boolean | undefined> {
+  const PKC = publicKeyCredential();
+  if (!PKC?.getClientCapabilities) return undefined;
+  try {
+    const caps = await PKC.getClientCapabilities();
+    const prf = caps?.["extension:prf"];
+    return typeof prf === "boolean" ? prf : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export type PasskeySupport = "ok" | "advisory" | "blocked";
 
 /** The §5.2 pre-gate. Never prompts. */
-export async function assessPasskeySupport(): Promise<PasskeySupport> {
+export async function assessPasskeySupport(
+  platform: PasskeyPlatform = currentPasskeyPlatform(),
+): Promise<PasskeySupport> {
   if (!hasWebAuthn()) return "blocked";
+  if (platformLacksPrf(platform)) return "blocked";
+  if ((await clientPrfCapability()) === false) return "blocked";
   return (await isPasskeyPrfAvailable()) ? "ok" : "advisory";
 }
 
@@ -85,6 +116,15 @@ export function detectPasskeyPlatform(ua: string): PasskeyPlatform {
     return "safari";
   }
   return "unknown";
+}
+
+/**
+ * Platforms where no authenticator can deliver PRF to the page (support
+ * matrix §2): WebKit before 18 has no PRF at all, and Firefox on Android
+ * doesn't implement it. These are hard blocks, not advisories.
+ */
+export function platformLacksPrf(platform: PasskeyPlatform): boolean {
+  return platform === "apple-old" || platform === "firefox-android";
 }
 
 /** Current browser's platform bucket ("unknown" outside a browser). */

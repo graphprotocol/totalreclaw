@@ -37,8 +37,7 @@ function HermesLink() {
   );
 }
 
-/** Hard block: no WebAuthn at all, or PRF confirmed missing at enrol. */
-export function PasskeyUnsupportedNotice({ platform }: { platform: PasskeyPlatform }) {
+function UnsupportedBody({ platform }: { platform: PasskeyPlatform }) {
   return (
     <>
       <h1 className="font-display text-2xl font-semibold text-ink">Your browser can’t secure a vault yet</h1>
@@ -47,6 +46,47 @@ export function PasskeyUnsupportedNotice({ platform }: { platform: PasskeyPlatfo
         support yet.
       </p>
       <p className="mt-3 text-ink-muted">{UNSUPPORTED_PLATFORM_LINE[platform]}</p>
+    </>
+  );
+}
+
+/** Hard block before any phrase exists: the browser check said no. */
+export function PasskeyUnsupportedNotice({ platform }: { platform: PasskeyPlatform }) {
+  return (
+    <>
+      <UnsupportedBody platform={platform} />
+      <HermesLink />
+    </>
+  );
+}
+
+/** Shown when the user has already written down a phrase, so it is still worth keeping. */
+export const KEEP_PHRASE_LINE =
+  "Keep the recovery phrase you wrote down. In a supported browser, choose “I already have one” and enter it to open this vault.";
+
+/**
+ * PRF confirmed missing at enrolment (`PrfUnsupportedError`), AFTER the user
+ * wrote down and confirmed a phrase. Not a dead end: they can retry with a
+ * different passkey (a security key or a passkey manager), keep the phrase
+ * for a supported browser, or use Hermes.
+ */
+export function PasskeyEnrolFailedNotice({
+  platform,
+  onRetry,
+}: {
+  platform: PasskeyPlatform;
+  onRetry: () => void;
+}) {
+  return (
+    <>
+      <UnsupportedBody platform={platform} />
+      <p className="mt-3 text-ink-muted">{KEEP_PHRASE_LINE}</p>
+      <button
+        onClick={onRetry}
+        className="mt-6 w-full rounded-control bg-clay px-5 py-3 font-semibold text-warm-white transition duration-200 ease-keeper hover:bg-clay-deep"
+      >
+        Try a different passkey
+      </button>
       <HermesLink />
     </>
   );
