@@ -138,7 +138,7 @@ All 18 tools are invoked by the host agent from natural language context. Tool s
 | `totalreclaw_consolidate` | Merge duplicate and related memories |
 | `totalreclaw_debrief` | End-of-conversation summary to capture broader context |
 | `totalreclaw_upgrade` | Get a link to upgrade to Pro |
-| `totalreclaw_account` | View account details (wallet, tier, quota, phrase hint) |
+| `totalreclaw_account` | View account details (wallet, tier, quota, credential kind) |
 | `totalreclaw_pair` | Set up the account via a browser pair flow — the browser generates/imports a recovery phrase out-of-band (never through chat) |
 | `totalreclaw_support` | Troubleshooting help + contact links |
 

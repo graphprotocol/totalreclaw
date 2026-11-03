@@ -126,7 +126,7 @@ The MCP server exposes 18 tools. Descriptions are summarized from the tool defin
 | `totalreclaw_upgrade` | Get a one-time Stripe checkout URL for Pro. |
 | `totalreclaw_debrief` | Store a structured Crystal session summary at the end of a substantive conversation. |
 | `totalreclaw_support` | Get support contact, docs links, and a troubleshooting bundle. Works even when unconfigured. |
-| `totalreclaw_account` | Account overview: wallet, tier, usage, feature flags, and a safe (first + last words only) recovery hint. |
+| `totalreclaw_account` | Account overview: wallet, tier, usage, feature flags, and credential kind. Never returns any part of the recovery phrase. |
 | `totalreclaw_pin` | Lock a memory against auto-supersession. |
 | `totalreclaw_unpin` | Remove a pin so a memory can be superseded again. |
 | `totalreclaw_retype` | Change a memory's v1 type (e.g. preference → directive). |

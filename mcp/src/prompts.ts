@@ -191,16 +191,15 @@ INVOKE WHEN USER SAYS:
 DOES: static bundle (pre-filled email, docs URL, issues URL, troubleshooting table). Works unconfigured.
 WHEN NOT TO USE: billing info → totalreclaw_status. Skip unrelated questions.`;
 
-export const ACCOUNT_TOOL_DESCRIPTION = `Account overview: wallet, tier, usage, memories, features, safe recovery hint.
+export const ACCOUNT_TOOL_DESCRIPTION = `Account overview: wallet, tier, usage, memories, features, credential kind.
 INVOKE WHEN USER SAYS:
 - "show my account" / "what's my profile?"
 - "how many memories?" / "my wallet?"
-- "right recovery phrase? hint"
 - "summary of my setup"
-DOES: billing+fact count parallel. Returns wallet, tier, writes_used/limit, total_facts, features, FIRST+LAST recovery words (never full).
+DOES: billing+fact count parallel. Returns wallet, tier, writes_used/limit, total_facts, features, credential kind. Never any part of the recovery phrase.
 WHEN NOT TO USE:
 - only billing → totalreclaw_status (lighter)
-- FULL recovery phrase → NEVER; password manager.`;
+- recovery phrase (any word) → NEVER available; user checks own backup.`;
 
 export const PAIR_TOOL_DESCRIPTION = `Set up the user's TotalReclaw account (browser-side recovery-phrase generation or import).
 INVOKE WHEN USER SAYS:
