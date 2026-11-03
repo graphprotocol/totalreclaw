@@ -82,7 +82,10 @@ REMEMBER = {
                     "quotes / IDs / numbers the user wants stored as-is and "
                     "you believe the extractor would paraphrase. For ordinary "
                     "'remember X' intents, omit this param + trust the "
-                    "auto-extract path."
+                    "auto-extract path. Also use force=true after a "
+                    "possible_duplicate result when the new text adds or "
+                    "changes information. An exact copy of a stored memory "
+                    "is never written again, even with force=true."
                 ),
             },
         },

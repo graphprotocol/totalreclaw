@@ -58,6 +58,64 @@ pub fn wasm_build_debrief_prompt(stored_facts_json: &str) -> Result<String, JsEr
     Ok(debrief::build_debrief_prompt(&refs))
 }
 
+/// Render the "Existing memories" block appended to the extraction user
+/// prompt (PRD-04 DEP-3).
+///
+/// Each argument is a JSON array of `{ id: string, text: string }` objects
+/// (`"null"` = empty section; extra fields such as `embedding` are ignored).
+/// Pinned first, then topical, then recent; dedupe by fact id; at most `cap`
+/// lines; returns `""` when no line survives. Malformed JSON → `JsError`.
+///
+/// `cap` defaults to 30 when omitted (`undefined` / `null`). It must be a
+/// non-negative integer: a negative, fractional, `NaN` or infinite value
+/// throws instead of being coerced (a plain `usize` parameter would turn `-1`
+/// into "no cap" and `NaN` into an empty block).
+#[wasm_bindgen(js_name = "buildDedupContext")]
+pub fn wasm_build_dedup_context(
+    topical_json: &str,
+    pinned_json: &str,
+    recent_json: &str,
+    cap: Option<f64>,
+) -> Result<String, JsError> {
+    let cap = match cap {
+        None => crate::dedup_context::DEFAULT_DEDUP_CONTEXT_CAP,
+        Some(c) if c.is_finite() && c >= 0.0 && c.fract() == 0.0 => c as usize,
+        Some(c) => {
+            return Err(JsError::new(&format!(
+                "buildDedupContext: cap must be a non-negative integer, got {c}"
+            )))
+        }
+    };
+    crate::dedup_context::build_dedup_context_json(topical_json, pinned_json, recent_json, cap)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Normalize a fact for the write gate's exact-duplicate check.
+#[wasm_bindgen(js_name = "normalizeFactText")]
+pub fn wasm_normalize_fact_text(text: &str) -> String {
+    crate::write_gate::normalize_fact_text(text)
+}
+
+/// Decide whether a new fact should be written (store-time write gate).
+///
+/// `embeddingJson`: JSON number array, or `"null"` / `"[]"`.
+/// `candidatesJson`: JSON array of `{id, text, embedding?, pinned?}`.
+/// `mode`: `"auto"` | `"explicit"` | `"exact_only"`.
+/// `threshold`: cosine threshold in (0, 1]; omitted means 0.85.
+///
+/// Returns JSON `{action: "store"|"skip"|"confirm", match: null | {...}}`.
+#[wasm_bindgen(js_name = "decideWrite")]
+pub fn wasm_decide_write(
+    text: &str,
+    embedding_json: &str,
+    candidates_json: &str,
+    mode: &str,
+    threshold: Option<f64>,
+) -> Result<String, JsError> {
+    crate::write_gate::decide_write_json(text, embedding_json, candidates_json, threshold, mode)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // Constants (exposed as getter functions since wasm_bindgen doesn't support statics)
 // ---------------------------------------------------------------------------

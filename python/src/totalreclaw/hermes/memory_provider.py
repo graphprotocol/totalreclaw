@@ -282,12 +282,24 @@ def _find_mirrored_facts(state: "PluginState", text: str) -> List[str]:
     return []
 
 
-def _mirror_remember(state: "PluginState", args: Dict[str, Any]) -> bool:
-    """Store a mirrored entry through ``tools.remember``. False on error."""
+def _mirror_remember(
+    state: "PluginState", args: Dict[str, Any], exclude_ids: Optional[List[str]] = None,
+) -> bool:
+    """Store a mirrored entry through ``tools.remember``. False on error.
+
+    The store-time gate runs in ``exact_only`` mode: an entry already in the
+    vault (same text after normalization, or written moments ago and not yet
+    indexed) is not written again, and that still counts as success. Near
+    duplicates are written: with no agent to judge them, a changed value
+    ("lives in Porto" vs "lives in Lisbon") must not be dropped.
+    ``exclude_ids`` are facts this entry replaces (they are forgotten next).
+    """
     from .tools import remember as _remember
     from totalreclaw.agent.loop_runner import run_sync
 
-    result = _parse_tool_result(run_sync(_remember(args, state)))
+    result = _parse_tool_result(run_sync(_remember(
+        args, state, gate_mode="exact_only", gate_exclude_ids=list(exclude_ids or ()),
+    )))
     if result.get("error"):
         logger.warning("memory mirror: remember failed: %s", result["error"])
         return False
@@ -848,7 +860,7 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
                 old_ids = _find_mirrored_facts(self._state, previous)
             except Exception as exc:  # e.g. reads paused: still store the new entry
                 logger.info("memory mirror: old-entry lookup failed: %s", exc)
-        if not _mirror_remember(self._state, {"text": text}):
+        if not _mirror_remember(self._state, {"text": text}, exclude_ids=old_ids):
             # Keep the old fact rather than lose both.
             logger.info("memory mirror: replace target=%s stored=0 forgotten=0", target)
             return
