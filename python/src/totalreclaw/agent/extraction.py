@@ -953,6 +953,61 @@ def _filter_instruction_fragment_facts(
     return kept
 
 
+#: A memory must read as a sentence about someone. The extractor occasionally
+#: returns a bare clause lifted from a user turn instead: "these days?"
+#: (#620), "to restore it, not create a new one" (#662), "it surfaced every
+#: time" (#471). The rule below is deliberately narrow: a question, or text
+#: that starts lower-case and has no capital letter and no "user" anywhere.
+#: That keeps subject-less but real facts ("Enjoys speedcubing"), names and
+#: brands ("iPhone 15 owner", "pedro's wife is Ana"), lower-case tool names in
+#: a sentence about the user ("zsh is the user's shell") and non-Latin
+#: scripts. On the small-model testbed (about 21,000 stored facts across
+#: synthetic, WildChat and private real chat) it matches 9 facts, 1 judged
+#: worth keeping, none matching a gold fact.
+_FRAGMENT_LOWER_START = re.compile(r"^[a-z\u00df-\u00ff]")
+_FRAGMENT_USER_WORD = re.compile(r"\buser\b", re.IGNORECASE)
+_FRAGMENT_QUOTES = "\"'\u201c\u201d\u2018\u2019"
+
+
+def is_sentence_fragment(text: str) -> bool:
+    """Return True if ``text`` is a bare clause or question, not a fact.
+
+    Issues #620 and #662: a question ("these days?") and a subject-less
+    clause ("to restore it, not create a new one") were stored as user
+    facts. See the comment above for why the rule is this narrow.
+    """
+    if not isinstance(text, str):
+        return True
+    t = text.strip().strip(_FRAGMENT_QUOTES).strip()
+    if not t:
+        return True
+    if t.endswith("?"):
+        return True
+    return (
+        bool(_FRAGMENT_LOWER_START.match(t))
+        and not any(c.isupper() for c in t)
+        and not _FRAGMENT_USER_WORD.search(t)
+    )
+
+
+def _filter_sentence_fragment_facts(facts: List[ExtractedFact]) -> List[ExtractedFact]:
+    """Drop facts that are bare clauses or questions (#620, #662).
+
+    DELETE actions pass through: their text identifies an existing memory,
+    it is not stored. Dropped facts are logged at INFO.
+    """
+    kept: List[ExtractedFact] = []
+    for f in facts:
+        if f.action != "DELETE" and is_sentence_fragment(f.text):
+            logger.info(
+                "_filter_sentence_fragment_facts: dropping fragment fact: %r",
+                f.text[:80],
+            )
+            continue
+        kept.append(f)
+    return kept
+
+
 # ---------------------------------------------------------------------------
 # Main extraction entry points
 # ---------------------------------------------------------------------------
@@ -1101,6 +1156,9 @@ async def extract_facts_llm(
     # mis-extracted as orphaned preference fragments.
     facts = _filter_instruction_fragment_facts(facts)
 
+    # #620 / #662: drop bare clauses and questions stored as facts.
+    facts = _filter_sentence_fragment_facts(facts)
+
     # Bug #8: collapse near-identical facts within the batch, and against
     # existing vault entries with embeddings. Runs last so importance
     # bumps are already applied (the surviving fact wins with its final
@@ -1221,6 +1279,9 @@ async def extract_facts_compaction(
 
     # Finding #6 (#471): filter vault-surfacing / pin meta-instructions.
     facts = _filter_instruction_fragment_facts(facts)
+
+    # #620 / #662: drop bare clauses and questions stored as facts.
+    facts = _filter_sentence_fragment_facts(facts)
 
     # Bug #8: in-batch + cross-existing cosine dedup.
     facts = deduplicate_facts_by_embedding(
