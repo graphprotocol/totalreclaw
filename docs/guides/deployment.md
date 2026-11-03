@@ -152,17 +152,39 @@ npm run deploy:prod      # = graph deploy --studio total-reclaw-gnosis subgraph-
 ```
 Pass `--version-label v<X.Y.Z>` (bump from the currently-served version).
 
-**After ANY subgraph deploy, repoint BOTH endpoint env vars on the matching relay
-service** — each service runs `SUBGRAPH_ENDPOINT` AND `PRO_SUBGRAPH_ENDPOINT` (both
-point at the same subgraph per env, since both tiers share one chain):
+**Relays read through The Graph Gateway (since 2026-09-27 staging / 2026-10-01 prod),
+with Studio as fallback.** Each relay service has three endpoint vars: `SUBGRAPH_ENDPOINT` and
+`PRO_SUBGRAPH_ENDPOINT` (the primary, identical per env since both tiers share one chain), plus
+`SUBGRAPH_FALLBACK_ENDPOINT` (Studio, used for one retry only on Gateway upstream errors and
+never sent the key). The Gateway key is `GRAPH_API_KEY`: one key per environment, sent only as
+an `Authorization: Bearer` header to Gateway hosts. **Never put the key in an endpoint URL;** the
+relay refuses key-in-URL endpoints at startup and redacts them in logs.
+
+| Env | Network subgraph ID | Primary (pinned deployment) | Fallback |
+|---|---|---|---|
+| staging (`totalreclaw`) | `4SPfU4DuuiFG4zsfDuAoRexrxN2XxTuCP5beZSgKFtCU` | `https://gateway.thegraph.com/api/deployments/id/<Qm…>` | `https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis-staging/<v>` |
+| production (`totalreclaw-production`) | `AWYQJaB4jUjEm49BPdYbVn7RP8v8usRyqTET2rRHCFTZ` | `https://gateway.thegraph.com/api/deployments/id/<Qm…>` | `https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<v>` |
+
+**After ANY subgraph deploy:** (1) `graph deploy` to Studio as above; (2) **publish the new
+version to the network** from Studio; (3) wait until the Gateway serves the new deployment ID
+at the chain head (`{ _meta { deployment block { number } hasIndexingErrors } }` with the env's
+key); (4) repoint all three vars on the matching service in one command (one redeploy):
 ```bash
 # staging:
-railway variables --set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis-staging/<v>" \
-                  --set "PRO_SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis-staging/<v>" -s totalreclaw
-# production:
-railway variables --set "SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<v>" \
-                  --set "PRO_SUBGRAPH_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<v>" -s totalreclaw-production
+railway variables --set "SUBGRAPH_ENDPOINT=https://gateway.thegraph.com/api/deployments/id/<newQm>" \
+                  --set "PRO_SUBGRAPH_ENDPOINT=https://gateway.thegraph.com/api/deployments/id/<newQm>" \
+                  --set "SUBGRAPH_FALLBACK_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis-staging/<v>" -s totalreclaw
+# production (same shape, prod deployment ID + total-reclaw-gnosis/<v>):
+railway variables --set "SUBGRAPH_ENDPOINT=https://gateway.thegraph.com/api/deployments/id/<newQm>" \
+                  --set "PRO_SUBGRAPH_ENDPOINT=https://gateway.thegraph.com/api/deployments/id/<newQm>" \
+                  --set "SUBGRAPH_FALLBACK_ENDPOINT=https://api.studio.thegraph.com/query/41768/total-reclaw-gnosis/<v>" -s totalreclaw-production
 ```
+We pin the **deployment-ID** URL (not `/api/subgraphs/id/…`) so a newly published version can't take
+over reads before it's indexed. Verify with `GET /health/deep`: `checks.subgraph.upstream` must
+be `gateway` and `status` `ok` (it also flags Gateway lag vs Studio beyond `SUBGRAPH_MAX_LAG_BLOCKS`).
+**Rollback:** set `SUBGRAPH_ENDPOINT`/`PRO_SUBGRAPH_ENDPOINT` back to the Studio URL. Both
+deployments currently have 0 GRT signal and are served by the upgrade indexer only; Studio
+fallback covers that indexer going away.
 
 ### Dead-shard failure mode (Graph Studio, seen 2026-07-02)
 A Studio deployment can die **server-side**: queries return
@@ -215,4 +237,4 @@ publish manually.** CI must be green first. Order: Core → MCP → Plugin (npm)
 - Production NEVER auto-deploys.
 - Always assert `/health.version` == the SHA you shipped. `dev` = SHA not stamped.
 - E2E gates prod promotion.
-- After a subgraph deploy, update `SUBGRAPH_ENDPOINT` on both relay services.
+- After a subgraph deploy, publish the new version to the network, then repoint `SUBGRAPH_ENDPOINT` + `PRO_SUBGRAPH_ENDPOINT` (Gateway, pinned deployment ID) and `SUBGRAPH_FALLBACK_ENDPOINT` (Studio) on the matching relay service.

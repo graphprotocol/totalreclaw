@@ -6,7 +6,7 @@ TotalReclaw gives any MCP-compatible agent (Claude Code, Claude Desktop, Cursor,
 
 If you already have Claude Code (or Claude Desktop / Cursor / Windsurf) running, paste this into your chat:
 
-> **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/claude-code-setup.md>**
+> **Install TotalReclaw, see <https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md>**
 
 Your agent will fetch this page, run the MCP install command, and walk you through getting a recovery phrase into the config without ever printing it in chat. The phrase comes from a browser-side account-setup flow (the MCP server's own `totalreclaw_pair`, or the OpenClaw / Hermes equivalent), or from a phrase you already have on file.
 
@@ -248,7 +248,7 @@ Upgrade: *"Upgrade my TotalReclaw subscription."*
 
 ## Canonical prompt (matches the QA harness scenario contracts)
 
-> **Install TotalReclaw, see <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/claude-code-setup.md>**
+> **Install TotalReclaw, see <https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md>**
 
 ---
 

@@ -205,7 +205,7 @@ assert(validateQaBugArgs(validArgs).ok === true, 'validate: valid args → ok');
 
 {
   // Default (no override, no env) → internal.
-  assert(resolveQaRepo(null, {}) === 'p-diogo/totalreclaw-internal', 'resolve: default → internal');
+  assert(resolveQaRepo(null, {}) === 'graphprotocol/totalreclaw-internal', 'resolve: default → internal');
   assert(resolveQaRepo(null, {}) === DEFAULT_QA_REPO, 'resolve: DEFAULT_QA_REPO exported constant');
 }
 
@@ -231,7 +231,7 @@ assert(validateQaBugArgs(validArgs).ok === true, 'validate: valid args → ok');
   // Public repo denylist hit — throws.
   let threw = false;
   try {
-    resolveQaRepo(null, { TOTALRECLAW_QA_REPO: 'p-diogo/totalreclaw' });
+    resolveQaRepo(null, { TOTALRECLAW_QA_REPO: 'graphprotocol/totalreclaw' });
   } catch (err) {
     threw = true;
     assert(
@@ -246,7 +246,7 @@ assert(validateQaBugArgs(validArgs).ok === true, 'validate: valid args → ok');
   // Public repo via explicit override — throws.
   let threw = false;
   try {
-    resolveQaRepo('p-diogo/totalreclaw', {});
+    resolveQaRepo('graphprotocol/totalreclaw', {});
   } catch {
     threw = true;
   }
@@ -286,9 +286,24 @@ assert(validateQaBugArgs(validArgs).ok === true, 'validate: valid args → ok');
 {
   // Denylist sanity — historical leak target captured.
   assert(
-    PUBLIC_REPOS_DENYLIST.has('p-diogo/totalreclaw'),
+    PUBLIC_REPOS_DENYLIST.has('graphprotocol/totalreclaw'),
     'resolve: denylist contains public repo',
   );
+}
+
+{
+  // Pre-org-move slug — p-diogo/totalreclaw redirects to the public repo.
+  let threw = false;
+  try {
+    resolveQaRepo('p-diogo/totalreclaw', {});
+  } catch (err) {
+    threw = true;
+    assert(
+      err instanceof Error && err.message.includes('PUBLIC'),
+      'resolve: pre-org-move public slug error mentions "PUBLIC"',
+    );
+  }
+  assert(threw, 'resolve: pre-org-move public slug throws');
 }
 
 // ---------------------------------------------------------------------------
@@ -304,7 +319,7 @@ async function runPostTests(): Promise<void> {
       capturedUrl = String(url);
       capturedInit = init ?? null;
       return new Response(
-        JSON.stringify({ number: 42, html_url: 'https://github.com/p-diogo/totalreclaw-internal/issues/42' }),
+        JSON.stringify({ number: 42, html_url: 'https://github.com/graphprotocol/totalreclaw-internal/issues/42' }),
         { status: 201, headers: { 'Content-Type': 'application/json' } },
       );
     }) as typeof fetch;
@@ -315,7 +330,7 @@ async function runPostTests(): Promise<void> {
     });
     assert(result.issue_number === 42, 'post: returns issue number');
     assert(result.issue_url.includes('/issues/42'), 'post: returns issue URL');
-    assert(capturedUrl.endsWith('/repos/p-diogo/totalreclaw-internal/issues'), 'post: default repo is internal');
+    assert(capturedUrl.endsWith('/repos/graphprotocol/totalreclaw-internal/issues'), 'post: default repo is internal');
     assert((capturedInit?.method ?? '') === 'POST', 'post: uses POST');
     const headers = (capturedInit?.headers ?? {}) as Record<string, string>;
     assert(headers.Authorization === 'Bearer gh-test-token', 'post: auth header set');
@@ -408,7 +423,7 @@ async function runPostTests(): Promise<void> {
     try {
       await postQaBugIssue(validArgs, {
         githubToken: 'gh-token',
-        repo: 'p-diogo/totalreclaw',
+        repo: 'graphprotocol/totalreclaw',
         fetchImpl: mockFetch,
       });
     } catch (err) {

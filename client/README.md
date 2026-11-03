@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://totalreclaw.xyz">Website</a> &middot;
   <a href="https://www.npmjs.com/package/@totalreclaw/client">npm</a> &middot;
-  <a href="https://github.com/p-diogo/totalreclaw">Repository</a>
+  <a href="https://github.com/graphprotocol/totalreclaw">Repository</a>
 </p>
 
 <p align="center">
@@ -84,7 +84,7 @@ npm run build   # Build
 
 - [Architecture Spec](../docs/specs/totalreclaw/architecture.md) -- E2EE design with LSH + blind buckets
 - [totalreclaw.xyz](https://totalreclaw.xyz)
-- [Main Repository](https://github.com/p-diogo/totalreclaw)
+- [Main Repository](https://github.com/graphprotocol/totalreclaw)
 
 ## License
 

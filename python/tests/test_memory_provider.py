@@ -8,10 +8,11 @@ module (sidecar drop, config write, status read) since Hermes' actual
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -22,6 +23,8 @@ from totalreclaw.hermes.memory_provider import (
     _summarize_facts_for_compression,
 )
 from totalreclaw.hermes import install_memory_provider as imp
+from totalreclaw.hermes import memory_provider as mp
+from totalreclaw.reranker import RerankerResult
 
 
 def _make_state(configured: bool = True) -> PluginState:
@@ -152,121 +155,402 @@ class TestOnPreCompress:
 
 
 # ---------------------------------------------------------------------------
-# 5-6. on_memory_write
+# 5-6. on_memory_write — built-in memory mirror
 # ---------------------------------------------------------------------------
 
 
+def _drain() -> None:
+    assert mp._MIRROR_WORKER.drain(timeout=5.0), "mirror worker did not finish"
+
+
+def _fact(fact_id: str, text: str, cosine: float = 0.0) -> RerankerResult:
+    return RerankerResult(id=fact_id, text=text, embedding=None, cosine_sim=cosine)
+
+
+class _Vault:
+    """Records remember/forget calls and serves canned recall results."""
+
+    def __init__(self, state: PluginState, recall_results=None, remember_result=None):
+        self.remembered: list[dict] = []
+        self.forgotten: list[str] = []
+        self.events: list[str] = []
+        self.recall_queries: list[str] = []
+        self._recall_results = recall_results or []
+        self._remember_result = remember_result or {"stored": True, "fact_id": "new"}
+        state._client.recall = AsyncMock(side_effect=self._recall)
+
+    async def _recall(self, query, **kw):
+        self.recall_queries.append(query)
+        self.events.append("recall")
+        return list(self._recall_results)
+
+    async def remember(self, args, st, **kw):
+        self.remembered.append(args)
+        self.events.append("remember")
+        return json.dumps(self._remember_result)
+
+    async def forget(self, args, st, **kw):
+        self.forgotten.append(args["fact_id"])
+        self.events.append("forget")
+        return json.dumps({"deleted": True, "fact_id": args["fact_id"]})
+
+    def patches(self):
+        return (
+            patch("totalreclaw.hermes.tools.remember", side_effect=self.remember),
+            patch("totalreclaw.hermes.tools.forget", side_effect=self.forget),
+            patch("totalreclaw.embedding.get_embedding", return_value=[0.1] * 8),
+        )
+
+
+def _write(provider, vault: _Vault, *args, **kwargs) -> None:
+    p1, p2, p3 = vault.patches()
+    with p1, p2, p3:
+        provider.on_memory_write(*args, **kwargs)
+        _drain()
+
+
+def _hermes_metadata_mode(provider) -> str:
+    """Hermes 0.22.5 ``MemoryManager._provider_memory_write_metadata_mode``."""
+    import inspect
+
+    params = inspect.signature(provider.on_memory_write).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()) or "metadata" in params:
+        return "keyword"
+    accepted = sum(p.kind is not inspect.Parameter.VAR_POSITIONAL for p in params.values())
+    return "positional" if accepted >= 4 else "legacy"
+
+
 class TestOnMemoryWrite:
-    """Tests 5-6 — Background-Review write capture + dedup."""
+    """Built-in ``memory`` tool writes are mirrored into the vault."""
 
-    def test_mirrors_add_user_writes(self):
-        """Test 5a — action=add target=user gets routed through remember()."""
+    @pytest.fixture(autouse=True)
+    def _isolated_state_dirs(self, tmp_path, monkeypatch):
+        # Mirror jobs read the reconcile snapshot; keep them off real dirs.
+        monkeypatch.setenv("TOTALRECLAW_STATE_DIR", str(tmp_path / "state"))
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+
+    @pytest.mark.parametrize("target", ["user", "memory"])
+    def test_add_is_stored_for_both_targets(self, target):
+        state = _make_state()
+        vault = _Vault(state)
+        _write(TotalReclawMemoryProvider(state), vault, "add", target, "User likes mountain biking.")
+        assert vault.remembered == [{"text": "User likes mountain biking."}]
+        assert vault.forgotten == []
+
+    def test_add_accepts_dict_content_payload(self):
+        state = _make_state()
+        vault = _Vault(state)
+        _write(
+            TotalReclawMemoryProvider(state), vault, "add", "user",
+            {"text": "User runs marathons.", "type": "claim"},
+        )
+        assert vault.remembered == [{"text": "User runs marathons.", "type": "claim"}]
+
+    def test_hermes_passes_metadata_by_keyword(self):
+        provider = TotalReclawMemoryProvider(_make_state())
+        assert _hermes_metadata_mode(provider) == "keyword"
+
+    def test_metadata_accepted_positionally_and_by_keyword(self):
         state = _make_state()
         provider = TotalReclawMemoryProvider(state)
+        meta = {"write_origin": "assistant_tool", "session_id": "s1"}
+        vault = _Vault(state)
+        _write(provider, vault, "add", "user", "Fact A.", dict(meta))
+        _write(provider, vault, "add", "user", "Fact B.", metadata=dict(meta))
+        _write(provider, vault, "add", "user", "Fact C.")  # legacy 3-arg caller
+        assert [a["text"] for a in vault.remembered] == ["Fact A.", "Fact B.", "Fact C."]
 
-        called_args: list[dict] = []
-
-        async def fake_remember(args, st, **kw):
-            called_args.append(args)
-            return {"ok": True}
-
-        with patch("totalreclaw.hermes.tools.remember", side_effect=fake_remember):
-            provider.on_memory_write(
-                action="add",
-                target="user",
-                content="User likes mountain biking.",
-            )
-
-        assert len(called_args) == 1
-        assert called_args[0]["text"] == "User likes mountain biking."
-
-    def test_ignores_non_add_actions(self):
-        """Test 5b — action != add is ignored."""
+    def test_ignores_unknown_actions_and_targets(self):
         state = _make_state()
+        vault = _Vault(state)
         provider = TotalReclawMemoryProvider(state)
-
-        with patch("totalreclaw.hermes.tools.remember") as remember_mock:
-            provider.on_memory_write(action="update", target="user", content="x")
-            provider.on_memory_write(action="delete", target="user", content="x")
-
-        remember_mock.assert_not_called()
-
-    def test_ignores_non_user_targets(self):
-        """Test 5c — target != user is ignored (session-state, plugin writes)."""
-        state = _make_state()
-        provider = TotalReclawMemoryProvider(state)
-
-        with patch("totalreclaw.hermes.tools.remember") as remember_mock:
-            provider.on_memory_write(action="add", target="session", content="x")
-            provider.on_memory_write(action="add", target="plugin", content="x")
-
-        remember_mock.assert_not_called()
+        for action, target in (
+            ("update", "user"), ("delete", "user"), ("read", "memory"),
+            ("add", "session"), ("add", "plugin"), ("remove", "skills"),
+        ):
+            _write(provider, vault, action, target, "x", {"previous_content": "x"})
+        assert vault.remembered == [] and vault.forgotten == [] and vault.recall_queries == []
 
     def test_ignores_unconfigured_state(self):
-        """No creds → no mirror (early return)."""
         state = _make_state(configured=False)
         provider = TotalReclawMemoryProvider(state)
-
         with patch("totalreclaw.hermes.tools.remember") as remember_mock:
-            provider.on_memory_write(action="add", target="user", content="x")
-
+            provider.on_memory_write("add", "user", "x")
+            _drain()
         remember_mock.assert_not_called()
 
     def test_ignores_empty_or_whitespace_content(self):
-        """Empty / whitespace content → no mirror."""
+        state = _make_state()
+        vault = _Vault(state)
+        provider = TotalReclawMemoryProvider(state)
+        for content in ("", "   ", None):
+            _write(provider, vault, "add", "user", content)
+            _write(provider, vault, "replace", "user", content, {"previous_content": "Old."})
+        assert vault.remembered == [] and vault.forgotten == []
+
+    def test_idempotency_lives_in_remember(self):
+        # The provider keeps no dedup state of its own; tools.remember dedups.
+        state = _make_state()
+        vault = _Vault(state)
+        provider = TotalReclawMemoryProvider(state)
+        _write(provider, vault, "add", "user", "Same fact.")
+        _write(provider, vault, "add", "user", "Same fact.")
+        assert len(vault.remembered) == 2
+
+    # -- replace / patch ----------------------------------------------------
+
+    @pytest.mark.parametrize("action", ["replace", "patch"])
+    def test_replace_supersedes_the_matching_fact(self, action):
+        state = _make_state()
+        vault = _Vault(state, recall_results=[
+            _fact("old-1", "User prefers tea.", 0.99),
+            _fact("other", "User lives in Lisbon.", 0.30),
+        ])
+        _write(
+            TotalReclawMemoryProvider(state), vault, action, "user", "User prefers coffee.",
+            metadata={"previous_content": "User prefers tea.", "old_text": "tea"},
+        )
+        assert vault.remembered == [{"text": "User prefers coffee."}]
+        assert vault.forgotten == ["old-1"]
+        # The old fact is looked up before the new one is stored.
+        assert vault.events == ["recall", "remember", "forget"]
+        assert vault.recall_queries == ["User prefers tea."]
+
+    def test_replace_with_only_an_old_text_span_keeps_the_old_fact(self):
+        # old_text is only the search span a legacy caller sent, never the
+        # whole entry: it can't show the edit is the same fact, so keep it.
+        state = _make_state()
+        vault = _Vault(state, recall_results=[_fact("old-1", "Works at Acme", 0.5)])
+        _write(
+            TotalReclawMemoryProvider(state), vault, "replace", "memory", "Works at Initech",
+            metadata={"old_text": "Acme"},
+        )
+        assert vault.remembered == [{"text": "Works at Initech"}]
+        assert vault.forgotten == []
+
+    def test_merge_keeps_the_old_facts(self):
+        # Consolidation folds entries together to make room: not the same
+        # fact edited, so nothing is forgotten.
+        state = _make_state()
+        vault = _Vault(state, recall_results=[_fact("old-1", "User likes tea.", 0.99)])
+        _write(
+            TotalReclawMemoryProvider(state), vault, "replace", "user",
+            "User likes tea and coffee, and avoids dairy.",
+            metadata={"previous_content": "User likes tea."},
+        )
+        assert vault.remembered == [{"text": "User likes tea and coffee, and avoids dairy."}]
+        assert vault.forgotten == []
+        assert vault.recall_queries == []  # no lookup needed
+
+    def test_same_fact_threshold(self):
+        assert mp._same_fact("User prefers tea.", "User prefers green tea.")
+        assert not mp._same_fact("User likes tea.", "User likes tea and coffee.")
+        assert not mp._same_fact(
+            "User has a dog named Rex.",
+            "User has a dog named Rex and a cat named Mia; lives in Lisbon.",
+        )
+        assert not mp._same_fact("", "anything")
+
+    def test_replace_without_a_match_only_stores(self):
+        state = _make_state()
+        vault = _Vault(state, recall_results=[_fact("x", "Something unrelated.", 0.4)])
+        _write(
+            TotalReclawMemoryProvider(state), vault, "replace", "user", "New entry.",
+            metadata={"previous_content": "Old entry."},
+        )
+        assert vault.remembered == [{"text": "New entry."}]
+        assert vault.forgotten == []
+
+    def test_replace_keeps_old_fact_when_store_fails(self):
+        state = _make_state()
+        vault = _Vault(
+            state,
+            recall_results=[_fact("old-1", "Old entry.", 1.0)],
+            remember_result={"error": "relay down"},
+        )
+        _write(
+            TotalReclawMemoryProvider(state), vault, "replace", "user", "New entry.",
+            metadata={"previous_content": "Old entry."},
+        )
+        assert vault.forgotten == []
+
+    def test_replace_still_stores_when_lookup_fails(self):
+        state = _make_state()
+        vault = _Vault(state)
+        state._client.recall = AsyncMock(side_effect=RuntimeError("reads paused"))
+        _write(
+            TotalReclawMemoryProvider(state), vault, "replace", "user", "New entry.",
+            metadata={"previous_content": "Old entry."},
+        )
+        assert vault.remembered == [{"text": "New entry."}]
+        assert vault.forgotten == []
+
+    def test_replace_with_same_normalized_text_is_a_no_op(self):
+        state = _make_state()
+        vault = _Vault(state, recall_results=[_fact("old-1", "User likes tea", 1.0)])
+        _write(
+            TotalReclawMemoryProvider(state), vault, "replace", "user", "User likes tea.",
+            metadata={"previous_content": "user likes  tea"},
+        )
+        assert vault.remembered == [] and vault.forgotten == []
+
+    # -- remove ---------------------------------------------------------------
+
+    def test_remove_never_forgets(self, caplog):
+        # The built-in stores are size-capped; a removal is usually an
+        # eviction to make room, not a request to forget.
+        caplog.set_level(logging.INFO, logger="totalreclaw.hermes.memory_provider")
+        state = _make_state()
+        vault = _Vault(state, recall_results=[_fact("f1", "User's dog is called Rex.", 1.0)])
+        _write(
+            TotalReclawMemoryProvider(state), vault, "remove", "user", "",
+            metadata={"previous_content": "User's dog is called Rex.", "old_text": "Rex"},
+        )
+        assert vault.forgotten == [] and vault.remembered == []
+        assert vault.recall_queries == []
+        assert "memory mirror: remove target=user removed from Hermes profile; kept in TotalReclaw" in caplog.text
+
+    def test_remove_from_legacy_callers_never_forgets(self):
+        state = _make_state()
+        vault = _Vault(state, recall_results=[_fact("f1", "Old note", 1.0)])
+        _write(TotalReclawMemoryProvider(state), vault, "remove", "memory", "Old note")
+        assert vault.forgotten == []
+
+    def test_remove_without_entry_text_does_nothing(self):
+        state = _make_state()
+        vault = _Vault(state, recall_results=[_fact("f1", "Anything", 1.0)])
+        _write(TotalReclawMemoryProvider(state), vault, "remove", "user", "", metadata={})
+        assert vault.recall_queries == [] and vault.forgotten == []
+
+    def test_removing_the_last_copy_still_keeps_it(self):
+        state = _make_state()
+        vault = _Vault(state, recall_results=[_fact("f1", "User prefers dark mode.", 1.0)])
+        provider = TotalReclawMemoryProvider(state)
+        _write(provider, vault, "add", "user", "User prefers dark mode.")
+        _write(provider, vault, "remove", "user", "",
+               metadata={"previous_content": "User prefers dark mode."})
+        assert vault.forgotten == []
+
+    # -- conservative matching ------------------------------------------------
+
+    @staticmethod
+    def _match(results, text, embedding=(0.1,) * 8):
+        state = _make_state()
+        state._client.recall = AsyncMock(return_value=results)
+        with patch("totalreclaw.embedding.get_embedding",
+                   return_value=list(embedding) if embedding else None):
+            return mp._find_mirrored_facts(state, text)
+
+    def test_match_single_close_semantic(self):
+        assert self._match([
+            _fact("f1", "The user is vegetarian.", mp.MIRROR_MATCH_THRESHOLD + 0.01),
+            _fact("f2", "User likes pasta.", 0.70),
+        ], "User is a vegetarian") == ["f1"]
+
+    def test_match_below_threshold_is_none(self):
+        assert self._match([
+            _fact("f1", "The user is vegetarian.", mp.MIRROR_MATCH_THRESHOLD - 0.01),
+        ], "User is a vegetarian") == []
+
+    def test_match_two_close_is_ambiguous(self):
+        assert self._match([
+            _fact("f1", "User's sister is Ana.", 0.95),
+            _fact("f2", "User's sister Ana lives in Porto.", 0.94),
+        ], "User has a sister named Ana") == []
+
+    def test_match_identical_copies(self):
+        assert self._match([
+            _fact("f1", "Uses vim.", 0.99),
+            _fact("f2", "uses vim", 0.99),
+            _fact("f3", "Uses Emacs sometimes.", 0.93),
+        ], "Uses vim.") == ["f1", "f2"]
+
+    def test_match_too_many_identical_copies_is_none(self):
+        copies = [_fact(f"f{i}", "Uses vim.", 1.0) for i in range(mp._MIRROR_MAX_FORGETS + 1)]
+        assert self._match(copies, "Uses vim.") == []
+
+    def test_match_without_embedding_needs_identical_text(self):
+        assert self._match([_fact("f1", "Uses vim a lot.", 0.99)], "Uses vim.", embedding=None) == []
+
+    # -- robustness -------------------------------------------------------------
+
+    def test_returns_before_the_mirror_runs(self):
+        import threading
+
+        state = _make_state()
+        release = threading.Event()
+        started = threading.Event()
+
+        async def slow_remember(args, st, **kw):
+            started.set()
+            release.wait(5)
+            return json.dumps({"stored": True})
+
+        provider = TotalReclawMemoryProvider(state)
+        with patch("totalreclaw.hermes.tools.remember", side_effect=slow_remember):
+            provider.on_memory_write("add", "user", "Slow fact.")
+            # Back on the caller's thread while the store is still blocked.
+            assert started.wait(5)
+            assert mp._MIRROR_WORKER.drain(timeout=0.05) is False
+            release.set()
+            _drain()
+
+    def test_mirror_runs_writes_in_order(self):
+        state = _make_state()
+        vault = _Vault(state, recall_results=[_fact("f1", "User prefers tea.", 1.0)])
+        provider = TotalReclawMemoryProvider(state)
+        p1, p2, p3 = vault.patches()
+        with p1, p2, p3:
+            provider.on_memory_write("add", "user", "User prefers tea.")
+            provider.on_memory_write("replace", "user", "User prefers green tea.",
+                                     metadata={"previous_content": "User prefers tea."})
+            provider.on_memory_write("add", "user", "Entry two.")
+            _drain()
+        assert vault.events == ["remember", "recall", "remember", "forget", "remember"]
+
+    def test_no_exception_escapes(self, caplog):
         state = _make_state()
         provider = TotalReclawMemoryProvider(state)
 
-        with patch("totalreclaw.hermes.tools.remember") as remember_mock:
-            provider.on_memory_write(action="add", target="user", content="")
-            provider.on_memory_write(action="add", target="user", content="   ")
-            provider.on_memory_write(action="add", target="user", content=None)
+        async def boom(*a, **kw):
+            raise RuntimeError("relay exploded")
 
+        state._client.recall = AsyncMock(side_effect=RuntimeError("search exploded"))
+        with patch("totalreclaw.hermes.tools.remember", side_effect=boom), \
+             patch("totalreclaw.hermes.tools.forget", side_effect=boom):
+            provider.on_memory_write("add", "user", "A.")
+            provider.on_memory_write("replace", "memory", "B.", {"previous_content": "A."})
+            provider.on_memory_write("remove", "user", "", metadata={"previous_content": "B."})
+            provider.on_memory_write("add", "user", 12345)  # odd content type
+            provider.on_memory_write("add", "user", "C.", metadata="not-a-dict")
+            _drain()
+        with patch.object(mp._MIRROR_WORKER, "submit", side_effect=RuntimeError("no thread")):
+            provider.on_memory_write("add", "user", "D.")
+        assert "mirror failed" in caplog.text or "skipped" in caplog.text
+
+    def test_full_queue_drops_with_a_warning(self, caplog):
+        state = _make_state()
+        provider = TotalReclawMemoryProvider(state)
+        with patch.object(mp._MIRROR_WORKER, "submit", return_value=False), \
+             patch("totalreclaw.hermes.tools.remember") as remember_mock:
+            provider.on_memory_write("add", "user", "Dropped.")
         remember_mock.assert_not_called()
+        assert "queue full" in caplog.text
 
-    def test_accepts_dict_content_payload(self):
-        """Test 6 — content can arrive as a dict; we extract text + meta."""
+    def test_logs_never_carry_entry_text(self, caplog):
+        import logging
+
+        caplog.set_level(logging.DEBUG, logger="totalreclaw.hermes.memory_provider")
         state = _make_state()
+        vault = _Vault(state, recall_results=[
+            _fact("f1", "secret-ish detail one", 0.95),
+            _fact("f2", "secret-ish detail two", 0.95),
+        ])
         provider = TotalReclawMemoryProvider(state)
-        called_args: list[dict] = []
-
-        async def fake_remember(args, st, **kw):
-            called_args.append(args)
-            return {"ok": True}
-
-        with patch("totalreclaw.hermes.tools.remember", side_effect=fake_remember):
-            provider.on_memory_write(
-                action="add",
-                target="user",
-                content={"text": "User runs marathons.", "type": "claim"},
-            )
-
-        assert len(called_args) == 1
-        assert called_args[0]["text"] == "User runs marathons."
-        assert called_args[0]["type"] == "claim"
-
-    def test_idempotency_via_remember_dedup_path(self):
-        """Test 6 — repeated mirror calls call remember() each time; dedup
-        responsibility lives inside remember() via embedding similarity.
-
-        We verify the contract: provider doesn't track its own dedup
-        state; it delegates to the same path foreground tools use.
-        Same content twice → remember() called twice; the second is
-        dropped at the embedding-dedup layer (covered by lifecycle tests).
-        """
-        state = _make_state()
-        provider = TotalReclawMemoryProvider(state)
-        call_count = {"n": 0}
-
-        async def fake_remember(args, st, **kw):
-            call_count["n"] += 1
-            return {"ok": True}
-
-        with patch("totalreclaw.hermes.tools.remember", side_effect=fake_remember):
-            provider.on_memory_write(action="add", target="user", content="Same fact.")
-            provider.on_memory_write(action="add", target="user", content="Same fact.")
-
-        assert call_count["n"] == 2  # provider doesn't dedup; remember() does
+        _write(provider, vault, "remove", "user", "", metadata={"previous_content": "secret-ish detail"})
+        _write(provider, vault, "replace", "user", "secret-ish detail two edited",
+               metadata={"previous_content": "secret-ish detail two"})
+        assert "secret-ish" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +575,9 @@ class TestCoreLifecycle:
     def test_is_available_false_when_unconfigured(self):
         state = _make_state(configured=False)
         provider = TotalReclawMemoryProvider(state)
-        assert provider.is_available() is False
+        # No credentials on disk either (is_available re-reads them, #644).
+        with patch.object(state, "_try_auto_configure"):
+            assert provider.is_available() is False
 
     def test_initialize_sets_provider_active_and_delegates_session_start(self):
         # §5.3: initialize sets the single-driver flag and does NOT call
@@ -328,7 +614,13 @@ class TestCoreLifecycle:
         provider = TotalReclawMemoryProvider(state)
         text = provider.system_prompt_block()
         assert "TotalReclaw" in text
-        assert "active memory provider" in text
+        # Roles: the built-in is the short profile, TotalReclaw the long-term
+        # store the agent writes to; built-in writes are mirrored (#167).
+        assert "USER.md / MEMORY.md" in text
+        assert "`totalreclaw_remember`" in text and "`totalreclaw_recall`" in text
+        assert "copied to TotalReclaw automatically" in text
+        assert "`totalreclaw_forget`" in text  # explicit forgetting
+        assert len(text) < 600  # injected every turn
 
     def test_system_prompt_block_unconfigured(self):
         state = _make_state(configured=False)
@@ -717,7 +1009,8 @@ class TestCliMemoryProvider:
 
 
 class TestDisableBuiltinMemory:
-    """Strategy 1: silence Hermes' builtin local memory so TR is the sole system."""
+    """The ``--exclusive`` mode: silence Hermes' builtin local memory so TR is
+    the sole system (the default before 2.5.3rc4)."""
 
     def test_disable_sets_both_flags_fresh_config(self, tmp_path: Path):
         imp.disable_builtin_memory(hermes_home=tmp_path)
@@ -767,9 +1060,16 @@ class TestDisableBuiltinMemory:
         assert parsed["memory"]["memory_enabled"] is False
         assert parsed["memory"]["user_profile_enabled"] is False
 
-    def test_install_and_activate_disables_builtin(self, tmp_path: Path):
-        result = imp.install_and_activate(hermes_home=tmp_path, activate=True)
+    def test_disable_marks_the_switches_as_exclusive(self, tmp_path: Path):
+        imp.disable_builtin_memory(hermes_home=tmp_path)
+        text = imp.config_path(tmp_path).read_text(encoding="utf-8")
+        assert "memory_enabled: false  # totalreclaw: --exclusive\n" in text
+        assert "user_profile_enabled: false  # totalreclaw: --exclusive\n" in text
+
+    def test_install_and_activate_exclusive_disables_builtin(self, tmp_path: Path):
+        result = imp.install_and_activate(hermes_home=tmp_path, activate=True, exclusive=True)
         assert result["builtin_disabled"] is True
+        assert result["exclusive"] is True
         import yaml
         parsed = yaml.safe_load(imp.config_path(tmp_path).read_text(encoding="utf-8"))
         assert parsed["memory"]["provider"] == "totalreclaw"
@@ -855,3 +1155,34 @@ class TestNativeAutoMemory:
         provider = TotalReclawMemoryProvider(state)
         with patch("totalreclaw.hermes.hooks.ingest_turn", side_effect=RuntimeError("x")):
             provider.sync_turn("u", "a")  # must not raise
+
+
+class TestIsAvailableAfterPairing:
+    """#644 — pairing writes credentials from a sidecar after the plugin loaded.
+    Hermes asks ``is_available()`` at the start of the next turn, before any
+    hook runs the lazy reconfigure, so the check itself must pick them up."""
+
+    def test_picks_up_credentials_written_after_load(self):
+        state = _make_state(configured=False)
+        provider = TotalReclawMemoryProvider(state)
+
+        def _creds_now_on_disk():
+            state._client = MagicMock()
+
+        with patch.object(state, "_try_auto_configure", side_effect=_creds_now_on_disk) as reconf:
+            assert provider.is_available() is True
+        reconf.assert_called_once()
+
+    def test_still_false_without_credentials(self):
+        state = _make_state(configured=False)
+        provider = TotalReclawMemoryProvider(state)
+        with patch.object(state, "_try_auto_configure") as reconf:
+            assert provider.is_available() is False
+        reconf.assert_called_once()
+
+    def test_configured_state_skips_disk(self):
+        state = _make_state(configured=True)
+        provider = TotalReclawMemoryProvider(state)
+        with patch.object(state, "_try_auto_configure") as reconf:
+            assert provider.is_available() is True
+        reconf.assert_not_called()

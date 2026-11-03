@@ -104,4 +104,4 @@ The plugin self-reloads: after install it writes the gateway config it needs and
 
 The legacy `totalreclaw_*` agent tools and the `tr recall` CLI are retired — recall is `memory_search`, explicit capture is the `memory_save` tool (not a shell-out to `tr`). If a stale guide references them, follow this SKILL instead.
 
-Full guide: <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>
+Full guide: <https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/openclaw-setup.md>

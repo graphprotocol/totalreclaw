@@ -1094,8 +1094,14 @@ class TotalReclaw:
         query_embedding: Optional[list[float]] = None,
         max_candidates: int = 250,
         top_k: int = 8,
+        include_embeddings: bool = True,
     ) -> list[RerankerResult]:
-        """Search for facts matching a query. Returns ranked results."""
+        """Search for facts matching a query. Returns ranked results.
+
+        ``include_embeddings=False`` leaves ``RerankerResult.embedding`` empty
+        and skips downloading candidate vectors; with no ``query_embedding``
+        the ranking is the same (see ``search_facts``).
+        """
         await self._ensure_address()
         await self._ensure_registered()
         lsh = self._get_lsh_hasher() if query_embedding else None
@@ -1108,6 +1114,7 @@ class TotalReclaw:
             lsh_hasher=lsh,
             max_candidates=max_candidates,
             top_k=top_k,
+            include_embeddings=include_embeddings,
         )
 
     async def forget(self, fact_id: str) -> ForgetResult:

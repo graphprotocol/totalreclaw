@@ -116,7 +116,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           gh workflow run qa-autopilot.yml \
-            --repo p-diogo/totalreclaw-internal \
+            --repo graphprotocol/totalreclaw-internal \
             --ref main \
             --field target_url="$PREVIEW_URL" \
             --field pr_number="$PR_NUMBER"

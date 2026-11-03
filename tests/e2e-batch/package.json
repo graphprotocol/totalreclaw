@@ -9,7 +9,8 @@
     "test:tombstone": "npx tsx batch-e2e.ts --test D",
     "test:routing": "npx tsx batch-e2e.ts --test E",
     "test:search": "npx tsx batch-e2e.ts --test F",
-    "test:gnosis": "npx tsx gnosis-batch-cycle.test.ts"
+    "test:gnosis": "npx tsx gnosis-batch-cycle.test.ts",
+    "test:dep6": "npx tsx e2e-dep6-mcp-outer-fields.ts"
   },
   "dependencies": {
     "@scure/bip39": "^1.5.4",

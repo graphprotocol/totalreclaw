@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 **Applies to:** TotalReclaw v1 (all clients).
-**Last updated:** 2026-07-16.
+**Last updated:** 2026-10-29.
 
 v1 deliberately removes every env var that was an internal knob pretending to be user configuration. The list below is the **complete** set of env vars that end users or deployment operators should ever need to set.
 
@@ -22,6 +22,17 @@ export TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
 **Default:** none — you must set this.
 **When to override:** always set it once during setup.
 **Security:** treat this like a seed phrase. Losing it means losing access to every memory you have ever stored.
+
+### `TOTALRECLAW_EXTRACTION_MODEL`
+
+**Optional, Python client (Hermes). Operator override.** Pin the memory-extraction model for every user of this install. It must be a model of the LLM provider the agent already uses: the key, base URL and API format stay the same. Changing it needs a restart.
+
+```bash
+TOTALRECLAW_EXTRACTION_MODEL=glm-5.3-flash
+```
+
+**Default:** unset. TotalReclaw picks the model automatically: the chat model when its name marks it as small (`flash`, `mini`, `haiku`, …), otherwise a tested per-provider default (z.ai: `glm-5.3-flash` on the Coding endpoint, `glm-4.5-flash` on the Standard endpoint), moving to the next candidate and finally to the chat model if one is unavailable on the user's plan.
+**When to override:** you operate the deployment and want one fixed model. End users don't need it: they ask the agent, which calls `totalreclaw_set_extraction_model` (or run `totalreclaw extraction-model <model>`), stored in `~/.totalreclaw/settings.json` and applied on the next turn without a restart. This env var wins over that setting. Versions up to 2.5.3rc3 wrongly log `ignoring removed env var(s): TOTALRECLAW_EXTRACTION_MODEL` at startup; the override still applies.
 
 ### `TOTALRECLAW_SERVER_URL`
 
@@ -198,7 +209,7 @@ These env vars existed in earlier versions and are now silently ignored. Delete 
 | `TOTALRECLAW_CHAIN_ID` | All tiers use Gnosis mainnet; chain selection is no longer user-configurable. |
 | `TOTALRECLAW_EMBEDDING_MODEL` | Harrier-OSS-v1-270M (640d) is the only supported model in v1. |
 | `TOTALRECLAW_STORE_DEDUP` | Store-time near-duplicate detection is always on. |
-| `TOTALRECLAW_LLM_MODEL` / `TOTALRECLAW_EXTRACTION_MODEL` | LLM is picked automatically from the available provider. Model choice is not user-tunable. |
+| `TOTALRECLAW_LLM_MODEL` | The extraction LLM is picked automatically from the available provider. To pick a different extraction model, ask the agent (`totalreclaw_set_extraction_model`, Python client) or set `TOTALRECLAW_EXTRACTION_MODEL`. |
 | `TOTALRECLAW_TAXONOMY_VERSION` | v1 is the only format. No opt-in needed. |
 | `TOTALRECLAW_CLAIM_FORMAT` | Same reason — the v0 `{text, metadata}` shape is gone. |
 | `TOTALRECLAW_DIGEST_MODE` | Digest behaviour is no longer user-configurable. |
@@ -214,7 +225,7 @@ These are for deployment operators, not end users. They live in the server or re
 - [Self-hosted deployment guide](./self-hosted-deployment.md) for the full self-hosted setup (server + client config + support matrix).
 - [Self-hosted server setup](../specs/totalreclaw/server.md) for PostgreSQL deployment env vars.
 - Monitoring setup for observability env vars (internal runbook).
-- [Relay configuration](https://github.com/p-diogo/totalreclaw-relay) (private repo) for tier tuning, Pimlico, Stripe.
+- [Relay configuration](https://github.com/graphprotocol/totalreclaw-relay) (private repo) for tier tuning, Pimlico, Stripe.
 
 Self-hosted deployments can still set the following as env-var fallbacks — on managed service, the relay billing response delivers these and env vars are ignored:
 

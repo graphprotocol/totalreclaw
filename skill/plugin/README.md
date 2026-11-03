@@ -12,7 +12,7 @@ TotalReclaw gives any [OpenClaw](https://github.com/openclaw/openclaw) agent per
 
 Tell your OpenClaw agent:
 
-> "Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/install.md"
+> "Install TotalReclaw. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/install.md"
 
 Or via terminal:
 
@@ -60,7 +60,7 @@ Most AI memory solutions force a tradeoff: **good recall OR privacy**. TotalRecl
 - **Semantic Search**: LSH blind indices with client-side BM25 + cosine + RRF fusion reranking
 - **Retrieval v2 Tier 1**: Source-weighted reranking — user=1.0, user-inferred=0.9, derived/external=0.7, assistant=0.55
 - **Lifecycle Hooks**: Seamlessly integrates with OpenClaw's agent lifecycle (before_agent_start, agent_end, before_compaction, before_reset)
-- **Forget on request**: "forget that" tombstones the memory on-chain via `tr forget`. Pin / retype / re-scope curation is not available in this client yet — it lives in the MCP server and NanoClaw ([#563](https://github.com/p-diogo/totalreclaw/issues/563))
+- **Forget on request**: "forget that" tombstones the memory on-chain via `tr forget`. Pin / retype / re-scope curation is not available in this client yet — it lives in the MCP server and NanoClaw ([#563](https://github.com/graphprotocol/totalreclaw/issues/563))
 - **Portable Export**: One-click plaintext export -- no vendor lock-in
 - **Decay Management**: Automatic memory decay with configurable thresholds
 
@@ -72,7 +72,7 @@ Most AI memory solutions force a tradeoff: **good recall OR privacy**. TotalRecl
 
 Tell your OpenClaw agent:
 
-> "Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/install.md"
+> "Install TotalReclaw. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/install.md"
 
 Or via terminal:
 
@@ -316,7 +316,7 @@ The fact ID may be incorrect, or the memory may have been evicted due to decay.
 ### Setup
 
 ```bash
-git clone https://github.com/p-diogo/totalreclaw
+git clone https://github.com/graphprotocol/totalreclaw
 cd totalreclaw/skill
 npm install
 ```
@@ -361,7 +361,7 @@ MIT — see the repository LICENSE file.
 
 ## Links
 
-- [TotalReclaw Documentation](https://github.com/p-diogo/totalreclaw)
+- [TotalReclaw Documentation](https://github.com/graphprotocol/totalreclaw)
 - [npm package](https://www.npmjs.com/package/@totalreclaw/totalreclaw)
 - [OpenClaw](https://github.com/openclaw/openclaw)
-- [Issue Tracker](https://github.com/p-diogo/totalreclaw/issues)
+- [Issue Tracker](https://github.com/graphprotocol/totalreclaw/issues)

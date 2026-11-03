@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "totalreclaw-enclave"
+# Keep in lockstep with src/totalreclaw_enclave/__init__.py __version__
+# (pinned by tests/test_packaging.py::test_version_matches_pyproject).
+version = "0.1.0"
+description = "TotalReclaw Enclave — attested remote MCP service (Intel TDX / dstack)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{ name = "TotalReclaw Team" }]
+# The enclave is a deployed service, never a PyPI package. PyPI rejects any
+# upload that carries this classifier, so an accidental `twine upload` fails.
+classifiers = ["Private :: Do Not Upload"]
+dependencies = [
+    # MCP Python SDK 2.x: one MCPServer serves the 2025-11-25 and 2026-07-28
+    # eras (P0 spike Q1). 2.2.0 is the floor the spike verified; <3 because a
+    # 3.x SDK is a breaking change the ENC-4 endpoint must re-verify.
+    "mcp>=2.2,<3",
+    # ASGI app + server. mcp 2.2.0 already depends on both (starlette>=0.27,
+    # uvicorn>=0.31.1); these floors pin the versions the scaffold was written
+    # against (Starlette 1.x: lifespan-only, no on_startup/on_shutdown).
+    "starlette>=1.7,<2",
+    "uvicorn>=0.54,<1",
+    # TotalReclaw Python client (memory tools, agent/ pipeline). Release floor =
+    # the current PyPI release; in dev and CI the in-repo ../python is installed
+    # first (editable), which satisfies this floor. Later leaves raise it when
+    # they need new client APIs (ENC-6: InferenceClient + extractor metadata).
+    "totalreclaw>=2.5.2,<3",
+    # Core crypto (PyO3). Same floor as python/pyproject.toml; ENC-1 raises it
+    # when SecretPhraseHandle ships. CI builds it from rust/totalreclaw-core.
+    "totalreclaw-core>=2.6.0,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<10",
+    "pytest-asyncio>=1.0,<2",
+    # Exact pin: lint rules (G = logging-format) are part of the plaintext
+    # invariant; a ruff upgrade must be a deliberate PR.
+    "ruff==0.16.9",
+]
+
+[project.scripts]
+totalreclaw-enclave = "totalreclaw_enclave.__main__:main"
+
+# Explicit discovery (same lesson as python/pyproject.toml:140-142): never rely
+# on setuptools auto-discovery for a src layout.
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["totalreclaw_enclave*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# E/F/W: pyflakes + pycodestyle. I: import order. B: bugbear.
+# G: flake8-logging-format — G001/G002/G003/G004 forbid str.format, %, + and
+# f-strings inside logging calls, so plaintext can only reach a log line as a
+# logging *argument*, which RedactionFilter inspects (see logs.py).
+# LOG: flake8-logging (e.g. LOG015: no calls on the root logger).
+select = ["E", "F", "W", "I", "B", "G", "LOG"]
+# Line length is enforced by `ruff format`; long string literals may exceed it.
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["totalreclaw_enclave", "tests"]

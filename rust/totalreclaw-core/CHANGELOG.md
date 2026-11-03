@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **[PRD-04 DEP-3] `dedup_context` — topical dedup context for extraction prompts.** New module `dedup_context`. `build_dedup_context(topical, pinned, recent, cap) -> String` renders the "Existing memories" block a client appends to the extraction user prompt. The header is byte-identical to the block Hermes and the OpenClaw plugin built inline. There is one `[ID: <fact id>] <text>` line per memory: pinned first, then topical, then recent. Duplicate fact ids keep the first occurrence. Ids and texts are collapsed to one line, so a stored fact cannot inject a line. At most `cap` lines are kept (`DEFAULT_DEDUP_CONTEXT_CAP` = 30), and the result is `""` when nothing survives. The input element is `DedupContextItem { id, text }`, where `id` is the on-chain fact id the LLM echoes back as `existingFactId`. The v0 `Claim` was not used because it carries no id. The bindings go through the JSON wrapper `build_dedup_context_json`: WASM `buildDedupContext(topicalJson, pinnedJson, recentJson, cap)` and PyO3 `build_dedup_context(topical_json, pinned_json, recent_json, cap)`. Malformed JSON raises (`JsError` / `ValueError`), `null` is an empty section, and extra fields are ignored. The cross-language fixture `tests/parity/fixtures/dedup-context-v1.json` (14 cases, written by `generate-dedup-context-v1.py` from an independent Python reference) is checked by the Rust tests, `tests/parity/dedup-context-parity.test.ts` (WASM) and `python/tests/test_dedup_context_parity.py` (PyO3).
 
+## [2.6.1] - 2026-11-02
+
+Packaging-only release for the PyPI wheel. No source, API or output changes:
+the Rust code is the same as 2.6.0, and a fixed set of deterministic outputs
+(key derivation, auth-key hash, EOA address, blind indices, content
+fingerprint, f16 embedding encoding, LSH buckets) is byte-identical between
+the 2.6.0 `cp312` wheel and the new `abi3` wheel.
+
+### Changed
+
+- **PyPI wheels now target CPython's stable ABI (`abi3`, Python 3.10 and later).**
+  2.6.0 shipped `cp312` wheels only, so on Python 3.13 and 3.14, pip fell back to
+  the sdist and needed a Rust and C toolchain to install, which most users don't
+  have. The `python-extension` feature now enables `pyo3/abi3-py310`, so each
+  platform gets one `cp310-abi3` wheel that installs on 3.10, 3.11, 3.12, 3.13,
+  3.14 and later CPython releases without a compiler. Platforms are unchanged:
+  manylinux2014 x86_64 and aarch64, macOS arm64 and x86_64, and Windows x86_64.
+  Free-threaded (`3.14t`) builds are not covered, because the stable ABI does not
+  support them yet. The PyPI publish workflow now installs the built wheel on
+  Python 3.10 through 3.14 (Linux, macOS, Windows) before it publishes. PR CI
+  now installs the Python client binary-only on Python 3.14 against the
+  in-repo core wheel.
+- npm (`@totalreclaw/core`) and crates.io: nothing to ship. The source is
+  identical to 2.6.0, so publishing 2.6.1 there is optional.
+
 ## [2.6.0] - 2026-08-16
 
 Two additive surfaces: the `derived-bundle-v1` credential bundle (Option E

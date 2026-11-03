@@ -5,6 +5,7 @@ Combines crypto, protobuf, relay, LSH, reranker, and ERC-4337 UserOp
 construction into high-level operations.
 """
 from __future__ import annotations
+import asyncio
 import base64
 import logging
 import uuid
@@ -58,7 +59,11 @@ from .entity_extract import extract_query_entities
 # extracted to break.
 from .memory_types import V0_TO_V1_TYPE, VALID_MEMORY_TYPES
 
-# GraphQL queries — matching TypeScript search.ts
+# GraphQL queries — matching TypeScript search.ts, except that the blind-index
+# queries return fact ids only (#647): a trapdoor batch can match most of the
+# vault, and carrying every fact's blob + embedding in each batch made one
+# recall download ~10 MB. The payloads are fetched once per unique id with
+# FACTS_BY_IDS_QUERY.
 SEARCH_QUERY = """
   query SearchByBlindIndex($trapdoors: [String!]!, $owner: Bytes!, $first: Int!) {
     blindIndexes(
@@ -70,13 +75,6 @@ SEARCH_QUERY = """
       id
       fact {
         id
-        encryptedBlob
-        encryptedEmbedding
-        decayScore
-        timestamp
-        createdAt
-        isActive
-        contentFp
       }
     }
   }
@@ -93,14 +91,25 @@ PAGINATE_QUERY = """
       id
       fact {
         id
-        encryptedBlob
-        encryptedEmbedding
-        timestamp
-        createdAt
-        decayScore
-        isActive
-        contentFp
       }
+    }
+  }
+"""
+
+FACTS_BY_IDS_QUERY = """
+  query FactsByIds($ids: [ID!]!, $owner: Bytes!, $first: Int!) {
+    facts(
+      where: { id_in: $ids, owner: $owner, isActive: true }
+      first: $first
+    ) {
+      id
+      encryptedBlob
+      encryptedEmbedding
+      timestamp
+      createdAt
+      decayScore
+      isActive
+      contentFp
     }
   }
 """
@@ -124,6 +133,15 @@ BROADENED_SEARCH_QUERY = """
     }
   }
 """
+
+# Variants without ``encryptedEmbedding`` (about 3 KB of each ~3.5 KB fact)
+# for searches whose caller ranks without vectors (auto-recall, #647).
+BROADENED_SEARCH_QUERY_NO_EMBEDDING = BROADENED_SEARCH_QUERY.replace(
+    "      encryptedEmbedding\n", ""
+)
+FACTS_BY_IDS_QUERY_NO_EMBEDDING = FACTS_BY_IDS_QUERY.replace(
+    "      encryptedEmbedding\n", ""
+)
 
 FACT_BY_ID_QUERY = """
   query FactById($id: ID!) {
@@ -164,6 +182,11 @@ EXPORT_QUERY = """
 
 DEFAULT_TRAPDOOR_BATCH_SIZE = 5
 DEFAULT_PAGE_SIZE = 1000
+# Max subgraph queries in flight per search (#647). The relay caps reads per
+# hour, not per moment, so this only bounds the burst.
+SEARCH_QUERY_CONCURRENCY = 6
+# Fact payloads fetched per FACTS_BY_IDS_QUERY (~3.5 KB each).
+FACT_FETCH_BATCH_SIZE = 100
 
 
 @dataclass(frozen=True)
@@ -787,8 +810,15 @@ async def search_facts(
     lsh_hasher: Optional[LSHHasher] = None,
     max_candidates: int = 250,
     top_k: int = 8,
+    include_embeddings: bool = True,
 ) -> list[RerankerResult]:
-    """Search for facts using blind indices + reranking."""
+    """Search for facts using blind indices + reranking.
+
+    ``include_embeddings=False`` skips downloading candidate embeddings. Only
+    for callers that pass no ``query_embedding`` and don't read
+    ``RerankerResult.embedding``: without a query vector the reranker scores
+    every cosine as 0, so the ranking is identical (#647).
+    """
     # Normalize owner address to lowercase for subgraph Bytes! type
     owner = owner.lower() if owner else owner
 
@@ -824,7 +854,6 @@ async def search_facts(
         chunks.append(all_trapdoors[i : i + DEFAULT_TRAPDOOR_BATCH_SIZE])
 
     # Query subgraph via relay
-    all_facts: dict[str, dict] = {}
     # Read-denial surfacing (#662) — a generic outage (5xx/transport/401)
     # still degrades per-chunk (partial results beat none), but if *every*
     # query fails we must not silently report "vault empty". Track whether
@@ -832,22 +861,74 @@ async def search_facts(
     ok_queries = 0
     last_error: Optional[Exception] = None
 
-    for chunk in chunks:
+    # #647: a typical chat message makes ~11 trapdoor batches. Awaiting them
+    # one by one, each carrying full fact payloads, took 6-18 s on
+    # production — past Hermes' 8 s prefetch budget. Now the batches (ids
+    # only) and the broadened query go out concurrently, then each missing
+    # payload is fetched once. The first batch goes alone so a read denial
+    # still stops the fan-out after one request (#662). Ids are merged in
+    # batch order, so the candidate set matches the sequential version.
+    sem = asyncio.Semaphore(SEARCH_QUERY_CONCURRENCY)
+
+    async def _bounded(query_text: str, variables: dict) -> dict:
+        async with sem:
+            return await relay.query_subgraph(query_text, variables)
+
+    def _raise_if_fatal(results: list) -> None:
+        # Reads are paused (quota / rate limit): surface the denial rather
+        # than degrading to partial results. Anything that isn't an
+        # ``Exception`` (cancellation) propagates unchanged.
+        for result in results:
+            if isinstance(result, RelayReadBlocked) or (
+                isinstance(result, BaseException) and not isinstance(result, Exception)
+            ):
+                raise result
+
+    def _batch_page(chunk: list[str]):
+        return _bounded(
+            SEARCH_QUERY,
+            {"trapdoors": chunk, "owner": owner, "first": DEFAULT_PAGE_SIZE},
+        )
+
+    first_pages: list = list(
+        await asyncio.gather(_batch_page(chunks[0]), return_exceptions=True)
+    )
+    _raise_if_fatal(first_pages)
+    first_pages += await asyncio.gather(
+        *(_batch_page(chunk) for chunk in chunks[1:]),
+        _bounded(
+            BROADENED_SEARCH_QUERY
+            if include_embeddings
+            else BROADENED_SEARCH_QUERY_NO_EMBEDDING,
+            {"owner": owner, "first": min(max_candidates, 1000)},
+        ),
+        return_exceptions=True,
+    )
+    _raise_if_fatal(first_pages)
+    broadened = first_pages[-1]
+
+    hit_ids: dict[str, None] = {}  # ordered set: batch order, first hit wins
+    payloads: dict[str, dict] = {}
+
+    def _note_hit(fact: Optional[dict]) -> None:
+        if fact and fact.get("id"):
+            hit_ids.setdefault(fact["id"], None)
+            # A response that already carries the payload needs no re-fetch.
+            if fact.get("encryptedBlob") and fact.get("isActive", True):
+                payloads.setdefault(fact["id"], fact)
+
+    for chunk, data in zip(chunks, first_pages[:-1]):
         try:
-            data = await relay.query_subgraph(
-                SEARCH_QUERY,
-                {"trapdoors": chunk, "owner": owner, "first": DEFAULT_PAGE_SIZE},
-            )
+            if isinstance(data, Exception):
+                raise data
             entries = data.get("data", {}).get("blindIndexes", [])
             for entry in entries:
-                fact = entry.get("fact")
-                if fact and fact.get("isActive", True) and fact["id"] not in all_facts:
-                    all_facts[fact["id"]] = fact
+                _note_hit(entry.get("fact"))
 
             # Pagination for saturated batches
             if len(entries) >= DEFAULT_PAGE_SIZE:
                 last_id = ""
-                while len(all_facts) < max_candidates:
+                while len(hit_ids) < max_candidates:
                     page_data = await relay.query_subgraph(
                         PAGINATE_QUERY,
                         {
@@ -861,22 +942,12 @@ async def search_facts(
                     if not page_entries:
                         break
                     for entry in page_entries:
-                        fact = entry.get("fact")
-                        if (
-                            fact
-                            and fact.get("isActive", True)
-                            and fact["id"] not in all_facts
-                        ):
-                            all_facts[fact["id"]] = fact
+                        _note_hit(entry.get("fact"))
                     if len(page_entries) < DEFAULT_PAGE_SIZE:
                         break
                     last_id = page_entries[-1]["id"]
             ok_queries += 1
         except RelayReadBlocked:
-            # Reads are paused (quota / rate limit) — every further chunk
-            # plus the broadened query would short-circuit identically
-            # (zero HTTP, same error). Stop the fan-out at the first denial
-            # instead of re-raising N more times.
             raise
         except Exception as e:
             logger.warning("Trapdoor batch query failed (owner=%s): %s", owner, e)
@@ -886,15 +957,15 @@ async def search_facts(
     # Always run broadened search and merge — ensures vocabulary mismatches
     # (e.g., "preferences" vs "prefer") don't cause recall failures.
     # The reranker handles scoring; extra cost is ~1 GraphQL query per recall.
+    # Its payloads also spare re-fetching those facts below.
+    broadened_ids: list[str] = []
     try:
-        data = await relay.query_subgraph(
-            BROADENED_SEARCH_QUERY,
-            {"owner": owner, "first": min(max_candidates, 1000)},
-        )
-        facts_list = data.get("data", {}).get("facts", [])
-        for fact in facts_list:
-            if fact and fact.get("isActive", True) and fact["id"] not in all_facts:
-                all_facts[fact["id"]] = fact
+        if isinstance(broadened, Exception):
+            raise broadened
+        for fact in broadened.get("data", {}).get("facts", []):
+            if fact and fact.get("isActive", True):
+                payloads.setdefault(fact["id"], fact)
+                broadened_ids.append(fact["id"])
         ok_queries += 1
     except RelayReadBlocked:
         raise
@@ -902,11 +973,43 @@ async def search_facts(
         logger.warning("Broadened search failed (owner=%s): %s", owner, e)
         last_error = e
 
+    missing = [fid for fid in hit_ids if fid not in payloads]
+    id_batches = [
+        missing[i : i + FACT_FETCH_BATCH_SIZE]
+        for i in range(0, len(missing), FACT_FETCH_BATCH_SIZE)
+    ]
+    fetched = await asyncio.gather(
+        *(
+            _bounded(
+                FACTS_BY_IDS_QUERY if include_embeddings else FACTS_BY_IDS_QUERY_NO_EMBEDDING,
+                {"ids": ids, "owner": owner, "first": len(ids)},
+            )
+            for ids in id_batches
+        ),
+        return_exceptions=True,
+    )
+    _raise_if_fatal(list(fetched))
+    for data in fetched:
+        if isinstance(data, Exception):
+            # Those candidates drop out; the rest still rank.
+            logger.warning("Fact payload fetch failed (owner=%s): %s", owner, data)
+            last_error = data
+            continue
+        for fact in data.get("data", {}).get("facts", []):
+            if fact and fact.get("isActive", True):
+                payloads.setdefault(fact["id"], fact)
+
+    all_facts: dict[str, dict] = {}
+    for fid in list(hit_ids) + broadened_ids:
+        if fid in payloads and fid not in all_facts:
+            all_facts[fid] = payloads[fid]
+
     if not all_facts:
         # A total outage (every query failed generically — 5xx, transport,
         # 401) must not read as "vault empty". Only return [] when at least
-        # one query actually succeeded and simply found nothing.
-        if ok_queries == 0 and last_error is not None:
+        # one query actually succeeded and simply found nothing. Hits whose
+        # payloads all failed to load are an outage too, not an empty vault.
+        if (ok_queries == 0 or hit_ids) and last_error is not None:
             raise last_error
         return []
 

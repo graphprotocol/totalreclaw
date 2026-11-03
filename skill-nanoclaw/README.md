@@ -202,7 +202,7 @@ This makes TotalReclaw a universal memory layer across all your AI agents.
 
 - [NanoClaw Getting Started Guide](../docs/guides/nanoclaw-getting-started.md) -- detailed first-time setup walkthrough
 - [Beta Tester Guide](../docs/guides/beta-tester-guide.md) -- full reference for all platforms
-- [Main Repository](https://github.com/p-diogo/totalreclaw)
+- [Main Repository](https://github.com/graphprotocol/totalreclaw)
 - [totalreclaw.xyz](https://totalreclaw.xyz)
 
 ## License

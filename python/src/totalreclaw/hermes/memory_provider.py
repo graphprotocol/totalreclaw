@@ -34,12 +34,38 @@ already filters to "not yet extracted-from", so calling
 :func:`auto_extract` is safe: it operates on that slice, calls
 ``mark_messages_processed()`` on success, and embedding-dedup catches
 any near-duplicates that slip through.
+
+Built-in memory mirror
+----------------------
+
+TotalReclaw runs alongside Hermes' built-in memory (``USER.md`` /
+``MEMORY.md``), which Hermes always keeps next to the one external
+provider. :meth:`TotalReclawMemoryProvider.on_memory_write` copies what
+the built-in ``memory`` tool commits into the vault: adds and edits are
+stored. Nothing is forgotten for a removal, and only for an edit that is
+clearly the same fact (:func:`_same_fact`) with a confident vault match
+(:func:`_find_mirrored_facts`).
+
+Why removals never forget: the built-in stores are size-capped
+(``memory_char_limit`` 2200, ``user_char_limit`` 1375), and Hermes' memory
+tool and background review remove or merge entries to make room. A removal
+there usually means "evicted from the short profile", not "the user wants
+this forgotten"; mirroring it would delete long-term facts nobody asked to
+delete. Explicit forgetting goes through ``totalreclaw_forget``.
+
+Writes Hermes never reports (its background memory review, hand edits) are
+caught by :mod:`.memory_reconcile`, queued at ``initialize`` and
+``on_session_end`` on the same worker.
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+import queue
+import threading
+import time
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 if TYPE_CHECKING:
     from .state import PluginState
@@ -73,6 +99,241 @@ def _summarize_facts_for_compression(fact_texts: List[str]) -> str:
         "recall them via `totalreclaw_recall`.\n\n"
         f"{bullets}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Built-in memory mirror
+# ---------------------------------------------------------------------------
+
+#: Cosine similarity at or above which a vault fact counts as the same entry
+#: as a built-in memory entry whose text it doesn't match exactly. Stricter
+#: than store-time dedup (0.85): a wrong match here deletes a memory, a wrong
+#: dedup only skips a write.
+MIRROR_MATCH_THRESHOLD = 0.92
+#: Candidates fetched when looking for the fact behind a built-in entry.
+_MIRROR_MATCH_TOP_K = 5
+#: difflib ratio (normalized text) at or above which an edited built-in
+#: entry is the same fact as before, so the old vault fact is superseded.
+#: Below it (a merge of several entries, a rewrite) the old facts are kept.
+#: "prefers tea" -> "prefers green tea" is 0.85; a merge such as "likes tea"
+#: -> "likes tea and coffee" is 0.73.
+SAME_FACT_RATIO = 0.8
+#: Most facts one built-in edit may forget (identical-text copies).
+#: More than that is not a match, it's a reason to stop.
+_MIRROR_MAX_FORGETS = 3
+_MIRROR_QUEUE_MAX = 256
+#: ``memory`` = MEMORY.md (agent notes), ``user`` = USER.md (user profile).
+_MIRROR_TARGETS = frozenset({"user", "memory"})
+#: Hermes 0.22 sends a patch as a replace; older shapes may send it as is.
+_MIRROR_ACTIONS = frozenset({"add", "replace", "patch", "remove"})
+
+
+class _MirrorWorker:
+    """One daemon thread that applies mirrored writes in order.
+
+    Hermes calls ``on_memory_write`` inline from the built-in memory tool
+    (``MemoryManager.notify_memory_tool_write``), so a mirror that embeds,
+    searches and writes on chain there would stall the agent's tool call.
+    Jobs run here instead, one at a time so an add and a later replace of the
+    same entry stay in order. Daemon, so a wedged relay never blocks exit.
+    """
+
+    def __init__(self, maxsize: int = _MIRROR_QUEUE_MAX) -> None:
+        self._queue: "queue.Queue[Callable[[], None]]" = queue.Queue(maxsize=maxsize)
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+
+    def submit(self, job: Callable[[], None]) -> bool:
+        """Queue *job*; False when the queue is full (the job is dropped)."""
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(
+                    target=self._run, name="totalreclaw-memory-mirror", daemon=True
+                )
+                self._thread.start()
+        try:
+            self._queue.put_nowait(job)
+        except queue.Full:
+            return False
+        return True
+
+    def _run(self) -> None:
+        while True:
+            job = self._queue.get()
+            try:
+                job()
+            except Exception as exc:  # jobs guard themselves; belt and braces
+                logger.warning("TotalReclaw memory mirror job failed: %s", exc)
+            finally:
+                self._queue.task_done()
+
+    def drain(self, timeout: float = 10.0) -> bool:
+        """Wait until every queued job has run. True when the queue emptied."""
+        deadline = time.monotonic() + timeout
+        with self._queue.all_tasks_done:
+            while self._queue.unfinished_tasks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._queue.all_tasks_done.wait(remaining)
+        return True
+
+
+_MIRROR_WORKER = _MirrorWorker()
+
+
+def _parse_tool_result(result: Any) -> Dict[str, Any]:
+    """A ``tools.*`` handler result (JSON string or dict) as a dict."""
+    if isinstance(result, dict):
+        return result
+    try:
+        parsed = json.loads(result)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _similarity(result: Any, embedding: List[float]) -> float:
+    """Cosine similarity between a recall result and the query embedding."""
+    candidate = getattr(result, "embedding", None)
+    if candidate:
+        try:
+            from totalreclaw.reranker import cosine_similarity
+
+            return float(cosine_similarity(embedding, candidate))
+        except Exception:
+            pass
+    return float(getattr(result, "cosine_sim", None) or 0.0)
+
+
+def _same_fact(old: str, new: str) -> bool:
+    """True when built-in entry *new* is *old* edited, not a merge or a
+    different fact: normalized difflib ratio >= :data:`SAME_FACT_RATIO`."""
+    import difflib
+
+    from totalreclaw.agent.state import _normalize_for_dedup
+
+    a, b = _normalize_for_dedup(old), _normalize_for_dedup(new)
+    if not a or not b:
+        return False
+    return difflib.SequenceMatcher(None, a, b).ratio() >= SAME_FACT_RATIO
+
+
+def _find_mirrored_facts(state: "PluginState", text: str) -> List[str]:
+    """IDs of the vault facts that ARE the built-in entry *text*.
+
+    Searches the vault with the entry text (the same recall the
+    ``totalreclaw_recall`` tool runs) and accepts, in order:
+
+    1. facts whose text equals the entry once normalized (case, punctuation,
+       whitespace): all of them, up to :data:`_MIRROR_MAX_FORGETS`;
+    2. otherwise exactly ONE fact with cosine similarity at or above
+       :data:`MIRROR_MATCH_THRESHOLD`.
+
+    Anything else (no candidate, two close candidates, too many identical
+    copies, no embedding) returns ``[]``: the caller logs and skips rather
+    than guess which memory to delete.
+    """
+    from totalreclaw.agent.loop_runner import run_sync
+    from totalreclaw.agent.state import _normalize_for_dedup
+
+    client = state.get_client()
+    wanted = _normalize_for_dedup(text)
+    if not client or not wanted:
+        return []
+
+    embedding = None
+    try:
+        from totalreclaw.embedding import get_embedding
+
+        embedding = get_embedding(text)
+    except Exception as exc:
+        logger.debug("memory mirror: embed failed: %s", exc)
+
+    results = run_sync(
+        client.recall(
+            text,
+            query_embedding=embedding,
+            top_k=_MIRROR_MATCH_TOP_K,
+            max_candidates=state.get_max_candidate_pool(),
+        )
+    )
+
+    exact = [r.id for r in results if _normalize_for_dedup(r.text or "") == wanted]
+    if exact:
+        if len(exact) > _MIRROR_MAX_FORGETS:
+            logger.warning(
+                "memory mirror: %d identical facts match; not forgetting any",
+                len(exact),
+            )
+            return []
+        return exact
+
+    if embedding is None:
+        return []
+    close = [r.id for r in results if _similarity(r, embedding) >= MIRROR_MATCH_THRESHOLD]
+    if len(close) == 1:
+        return close
+    if len(close) > 1:
+        logger.info(
+            "memory mirror: %d facts are close to the entry; ambiguous, not forgetting",
+            len(close),
+        )
+    return []
+
+
+def _mirror_remember(state: "PluginState", args: Dict[str, Any]) -> bool:
+    """Store a mirrored entry through ``tools.remember``. False on error."""
+    from .tools import remember as _remember
+    from totalreclaw.agent.loop_runner import run_sync
+
+    result = _parse_tool_result(run_sync(_remember(args, state)))
+    if result.get("error"):
+        logger.warning("memory mirror: remember failed: %s", result["error"])
+        return False
+    return True
+
+
+def _mirror_forget(state: "PluginState", fact_ids: List[str]) -> int:
+    """Forget *fact_ids* through ``tools.forget``, one at a time. Returns
+    how many were forgotten."""
+    from .tools import forget as _forget
+    from totalreclaw.agent.loop_runner import run_sync
+
+    forgotten = 0
+    for fact_id in fact_ids:
+        result = _parse_tool_result(run_sync(_forget({"fact_id": fact_id}, state)))
+        if result.get("error") or not result.get("deleted", True):
+            logger.warning(
+                "memory mirror: forget %s failed: %s",
+                fact_id, result.get("error", "not deleted"),
+            )
+        else:
+            forgotten += 1
+    return forgotten
+
+
+def _queue_reconcile(state: "PluginState") -> None:
+    """Queue a built-in memory reconcile pass on the mirror worker. Never
+    raises, never blocks."""
+    try:
+        from . import memory_reconcile
+
+        if not memory_reconcile.auto_reconcile_enabled() or not state.is_configured():
+            return
+        if not _MIRROR_WORKER.submit(functools.partial(_run_reconcile, state)):
+            logger.warning("memory reconcile: queue full, pass skipped")
+    except Exception as exc:
+        logger.warning("memory reconcile: not queued: %s", exc)
+
+
+def _run_reconcile(state: "PluginState") -> None:
+    from .memory_reconcile import reconcile
+
+    try:
+        reconcile(state)
+    except Exception as exc:
+        logger.warning("memory reconcile: pass failed: %s", exc)
 
 
 # Mapping of TR tool name → handler in ``totalreclaw.hermes.tools`` or
@@ -137,7 +398,18 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         the provider active. Must not make network calls per the ABC
         contract — :meth:`PluginState.is_configured` is a pure
         in-memory check.
+
+        When the state is not configured yet, re-read the credentials file
+        first (local file read + key derivation, no network). Pairing writes
+        it from a sidecar after the plugin loaded, and Hermes asks here at
+        the start of the very next turn — before any hook has had a chance
+        to run the lazy reconfigure — so without this the first turn after
+        pairing disabled the provider for the whole session (#644).
         """
+        if not self._state.is_configured():
+            from .hooks import _maybe_reconfigure_from_disk
+
+            _maybe_reconfigure_from_disk(self._state)
         return self._state.is_configured()
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
@@ -158,6 +430,10 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         # recall/extract to us. getattr-default-False elsewhere keeps dormant
         # installs (provider never initialized) on the legacy hook path.
         self._state._provider_active = True  # type: ignore[attr-defined]
+        # Catch up on built-in memory writes that never reached
+        # on_memory_write (background review, hand edits). Queued on the
+        # mirror worker: init never waits on the vault.
+        _queue_reconcile(self._state)
 
     def shutdown(self) -> None:
         """Best-effort flush at agent exit.
@@ -250,17 +526,26 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
     def system_prompt_block(self) -> str:
         """Static text included in the system prompt when TR is active.
 
-        Reminds the agent of TR's role + how the pair flow works, so
-        unconfigured users still get pointed at it on first contact.
+        Sets the two memories' roles (built-in = short always-loaded
+        profile, TotalReclaw = long-term store the agent writes to and
+        recalls from), so "remember X" goes to ``totalreclaw_remember``
+        rather than the built-in tool (the rc.24 intent-stealing NO-GO,
+        #167). Injected every turn: keep it short. Unconfigured users get
+        pointed at the pair flow instead.
         """
         if self._state.is_configured():
             return (
                 "## TotalReclaw memory\n"
-                "TotalReclaw is the active memory provider for this user. "
-                "Memories are end-to-end encrypted, on-chain, "
-                "and portable across every AI tool the user runs. Prefer "
-                "`totalreclaw_remember` / `totalreclaw_recall` for any "
-                "user-fact, preference, directive, commitment, or episode."
+                "TotalReclaw is the user's long-term memory: end-to-end "
+                "encrypted, on-chain, and portable across every AI tool they "
+                "run. Hermes' built-in memory (USER.md / MEMORY.md) is only "
+                "the short profile loaded each session. Use "
+                "`totalreclaw_remember` to remember and `totalreclaw_recall` "
+                "to recall anything about the user. Entries saved with the "
+                "built-in `memory` tool are copied to TotalReclaw "
+                "automatically, so never save the same fact with both. To "
+                "forget something, call `totalreclaw_forget` and also remove "
+                "it from the built-in memory if it's there."
             )
         return (
             "## TotalReclaw setup pending\n"
@@ -301,7 +586,17 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         try:
             from .hooks import recall_for_query
 
-            return recall_for_query(self._state, query, top_k=self._state.get_recall_top_k()) or ""
+            started = time.monotonic()
+            context = recall_for_query(self._state, query, top_k=self._state.get_recall_top_k()) or ""
+            elapsed = time.monotonic() - started
+            # Hermes abandons a prefetch after 8 s (#647); make slow ones visible.
+            logger.log(
+                logging.INFO if elapsed >= 3.0 else logging.DEBUG,
+                "TotalReclaw prefetch took %.2fs (%d chars of context)",
+                elapsed,
+                len(context),
+            )
+            return context
         except Exception as exc:  # pragma: no cover — non-fatal per ABC contract
             logger.warning("TotalReclaw MemoryProvider.prefetch failed: %s", exc)
             return ""
@@ -376,74 +671,206 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         return _summarize_facts_for_compression(stored)
 
     def on_session_end(self, messages: Optional[List[Dict[str, Any]]] = None, **kwargs: Any) -> None:
-        """Session-boundary hook — intentionally a no-op (§5.3).
+        """Session-boundary hook: queue a built-in memory reconcile pass.
 
-        Flush + debrief is delegated to the plugin's ``on_session_finalize``
+        The pass picks up what Hermes' background memory review wrote to
+        USER.md / MEMORY.md during the session (those writes never reach
+        ``on_memory_write``). It returns at once when the files haven't
+        changed since the last pass.
+
+        Flush + debrief stay delegated to the plugin's ``on_session_finalize``
         hook, which always runs on Hermes (entry-point plugin) and is the
         single, well-tested session-end path. Running it here too would double
-        the debrief (the old "embedding-deduped alongside" band-aid is no longer
-        needed under the single-driver split).
+        the debrief (§5.3).
         """
-        return
+        _queue_reconcile(self._state)
 
-    def on_memory_write(self, action: str, target: str, content: str) -> None:
-        """Mirror Hermes-side ``add user-fact`` writes into TotalReclaw.
+    def on_memory_write(
+        self,
+        action: str,
+        target: str,
+        content: Any,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Mirror a built-in ``memory`` tool write into TotalReclaw.
 
-        Fixes the 6-denied-writes finding from Pedro's 2026-05-15 audit:
-        Hermes' Background Review runs a separate agent loop with a
-        hardcoded ``enabled_toolsets=["memory", "skills"]`` allowlist,
-        so it cannot call ``totalreclaw_remember`` directly. This hook
-        catches the equivalent writes via the MemoryProvider abstraction
-        and routes them through our standard ``remember`` path.
+        Hermes calls this after the built-in tool commits a write (and only
+        then), for either store: ``target="user"`` (USER.md) or
+        ``target="memory"`` (MEMORY.md). Declaring ``metadata`` makes Hermes
+        pass it by keyword; positional works too. Per action:
 
-        Only handles ``action="add" target="user"`` writes — other
-        action/target combinations (e.g. session-state updates,
-        plugin-internal bookkeeping) are not user memories and are
-        passed through silently.
+        - ``add``: store ``content`` via ``tools.remember`` (which dedups).
+        - ``replace`` (Hermes 0.22 also sends ``patch`` as this, with
+          ``content`` = the whole edited entry): always store the new entry.
+          Forget the old fact only when the edit is clearly the same fact
+          (:func:`_same_fact`) AND :func:`_find_mirrored_facts` matches it
+          confidently; a merge or rewrite keeps the old facts.
+        - ``remove``: nothing is forgotten. The built-in stores are capped,
+          so a removal is usually an eviction to make room; the fact stays in
+          TotalReclaw. Explicit forgetting is ``totalreclaw_forget``.
 
-        Idempotency: writes go through :func:`tools.remember`, which
-        runs cosine-embedding dedup against existing on-chain memories.
+        The old entry is ``metadata["previous_content"]`` (the full entry
+        Hermes changed) or, from older callers, ``metadata["old_text"]``.
+
+        Runs on Hermes' tool path, so the work is queued on a background
+        worker and this returns at once. Never raises.
         """
-        if action != "add" or target != "user":
+        try:
+            self._queue_memory_mirror(action, target, content, metadata)
+        except Exception as exc:
+            logger.warning(
+                "TotalReclaw on_memory_write skipped (action=%s target=%s): %s",
+                action, target, exc,
+            )
+
+    def _queue_memory_mirror(
+        self,
+        action: str,
+        target: str,
+        content: Any,
+        metadata: Optional[Dict[str, Any]],
+    ) -> None:
+        if action not in _MIRROR_ACTIONS or target not in _MIRROR_TARGETS:
             return
-
         if not self._state.is_configured():
             return
 
-        if isinstance(content, str):
-            text = content
-            extra: Dict[str, Any] = {}
-        elif isinstance(content, dict):
+        if isinstance(content, dict):
             text = str(content.get("text") or "")
-            extra = {k: v for k, v in content.items() if k != "text"}
+            extra: Dict[str, Any] = {k: v for k, v in content.items() if k != "text"}
+        elif isinstance(content, str):
+            text, extra = content, {}
+        elif content is None:
+            text, extra = "", {}
         else:
             return
+        text = text.strip()
+        meta = metadata if isinstance(metadata, dict) else {}
+        # previous_content is the full old entry; old_text only the search
+        # span a legacy caller sent (never a snapshot key).
+        exact_previous = bool(meta.get("previous_content"))
+        previous = str(meta.get("previous_content") or meta.get("old_text") or "").strip()
 
-        if not text or not text.strip():
-            return
+        if action == "add":
+            if not text:
+                return
+            args: Dict[str, Any] = {"text": text}
+            # Surface common metadata shapes a content dict might carry.
+            for src_key, dst_key in (
+                ("type", "type"),
+                ("fact_type", "type"),
+                ("scope", "scope"),
+                ("importance", "importance"),
+            ):
+                if extra.get(src_key) is not None and dst_key not in args:
+                    args[dst_key] = extra[src_key]
+            work = functools.partial(self._mirror_add, target, args)
+        elif action in ("replace", "patch"):
+            if not text:
+                return
+            work = functools.partial(
+                self._mirror_replace, target, previous, text, exact_previous
+            )
+        else:  # remove
+            old = previous or text  # a legacy caller may pass the entry as content
+            if not old:
+                logger.info(
+                    "memory mirror: remove (target=%s) carried no entry text; skipped",
+                    target,
+                )
+                return
+            work = functools.partial(
+                self._mirror_remove, target, old, exact_previous and bool(previous)
+            )
 
-        args: Dict[str, Any] = {"text": text.strip()}
-        # Surface common metadata shapes Hermes might use when the
-        # built-in memory tool serializes its write.
-        for src_key, dst_key in (
-            ("type", "type"),
-            ("fact_type", "type"),
-            ("scope", "scope"),
-            ("importance", "importance"),
-        ):
-            if src_key in extra and extra[src_key] is not None and dst_key not in args:
-                args[dst_key] = extra[src_key]
+        job = functools.partial(self._mirror_job, action, target, work)
+        if not _MIRROR_WORKER.submit(job):
+            logger.warning(
+                "memory mirror: queue full, dropped %s (target=%s)", action, target
+            )
 
-        from .tools import remember as _remember
-        from totalreclaw.agent.loop_runner import run_sync
-
+    @staticmethod
+    def _mirror_job(action: str, target: str, work: Callable[[], Any]) -> None:
         try:
-            run_sync(_remember(args, self._state))
+            work()
         except Exception as exc:
             logger.warning(
                 "TotalReclaw on_memory_write mirror failed (action=%s target=%s): %s",
                 action, target, exc,
             )
+
+    # Each mirror job keeps the reconcile snapshot in step (when there is
+    # one), so the next reconcile pass doesn't redo the write, and skips a
+    # write a pass already applied. Both run on the mirror worker, in order.
+
+    def _mirror_add(self, target: str, args: Dict[str, Any]) -> None:
+        from .memory_reconcile import snapshot_for
+
+        text = args["text"]
+        snap = snapshot_for(self._state)
+        if snap is not None and snap.exists and snap.has(target, text):
+            logger.info("memory mirror: add target=%s already reconciled; skipped", target)
+            return
+        stored = _mirror_remember(self._state, args)
+        if stored and snap is not None and snap.exists:
+            snap.add(target, text)
+            snap.save()
+        logger.info("memory mirror: add target=%s stored=%d forgotten=0", target, int(stored))
+
+    def _mirror_replace(self, target: str, previous: str, text: str, exact_previous: bool = False) -> None:
+        from totalreclaw.agent.state import _normalize_for_dedup
+        from .memory_reconcile import snapshot_for
+
+        snap = snapshot_for(self._state)
+        tracked = snap is not None and snap.exists
+
+        def _record() -> None:
+            if tracked:
+                if exact_previous:
+                    snap.discard(target, previous)
+                snap.add(target, text)
+                snap.save()
+
+        if tracked and snap.has(target, text) and not (exact_previous and snap.has(target, previous)):
+            logger.info("memory mirror: replace target=%s already reconciled; skipped", target)
+            return
+        if previous and _normalize_for_dedup(previous) == _normalize_for_dedup(text):
+            _record()  # whitespace / punctuation-only edit: same fact
+            logger.info("memory mirror: replace target=%s stored=0 forgotten=0", target)
+            return
+        supersede = bool(previous) and _same_fact(previous, text)
+        # Look the old fact up BEFORE storing the new one, so the new fact
+        # can never be the one matched and forgotten.
+        old_ids: List[str] = []
+        if supersede:
+            try:
+                old_ids = _find_mirrored_facts(self._state, previous)
+            except Exception as exc:  # e.g. reads paused: still store the new entry
+                logger.info("memory mirror: old-entry lookup failed: %s", exc)
+        if not _mirror_remember(self._state, {"text": text}):
+            # Keep the old fact rather than lose both.
+            logger.info("memory mirror: replace target=%s stored=0 forgotten=0", target)
+            return
+        forgotten = _mirror_forget(self._state, old_ids) if old_ids else 0
+        _record()
+        logger.info(
+            "memory mirror: replace target=%s stored=1 forgotten=%d%s",
+            target, forgotten,
+            "" if supersede or not previous else "; old entry kept (not the same fact)",
+        )
+
+    def _mirror_remove(self, target: str, previous: str, exact_previous: bool = False) -> None:
+        from .memory_reconcile import snapshot_for
+
+        snap = snapshot_for(self._state)
+        if snap is not None and snap.exists and exact_previous:
+            snap.discard(target, previous)
+            snap.save()
+        logger.info(
+            "memory mirror: remove target=%s removed from Hermes profile; kept in TotalReclaw",
+            target,
+        )
 
     def on_delegation(
         self,

@@ -114,9 +114,14 @@ def auto_recall(
         return None
 
     try:
+        # No query vector here, so candidate vectors would score 0 anyway:
+        # skip downloading them (#647).
         results = run_sync(
             client.recall(
-                query, top_k=top_k, max_candidates=state.get_max_candidate_pool()
+                query,
+                top_k=top_k,
+                max_candidates=state.get_max_candidate_pool(),
+                include_embeddings=False,
             )
         )
 
@@ -157,7 +162,10 @@ async def auto_recall_async(
 
     try:
         results = await client.recall(
-            query, top_k=top_k, max_candidates=state.get_max_candidate_pool()
+            query,
+            top_k=top_k,
+            max_candidates=state.get_max_candidate_pool(),
+            include_embeddings=False,
         )
         if results:
             return _format_recall_context(results)
