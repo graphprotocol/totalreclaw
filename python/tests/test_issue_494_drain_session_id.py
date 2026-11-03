@@ -2,7 +2,7 @@
 
 Split-out from #470 (Finding #7, umbrella #466). The mutation half —
 ``retype``/``set_scope``/``pin``/``unpin`` dropping ``metadata.session_id``
-— was fixed in p-diogo/totalreclaw#526. This file covers the **drain half**.
+— was fixed in graphprotocol/totalreclaw#526. This file covers the **drain half**.
 
 The bug
 -------

@@ -382,6 +382,24 @@ def run_doctor(credentials_path: Optional[Path] = None, relay_url: Optional[str]
         return 1
 
 
+def run_extraction_model(model: Optional[str]) -> int:
+    """Print the effective extraction model as JSON; with ``model``, save it
+    first (``default`` clears). Exit 2 when the setting cannot be written."""
+    from totalreclaw import user_settings
+    from totalreclaw.agent.llm_client import describe_extraction_model, detect_llm_config
+
+    if model is not None:
+        try:
+            user_settings.set_extraction_model(model)
+        except OSError as exc:
+            sys.stderr.write(f"Could not save the setting: {exc}\n")
+            return 2
+    info = describe_extraction_model(detect_llm_config())
+    info["setting"] = user_settings.get_extraction_model()
+    print(json.dumps(info))
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -457,8 +475,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # `activate-memory-provider` — make TotalReclaw the native Hermes
     # MemoryProvider (#351 §5.4). Installs the provider sidecar at the
-    # discoverable path, sets `memory.provider: totalreclaw`, and disables the
-    # builtin local store. Pairing auto-runs this; the subcommand exists for
+    # discoverable path and sets `memory.provider: totalreclaw`. Hermes'
+    # builtin local store keeps running beside it unless --exclusive is
+    # passed. Pairing auto-runs this; the subcommand exists for
     # manual / recovery / existing-user-upgrade use. (The `hermes
     # activate-memory-provider` form referenced by older setup guides was never
     # a real command — that's why activation silently never happened.)
@@ -466,9 +485,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         "activate-memory-provider",
         help=(
             "Activate TotalReclaw as the native Hermes memory provider "
-            "(installs the provider sidecar, sets memory.provider=totalreclaw, "
-            "disables the builtin store). Idempotent."
+            "(installs the provider sidecar, sets memory.provider=totalreclaw; "
+            "Hermes' built-in memory stays on). Idempotent."
         ),
+    )
+    sp_activate.add_argument(
+        "--exclusive", action="store_true", default=False,
+        help="Also turn Hermes' built-in memory off (memory_enabled / "
+             "user_profile_enabled = false), so TotalReclaw is the only "
+             "memory. Default: keep it on beside TotalReclaw.",
     )
     sp_activate.add_argument(
         "--hermes-home", type=Path, default=None,
@@ -507,6 +532,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Override the Hermes home (default: $HERMES_HOME or ~/.hermes).",
     )
 
+    # `extraction-model` — show or set the model that extracts memories.
+    # Same setting as the `totalreclaw_set_extraction_model` agent tool
+    # (~/.totalreclaw/settings.json); a running agent picks it up next turn.
+    sp_xmodel = sub.add_parser(
+        "extraction-model",
+        help=(
+            "Show the model TotalReclaw uses to extract memories (JSON), or set it: "
+            "`totalreclaw extraction-model glm-5.3-flash`; `default` returns to "
+            "automatic selection. No restart needed."
+        ),
+    )
+    sp_xmodel.add_argument(
+        "model", nargs="?", default=None,
+        help="Model id on your chat provider, or `default` to reset.",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "setup":
@@ -528,6 +569,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             result = install_and_activate(
                 hermes_home=getattr(args, "hermes_home", None),
                 force=getattr(args, "force", False),
+                exclusive=getattr(args, "exclusive", False),
             )
         except RuntimeError as exc:
             sys.stderr.write(f"{exc}\n")
@@ -537,6 +579,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"  sidecar:          {result['sidecar_path']}\n"
             f"  active provider:  {result['active_provider']}\n"
             f"  builtin disabled: {result['builtin_disabled']}\n"
+            f"  builtin restored: {result['builtin_restored']}\n"
             f"Restart the gateway for the change to take effect."
         )
         return 0
@@ -568,6 +611,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         provider = read_active_provider(getattr(args, "hermes_home", None)) or "none"
         print(_json.dumps({"provider": provider}))
         return 0
+
+    if args.command == "extraction-model":
+        return run_extraction_model(getattr(args, "model", None))
 
     # No subcommand — check whether setup has been done, then nudge accordingly.
     if not CANONICAL_CREDENTIALS_PATH.exists():

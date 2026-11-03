@@ -17,9 +17,11 @@ from __future__ import annotations
 import asyncio as _asyncio
 import json
 import logging
+import math
 import os
 import re
-from dataclasses import dataclass
+import time as _time
+from dataclasses import dataclass, replace as _dc_replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -53,6 +55,12 @@ class LLMConfig:
     base_url: str
     model: str
     api_format: str  # "openai" or "anthropic"
+    #: True when the endpoint came from the user's own configuration
+    #: (``ZAI_BASE_URL`` / ``GLM_BASE_URL``, Hermes ``config.yaml`` or
+    #: ``auth.json``) rather than our default. :func:`chat_completion` never
+    #: flips a pinned z.ai endpoint: a Coding-plan user's calls stay on the
+    #: Coding endpoint, even when it answers 1113 (its rate-limit code).
+    endpoint_pinned: bool = False
 
 
 # zai exposes TWO public endpoints:
@@ -95,9 +103,16 @@ ZAI_STANDARD_BASE_URL = "https://api.z.ai/api/paas/v4"
 # model (GLM-5.1 isn't supported on the Coding endpoint; the API
 # returns HTTP 200 with empty body).
 #
-# Override
-#   ``TOTALRECLAW_EXTRACTION_MODEL`` env var pins the extraction model
-#   verbatim. Operator escape hatch.
+# 2.5.3rc4: each provider has an ORDERED candidate list (endpoint-aware
+# for z.ai) instead of one model, and a candidate that proves unusable at
+# runtime is skipped in favour of the next one, ending at the chat model.
+# Users never have to pick a model.
+#
+# Overrides (see :func:`extraction_model_plan`)
+#   ``TOTALRECLAW_EXTRACTION_MODEL`` env var (operator), then the user's
+#   ``extraction_model`` setting in ``~/.totalreclaw/settings.json``, which
+#   the agent sets via the ``totalreclaw_set_extraction_model`` tool when
+#   the user asks for a specific model. No restart needed for the setting.
 # ---------------------------------------------------------------------------
 
 
@@ -117,54 +132,80 @@ _CHEAP_INDICATOR_RE = re.compile(
 )
 
 
-#: Per-provider default extraction model. Maps the user-configured
-#: provider name (lower-case) to the cheap / fast sibling used for
-#: auto-extraction.
+#: Ordered extraction-model candidates per provider (lower-case name).
+#: The first entry is the default; later entries are tried, in order, only
+#: when an earlier one turns out to be unusable for this user (see
+#: :func:`complete_with_extraction_fallback`). The user's chat model is
+#: always appended as the final fallback, so these lists only hold models
+#: we know exist on the provider's default endpoint today.
 #:
-#: Pinned to match ``skill/plugin/llm-client.ts::CHEAP_MODEL_BY_PROVIDER``
-#: byte-for-byte (where the same provider exists on both clients) so
-#: that the same Z.AI Coding-plan user sees the SAME extraction model
-#: across OpenClaw and Hermes — Pedro's "one provider, both clients"
-#: invariant.
+#: Must match ``skill/plugin/llm/llm-client.ts::CHEAP_MODEL_CANDIDATES_BY_PROVIDER``
+#: entry-for-entry (tests/test_extraction_model_defaults.py checks it) so
+#: the same z.ai Coding-plan user gets the SAME extraction model on
+#: OpenClaw and Hermes: Pedro's "one provider, both clients" invariant.
 #:
-#: zai: ``glm-4.5-flash`` is the proven-on-Coding-plan workhorse per
-#: prior QA cycles. Available on BOTH Coding and Standard endpoints.
+#: zai: ``glm-5.3-flash`` is the better extractor (internal benchmark,
+#: 2026-10) and is included in the Coding plan; ``glm-4.5-flash`` is the
+#: older workhorse. Standard (PAYG) endpoint: see
+#: :data:`_ZAI_STANDARD_EXTRACTION_CANDIDATES`.
 #:
-#: anthropic: ``claude-haiku-4-5-20251001`` — date-pinned to match the
-#: TS plugin (3.3.1 lifted the alias to the dated identifier per
-#: provider's deprecation policy).
+#: anthropic: ``claude-haiku-4-5-20251001`` (date-pinned, as in the TS
+#: plugin since 3.3.1).
 #:
-#: openai: ``gpt-4.1-mini`` — TS plugin's canonical pick. Cheap, fast,
-#: same JSON-output quality as gpt-4 for our extraction prompt.
+#: gemini / google: ``gemini-2.5-flash-lite``; the previous value
+#: ``gemini-flash-lite`` is not a Gemini model id. ``gemini-flash-lite-latest``
+#: (Google's alias for the newest Flash-Lite) is the fallback.
 #:
-#: gemini / google: ``gemini-flash-lite`` — Google's cheapest tier.
-#: Both keys present so legacy ``provider: google`` configs resolve.
-#:
-#: groq: ``llama-3.3-70b-versatile`` — Groq's fastest extraction-tier.
-#:
-#: openrouter: routes through Anthropic Haiku (same UX as anthropic).
-_DEFAULT_EXTRACTION_MODEL_BY_PROVIDER: dict[str, str] = {
-    "zai": "glm-4.5-flash",
-    "anthropic": "claude-haiku-4-5-20251001",
-    "openai": "gpt-4.1-mini",
-    "gemini": "gemini-flash-lite",
-    "google": "gemini-flash-lite",
-    "mistral": "mistral-small-latest",
-    "groq": "llama-3.3-70b-versatile",
-    "deepseek": "deepseek-chat",
-    "openrouter": "anthropic/claude-haiku-4-5-20251001",
-    "xai": "grok-2",
-    "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-    "cerebras": "llama3.3-70b",
+#: openrouter: OpenRouter's slug for Haiku 4.5 is ``anthropic/claude-haiku-4.5``;
+#: the dated Anthropic id stays as the second try.
+_EXTRACTION_MODEL_CANDIDATES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
+    "zai": ("glm-5.3-flash", "glm-4.5-flash"),
+    "anthropic": ("claude-haiku-4-5-20251001",),
+    "openai": ("gpt-4.1-mini",),
+    "gemini": ("gemini-2.5-flash-lite", "gemini-flash-lite-latest"),
+    "google": ("gemini-2.5-flash-lite", "gemini-flash-lite-latest"),
+    "mistral": ("mistral-small-latest",),
+    "groq": ("llama-3.3-70b-versatile",),
+    "deepseek": ("deepseek-chat",),
+    "openrouter": ("anthropic/claude-haiku-4.5", "anthropic/claude-haiku-4-5-20251001"),
+    "xai": ("grok-2",),
+    "together": ("meta-llama/Llama-3.3-70B-Instruct-Turbo",),
+    "cerebras": ("llama3.3-70b",),
 }
+
+#: z.ai Standard (PAYG) endpoint candidates. Measured 2026-10-29 with a
+#: real key: ``glm-5.3-flash`` is paid there (HTTP 429 / code 1113
+#: "Insufficient balance" without a balance) while ``glm-4.5-flash`` is
+#: free, so PAYG users are not silently billed for extraction.
+_ZAI_STANDARD_EXTRACTION_CANDIDATES: tuple[str, ...] = ("glm-4.5-flash",)
+
+#: First candidate per provider. Kept for callers and tests that want a
+#: single default; mirrors the TS plugin's ``CHEAP_MODEL_BY_PROVIDER``.
+_DEFAULT_EXTRACTION_MODEL_BY_PROVIDER: dict[str, str] = {
+    provider: candidates[0]
+    for provider, candidates in _EXTRACTION_MODEL_CANDIDATES_BY_PROVIDER.items()
+}
+
+
+def default_extraction_candidates(provider: str, base_url: str = "") -> tuple[str, ...]:
+    """Built-in candidates for ``provider`` on ``base_url`` (``()`` if none).
+
+    Only z.ai is endpoint-dependent today. An unknown or empty base URL
+    gets the provider's default list (for z.ai that is Coding, which is
+    also :func:`get_zai_base_url`'s default).
+    """
+    provider_lower = (provider or "").strip().lower()
+    if provider_lower == "zai" and (base_url or "").rstrip("/") == ZAI_STANDARD_BASE_URL:
+        return _ZAI_STANDARD_EXTRACTION_CANDIDATES
+    return _EXTRACTION_MODEL_CANDIDATES_BY_PROVIDER.get(provider_lower, ())
 
 
 def is_cheap_model(model: str) -> bool:
     """Word-boundary check: does the model name signal cheap tier?
 
-    Used by :func:`cheap_extraction_model_for` to short-circuit when
-    the user already pinned a cheap model for chat (e.g. they
-    configured ``glm-4.5-flash`` or ``gpt-4.1-mini`` directly).
+    Used by :func:`extraction_model_plan` to short-circuit when the user
+    already chats on a cheap model (e.g. ``glm-4.5-flash`` or
+    ``gpt-4.1-mini``).
 
     Word-boundary so ``gemini-2.5-pro`` is NOT mis-detected as cheap
     just because it contains ``mini``. Mirrors the rc.22 fix that
@@ -175,39 +216,163 @@ def is_cheap_model(model: str) -> bool:
     return _CHEAP_INDICATOR_RE.search(model) is not None
 
 
-def cheap_extraction_model_for(provider: str, chat_model: str) -> str:
-    """Return the same-provider cheap model to use for auto-extraction.
+@dataclass(frozen=True)
+class ExtractionModelPlan:
+    """Ordered extraction models to try, and why the first one was chosen.
 
-    Mirrors ``skill/plugin/llm-client.ts::deriveCheapModel`` —
-    Pedro's "use the OpenClaw rc.22 pattern" directive 2026-04-26.
+    ``candidates`` always ends with the user's chat model (deduplicated),
+    so the last resort is the model the user already runs. ``source`` is
+    one of ``env`` / ``setting`` / ``chat-model-cheap`` / ``default`` /
+    ``chat-model``; surfaced by ``totalreclaw_status``.
+    """
 
-    Resolution order:
+    candidates: tuple[str, ...]
+    source: str
+
+
+def _dedupe(models: list[str]) -> tuple[str, ...]:
+    out: list[str] = []
+    for m in models:
+        if m and m not in out:
+            out.append(m)
+    return tuple(out)
+
+
+def extraction_model_plan(
+    provider: str, chat_model: str, base_url: str = ""
+) -> ExtractionModelPlan:
+    """Resolve the ordered extraction-model candidates.
+
+    Precedence (first hit wins):
       1. ``TOTALRECLAW_EXTRACTION_MODEL`` env var (operator override).
-      2. If ``chat_model`` already matches the cheap-indicator pattern
-         (``flash``, ``mini``, ``haiku``, etc. at a word boundary),
-         use it as-is — no redundant swap.
-      3. Per-provider default from
-         :data:`_DEFAULT_EXTRACTION_MODEL_BY_PROVIDER`.
-      4. Fallback to the chat model when no cheap mapping exists for
-         the provider — preserves rc.23 behaviour for unknown providers
-         (better to over-pay for extraction than silently disable it).
+      2. The user's setting in ``~/.totalreclaw/settings.json`` (written by
+         the ``totalreclaw_set_extraction_model`` tool / ``totalreclaw
+         extraction-model`` CLI). Read on every call, so a change applies
+         on the next extraction without a restart.
+      3. The chat model itself when its name already signals a cheap tier
+         (``flash``, ``mini``, ``haiku``... at a word boundary).
+      4. The built-in per-provider, per-endpoint candidates
+         (:func:`default_extraction_candidates`).
+      5. The chat model, for providers with no built-in default.
 
-    Same-provider rule: the returned model is meant to swap into the
-    user's existing :class:`LLMConfig` with NO change to ``api_key``,
-    ``base_url``, or ``api_format``.
+    Every plan ends with the chat model, so an unusable pick degrades to
+    the model the user already runs rather than to no extraction.
+
+    Same-provider rule: every candidate swaps into the user's existing
+    :class:`LLMConfig` with NO change to ``api_key``, ``base_url``, or
+    ``api_format``.
     """
     override = os.environ.get("TOTALRECLAW_EXTRACTION_MODEL", "").strip()
     if override:
-        return override
+        return ExtractionModelPlan(_dedupe([override, chat_model]), "env")
+    try:
+        from totalreclaw.user_settings import get_extraction_model
+
+        setting = get_extraction_model()
+    except Exception:  # never let a settings problem break extraction
+        setting = None
+    if setting:
+        return ExtractionModelPlan(_dedupe([setting, chat_model]), "setting")
     if is_cheap_model(chat_model):
-        return chat_model
-    provider_lower = (provider or "").strip().lower()
-    cheap = _DEFAULT_EXTRACTION_MODEL_BY_PROVIDER.get(provider_lower)
-    if cheap:
-        return cheap
-    # Unknown provider — use whatever the user had configured. Better
-    # to over-pay for extraction than to silently disable it.
-    return chat_model
+        return ExtractionModelPlan(_dedupe([chat_model]), "chat-model-cheap")
+    defaults = default_extraction_candidates(provider, base_url)
+    if defaults:
+        return ExtractionModelPlan(_dedupe([*defaults, chat_model]), "default")
+    # Unknown provider: use whatever the user configured. Better to
+    # over-pay for extraction than to silently disable it.
+    return ExtractionModelPlan(_dedupe([chat_model]), "chat-model")
+
+
+def cheap_extraction_model_for(provider: str, chat_model: str, base_url: str = "") -> str:
+    """Return the first extraction candidate (see :func:`extraction_model_plan`).
+
+    Kept for existing callers; it does not consult the runtime fallback
+    state. Use :func:`resolve_extraction_model` for the model that will
+    actually be used next.
+    """
+    return extraction_model_plan(provider, chat_model, base_url).candidates[0]
+
+
+# ---------------------------------------------------------------------------
+# Runtime fallback state (2.5.3rc4).
+#
+# When an extraction candidate proves unusable for this user (model not
+# found, not permitted, no balance, persistently empty), it is skipped for
+# a while so later turns go straight to the next candidate instead of
+# re-probing. Process-local on purpose: a restart (new key, new plan)
+# re-probes once, which costs one failed round trip.
+# ---------------------------------------------------------------------------
+
+#: (base_url, model) -> monotonic time until which the model is skipped.
+#: ``math.inf`` for a definitive "this model does not exist / is not
+#: allowed"; a cooldown for signals that could be temporary.
+_UNUSABLE_EXTRACTION_MODELS: dict[tuple[str, str], float] = {}
+
+#: (base_url, model) -> consecutive empty responses.
+_EMPTY_STREAKS: dict[tuple[str, str], int] = {}
+
+#: Consecutive empty responses after which a candidate is skipped.
+_EMPTY_STREAK_LIMIT = 2
+
+#: Last (base_url, model) announced in the ``extraction_model=`` INFO line,
+#: so the gateway log shows each change once instead of every turn.
+_LAST_ANNOUNCED_EXTRACTION_MODEL: list[tuple[str, str]] = []
+
+#: How long a soft-failed candidate (1113 / empty) is skipped. z.ai also
+#: reports Coding-plan rate limits with code 1113, so it must not be a
+#: permanent downgrade; after this the preferred model is tried again.
+_SOFT_FALLBACK_COOLDOWN_S = 30 * 60.0
+
+
+def reset_extraction_fallback_state() -> None:
+    """Forget every runtime fallback decision (used when the user changes
+    the extraction model, and by tests)."""
+    _UNUSABLE_EXTRACTION_MODELS.clear()
+    _EMPTY_STREAKS.clear()
+    _LAST_ANNOUNCED_EXTRACTION_MODEL.clear()
+
+
+def _fallback_key(base_url: str, model: str) -> tuple[str, str]:
+    return ((base_url or "").rstrip("/"), model)
+
+
+def _is_skipped(base_url: str, model: str) -> bool:
+    until = _UNUSABLE_EXTRACTION_MODELS.get(_fallback_key(base_url, model))
+    if until is None:
+        return False
+    if until > _time.monotonic():
+        return True
+    del _UNUSABLE_EXTRACTION_MODELS[_fallback_key(base_url, model)]
+    return False
+
+
+def _mark_unusable(base_url: str, model: str, *, soft: bool) -> None:
+    _UNUSABLE_EXTRACTION_MODELS[_fallback_key(base_url, model)] = (
+        _time.monotonic() + _SOFT_FALLBACK_COOLDOWN_S if soft else math.inf
+    )
+
+
+def usable_extraction_candidates(
+    plan: ExtractionModelPlan, base_url: str
+) -> tuple[str, ...]:
+    """``plan.candidates`` minus the ones currently skipped. The last
+    candidate (the chat model) is never skipped."""
+    *head, last = plan.candidates
+    return tuple(m for m in head if not _is_skipped(base_url, m)) + (last,)
+
+
+def resolve_extraction_model(
+    chat_config: LLMConfig, *, provider_hint: Optional[str] = None
+) -> tuple[str, str]:
+    """``(model, source)`` that the next extraction will use.
+
+    ``source`` is the plan source, or ``fallback`` when runtime fallback
+    has moved past the plan's first choice.
+    """
+    provider = (provider_hint or _infer_provider_from_base_url(chat_config.base_url)).lower()
+    plan = extraction_model_plan(provider, chat_config.model, chat_config.base_url)
+    model = usable_extraction_candidates(plan, chat_config.base_url)[0]
+    return model, (plan.source if model == plan.candidates[0] else "fallback")
 
 
 def derive_extraction_config(
@@ -215,12 +380,9 @@ def derive_extraction_config(
 ) -> LLMConfig:
     """Build the extraction-side :class:`LLMConfig` from a chat config.
 
-    Reuses the chat config's API key + auth shape verbatim and swaps
-    the model for the same-provider cheap pick. For zai, also
-    re-resolves the base URL based on the EXTRACTION model's family
-    so a GLM-5.x chat config doesn't try to issue extraction calls
-    against the Standard endpoint when the cheap model lives on
-    Coding (or vice-versa).
+    Reuses the chat config's API key, endpoint and auth shape verbatim and
+    swaps the model for the next usable extraction candidate
+    (:func:`resolve_extraction_model`).
 
     ``provider_hint`` is required when the chat config doesn't carry
     a provider name directly (LLMConfig only has base_url + api_format).
@@ -228,33 +390,38 @@ def derive_extraction_config(
     ``read_hermes_llm_config``) can pass it through; otherwise we
     infer from base_url substring.
     """
-    provider = (provider_hint or _infer_provider_from_base_url(chat_config.base_url)).lower()
-    cheap_model = cheap_extraction_model_for(provider, chat_config.model)
-
+    model, _source = resolve_extraction_model(chat_config, provider_hint=provider_hint)
     # Same provider, same key, same api_format, SAME ENDPOINT.
     # Pedro 2026-04-26: extraction stays on the SAME endpoint the user
-    # configured for chat. The cheap pick is verified to be available
-    # on whichever endpoint the user runs (GLM-4.5-flash works on both
-    # zai Coding + Standard; gpt-4o-mini works on the OpenAI default
-    # endpoint; etc.). Re-resolving the endpoint based on model family
-    # would (a) drift away from the user's pinned ``ZAI_BASE_URL`` /
-    # ``OPENAI_BASE_URL`` override, and (b) introduce a per-call
-    # endpoint flip the user didn't ask for.
-    base_url = chat_config.base_url
+    # configured for chat. The candidates are chosen per endpoint
+    # (:func:`default_extraction_candidates`); re-resolving the endpoint
+    # from the model family would drift from the user's pinned
+    # ``ZAI_BASE_URL`` / ``OPENAI_BASE_URL`` and their key's scope.
+    return _dc_replace(chat_config, model=model)
 
-    if cheap_model != chat_config.model:
-        logger.info(
-            "TotalReclaw extraction LLM auto-selected: provider=%s "
-            "chat_model=%s -> extraction_model=%s (base_url=%s)",
-            provider, chat_config.model, cheap_model, base_url,
-        )
 
-    return LLMConfig(
-        api_key=chat_config.api_key,
-        base_url=base_url,
-        model=cheap_model,
-        api_format=chat_config.api_format,
-    )
+def describe_extraction_model(
+    chat_config: Optional[LLMConfig], *, provider_hint: Optional[str] = None
+) -> dict[str, Any]:
+    """JSON-safe summary of the extraction model for status surfaces.
+
+    ``{"model", "source", "chat_model", "candidates", "base_url"}``; ``source`` is
+    ``env`` / ``setting`` / ``chat-model-cheap`` / ``default`` /
+    ``chat-model`` / ``fallback``, or ``unavailable`` when no chat config
+    resolves (extraction is disabled). Never includes the API key.
+    """
+    if chat_config is None:
+        return {"model": None, "source": "unavailable", "chat_model": None, "candidates": [], "base_url": None}
+    provider = (provider_hint or _infer_provider_from_base_url(chat_config.base_url)).lower()
+    plan = extraction_model_plan(provider, chat_config.model, chat_config.base_url)
+    model, source = resolve_extraction_model(chat_config, provider_hint=provider_hint)
+    return {
+        "model": model,
+        "source": source,
+        "chat_model": chat_config.model,
+        "candidates": list(plan.candidates),
+        "base_url": chat_config.base_url,
+    }
 
 
 def _infer_provider_from_base_url(base_url: str) -> str:
@@ -291,14 +458,57 @@ def _infer_provider_from_base_url(base_url: str) -> str:
     return ""
 
 
+def _zai_env_base_url(env_vars: Optional[dict] = None) -> str:
+    """Explicit z.ai endpoint from ``ZAI_BASE_URL`` then ``GLM_BASE_URL``
+    (process env, or the Hermes ``.env`` dict when given), or ``""``.
+
+    ``GLM_BASE_URL`` is the variable Hermes itself reads for its zai
+    provider, so a Hermes install configured for the Coding plan
+    typically carries ``GLM_BASE_URL=https://api.z.ai/api/coding/paas/v4``.
+    """
+    env_vars = env_vars or {}
+    for name in ("ZAI_BASE_URL", "GLM_BASE_URL"):
+        raw = (env_vars.get(name) or os.environ.get(name) or "").strip()
+        if raw:
+            return raw.rstrip("/")
+    return ""
+
+
+def resolve_zai_base_url(
+    env_vars: Optional[dict] = None, config_base_url: str = ""
+) -> tuple[str, bool]:
+    """``(base_url, pinned)`` for a z.ai chat config.
+
+    Precedence:
+      1. ``ZAI_BASE_URL`` (env or Hermes ``.env``): TotalReclaw's override.
+      2. The endpoint in Hermes' own config (``config.yaml`` model
+         ``base_url``, or the ``auth.json`` credential's ``base_url``).
+      3. ``GLM_BASE_URL`` (env or Hermes ``.env``).
+      4. The Coding endpoint, NOT pinned, so the 1113 endpoint flip in
+         :func:`chat_completion` can still rescue a PAYG key that never
+         configured an endpoint.
+    """
+    env_vars = env_vars or {}
+    zai_override = (env_vars.get("ZAI_BASE_URL") or os.environ.get("ZAI_BASE_URL") or "").strip()
+    if zai_override:
+        return zai_override.rstrip("/"), True
+    if config_base_url and config_base_url.strip():
+        return config_base_url.strip().rstrip("/"), True
+    explicit = _zai_env_base_url(env_vars)
+    if explicit:
+        return explicit, True
+    return ZAI_CODING_BASE_URL, False
+
+
 def get_zai_base_url() -> str:
     """Resolve the zai base URL for CHAT (user-facing) calls.
 
     Precedence:
       1. ``ZAI_BASE_URL`` env var (explicit operator override)
-      2. Default: coding endpoint (coding-plan-biased; the rc.3
+      2. ``GLM_BASE_URL`` env var (what Hermes itself uses for zai)
+      3. Default: coding endpoint (coding-plan-biased; the rc.3
          auto-fallback hops to the standard endpoint on an
-         "Insufficient balance" 429).
+         "Insufficient balance" 429 unless the endpoint was configured).
 
     Documented in Hermes SKILL.md — GLM Coding Plan users can leave
     unset; PAYG users SHOULD set ``ZAI_BASE_URL=https://api.z.ai/api/paas/v4``
@@ -310,17 +520,14 @@ def get_zai_base_url() -> str:
     reuses the user's provider+endpoint, only the model swaps to the
     cheap pick). This helper is for chat-side resolution only.
     """
-    raw = os.environ.get("ZAI_BASE_URL", "").strip()
-    if raw:
-        return raw.rstrip("/")
-    return ZAI_CODING_BASE_URL
+    return _zai_env_base_url() or ZAI_CODING_BASE_URL
 
 
 # Provider detection: (provider, env_vars, default_base_url, api_format)
 # No hardcoded model names — uses whatever the user configured via their
-# agent framework. The TOTALRECLAW_EXTRACTION_MODEL / TOTALRECLAW_LLM_MODEL
-# user-facing override was removed in the v1 env cleanup. Model selection
-# goes through agent-framework config + `OPENAI_MODEL` / `ANTHROPIC_MODEL`.
+# agent framework. This resolves the CHAT config; the extraction model is
+# derived from it by :func:`extraction_model_plan`. (TOTALRECLAW_LLM_MODEL
+# was removed in the v1 env cleanup.)
 #
 # NOTE: zai's base URL is looked up lazily via :func:`get_zai_base_url` at
 # config-resolution time so ``ZAI_BASE_URL`` propagates without a module
@@ -550,18 +757,12 @@ def _read_hermes_llm_config_from_auth_json(
         )
         return None
 
-    # base_url precedence:
-    #   1. Explicit ZAI_BASE_URL override (matches the legacy path).
-    #   2. auth.json credential base_url (Hermes's own chosen endpoint).
-    #   3. Default for this provider.
+    # base_url precedence for zai: see :func:`resolve_zai_base_url`
+    # (ZAI_BASE_URL, then the auth.json credential's endpoint, then
+    # GLM_BASE_URL, then the Coding default).
+    endpoint_pinned = False
     if provider_lower == "zai":
-        zai_override = env_vars.get("ZAI_BASE_URL") or os.environ.get("ZAI_BASE_URL")
-        if zai_override and zai_override.strip():
-            base_url = zai_override.strip().rstrip("/")
-        elif auth_base_url:
-            base_url = auth_base_url.rstrip("/")
-        else:
-            base_url = get_zai_base_url()
+        base_url, endpoint_pinned = resolve_zai_base_url(env_vars, auth_base_url)
     else:
         _, default_base_url = _HERMES_PROVIDER_KEY_MAP.get(provider_lower, ([], ""))
         base_url = (
@@ -578,8 +779,19 @@ def _read_hermes_llm_config_from_auth_json(
         provider, model, base_url,
     )
     return LLMConfig(
-        api_key=api_key, base_url=base_url, model=model, api_format=api_format
+        api_key=api_key, base_url=base_url, model=model, api_format=api_format,
+        endpoint_pinned=endpoint_pinned,
     )
+
+
+def _extract_base_url(cfg: dict) -> str:
+    """The endpoint Hermes' ``config.yaml`` names for the active model:
+    ``model.base_url`` (Hermes' shape) or a top-level ``base_url``."""
+    model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+    for value in (model_cfg.get("base_url"), cfg.get("base_url")):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _extract_provider_and_model(cfg: dict) -> tuple[str, str]:
@@ -716,15 +928,14 @@ def read_hermes_llm_config() -> Optional[LLMConfig]:
             )
             continue
 
-        # For zai, ``ZAI_BASE_URL`` (env or Hermes .env) wins over the
-        # hardcoded coding-endpoint default so users on the PAYG tier can
-        # point at the STANDARD endpoint without the auto-fallback tax.
+        # For zai, honour the endpoint the user configured (ZAI_BASE_URL,
+        # config.yaml ``model.base_url``, GLM_BASE_URL; see
+        # :func:`resolve_zai_base_url`). Before 2.5.3rc4 only ZAI_BASE_URL
+        # was read here, so a Standard endpoint set in config.yaml or
+        # GLM_BASE_URL was silently replaced by the Coding default.
+        endpoint_pinned = False
         if provider_lower == "zai":
-            zai_override = env_vars.get("ZAI_BASE_URL") or os.environ.get("ZAI_BASE_URL")
-            if zai_override and zai_override.strip():
-                base_url = zai_override.strip().rstrip("/")
-            else:
-                base_url = get_zai_base_url()
+            base_url, endpoint_pinned = resolve_zai_base_url(env_vars, _extract_base_url(cfg))
         else:
             base_url = (
                 env_vars.get("GLM_BASE_URL")
@@ -735,10 +946,13 @@ def read_hermes_llm_config() -> Optional[LLMConfig]:
         api_format = "anthropic" if provider_lower == "anthropic" else "openai"
 
         logger.info(
-            "TotalReclaw LLM config resolved from Hermes config: %s (provider=%s, model=%s)",
-            config_path, provider, model,
+            "TotalReclaw LLM config resolved from Hermes config: %s (provider=%s, model=%s, base_url=%s)",
+            config_path, provider, model, base_url,
         )
-        return LLMConfig(api_key=api_key, base_url=base_url, model=model, api_format=api_format)
+        return LLMConfig(
+            api_key=api_key, base_url=base_url, model=model, api_format=api_format,
+            endpoint_pinned=endpoint_pinned,
+        )
 
     return None
 
@@ -757,9 +971,9 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
       3. ``~/.hermes/config.yaml`` + ``~/.hermes/.env`` (Bug #4 fix —
          Hermes users don't need to duplicate the model as an env var).
 
-    The ``TOTALRECLAW_EXTRACTION_MODEL`` / ``TOTALRECLAW_LLM_MODEL`` overrides
-    were removed in the v1 env cleanup — agent-framework config is now the
-    single source of truth for the extraction model.
+    This is the CHAT config. The extraction model is derived from it by
+    :func:`extraction_model_plan` (which honours
+    ``TOTALRECLAW_EXTRACTION_MODEL`` and the user's setting).
 
     Base URL priority:
       1. OPENAI_BASE_URL (for OpenAI-compatible custom providers)
@@ -800,26 +1014,28 @@ def detect_llm_config(configured_model: Optional[str] = None) -> Optional[LLMCon
                     continue
 
                 # For OpenAI provider, respect OPENAI_BASE_URL
+                endpoint_pinned = False
                 if _provider == "openai" and openai_base_url:
                     resolved_base_url = openai_base_url.rstrip("/")
                 elif _provider == "zai":
-                    # Respect ZAI_BASE_URL env override (rc.3). Coding-plan
-                    # users can leave unset; PAYG users set it explicitly
-                    # to https://api.z.ai/api/paas/v4.
-                    resolved_base_url = get_zai_base_url()
+                    # Respect ZAI_BASE_URL / GLM_BASE_URL (rc.3; GLM_BASE_URL
+                    # since 2.5.3rc4). Coding-plan users can leave both
+                    # unset; PAYG users set one to https://api.z.ai/api/paas/v4.
+                    resolved_base_url, endpoint_pinned = resolve_zai_base_url()
                 else:
                     resolved_base_url = default_base_url
 
                 logger.info(
                     "TotalReclaw LLM config resolved from env vars "
-                    "(provider=%s, model=%s)",
-                    _provider, model,
+                    "(provider=%s, model=%s, base_url=%s)",
+                    _provider, model, resolved_base_url,
                 )
                 return LLMConfig(
                     api_key=api_key,
                     base_url=resolved_base_url,
                     model=model,
                     api_format=api_format,
+                    endpoint_pinned=endpoint_pinned,
                 )
 
     # Last resort: try the Hermes config.yaml + .env pair. This is the
@@ -1015,12 +1231,29 @@ class LLMUpstreamOutageError(RuntimeError):
         self.last_status = last_status
 
 
+class LLMBalanceExhaustedError(RuntimeError):
+    """Raised by :func:`chat_completion` with ``fail_fast_on_balance=True``
+    when BOTH z.ai endpoints answer 429 / "Insufficient balance" (1113) for
+    the model, or a pinned Standard endpoint does. Never raised for a pinned
+    Coding endpoint, where 1113 is the plan's rate limit.
+
+    For an extraction candidate that is not the last resort, this usually
+    means the model is not included in the user's plan (e.g. glm-5.3-flash
+    on a PAYG key with no balance), so the caller moves to the next
+    candidate instead of spending the retry budget. z.ai also reports
+    Coding-plan rate limits with 1113, which is why the caller treats it
+    as a temporary skip, not a permanent one.
+    """
+
+
 async def chat_completion(
     config: LLMConfig,
     system_prompt: str,
     user_prompt: str,
     max_tokens: int = 2048,
     temperature: float = 0.0,
+    *,
+    fail_fast_on_balance: bool = False,
 ) -> Optional[str]:
     """Call LLM chat completion with retry/backoff.
 
@@ -1042,6 +1275,10 @@ async def chat_completion(
     endpoints, flips to the other endpoint and retries ONCE (separate
     from the normal retry budget). Logs the flip at INFO.
 
+    With ``fail_fast_on_balance=True`` (extraction candidates that have a
+    fallback), "Insufficient balance" on both endpoints raises
+    :class:`LLMBalanceExhaustedError` at once instead of backing off.
+
     Returns ``None`` only when the underlying API response parsed
     successfully but contained no text content (empty choice, etc.).
 
@@ -1050,15 +1287,12 @@ async def chat_completion(
     LLMUpstreamOutageError
         After all retries are exhausted on retryable errors (429 / timeout),
         or when a 429 ``Retry-After`` exceeds ``_RETRY_AFTER_CEILING_S``.
+    LLMBalanceExhaustedError
+        Only with ``fail_fast_on_balance=True``; see above.
     """
     # Make a mutable copy so the zai fallback branch can swap base_url
     # without mutating the caller's dataclass.
-    active = LLMConfig(
-        api_key=config.api_key,
-        base_url=config.base_url,
-        model=config.model,
-        api_format=config.api_format,
-    )
+    active = _dc_replace(config)
     budget_s = _default_retry_budget_s()
     cumulative_delay_s = 0.0
     zai_fallback_attempted = False
@@ -1092,9 +1326,27 @@ async def chat_completion(
                 err_body = ""
             err_str = f"{e.response.status_code}: {err_body}"
 
+            # A pinned Standard (PAYG) endpoint has no rate-limit meaning for
+            # 1113: the model is just not covered by the balance. Let the
+            # extraction walk move on instead of backing off.
+            if (
+                fail_fast_on_balance
+                and config.endpoint_pinned
+                and e.response.status_code == 429
+                and is_zai_balance_error(err_body)
+                and active.base_url.rstrip("/") == ZAI_STANDARD_BASE_URL
+            ):
+                raise LLMBalanceExhaustedError(
+                    f"z.ai reports insufficient balance for {active.model} on the Standard endpoint"
+                ) from e
+
             # ── zai "Insufficient balance" auto-fallback ──
+            # Never for a pinned endpoint: the user chose it (a Coding-plan
+            # user's 1113 is a rate limit, and Standard would bill them), so
+            # the 429 is retried on the same endpoint below.
             if (
                 not zai_fallback_attempted
+                and not config.endpoint_pinned
                 and e.response.status_code == 429
                 and is_zai_balance_error(err_body)
             ):
@@ -1112,9 +1364,38 @@ async def chat_completion(
                     # consume the normal retry budget.
                     attempt -= 1
                     continue
+            elif (
+                zai_fallback_attempted
+                and e.response.status_code == 429
+                and is_zai_balance_error(err_body)
+                and active.base_url != config.base_url
+            ):
+                if fail_fast_on_balance:
+                    raise LLMBalanceExhaustedError(
+                        f"z.ai reports insufficient balance for {active.model} "
+                        "on both endpoints"
+                    ) from e
+                # The other endpoint has no balance either, so the first
+                # "Insufficient balance" was the Coding plan's rate limit, which
+                # z.ai reports with the same 1113 body. Go back to the user's
+                # endpoint and back off like any other 429.
+                logger.info(
+                    "zai endpoint %s also reports no balance; returning to %s and backing off",
+                    active.base_url, config.base_url,
+                )
+                active.base_url = config.base_url
 
             is_retryable = e.response.status_code in (429, 502, 503, 504)
             if not is_retryable:
+                if _is_zai_base_url(active.base_url) and '"1301"' in err_body:
+                    # z.ai's content filter refused the input or output. It is
+                    # deterministic for this text, so retrying cannot help;
+                    # say so plainly instead of a bare "HTTP 400".
+                    logger.warning(
+                        "z.ai content filter refused the request (code 1301, model=%s); "
+                        "nothing is extracted from this window",
+                        active.model,
+                    )
                 # Non-retryable HTTP error (400/401/403/404/etc.) — propagate
                 # as-is so callers can distinguish config errors from outages.
                 logger.warning(
@@ -1170,11 +1451,16 @@ async def chat_completion(
                 )
             await _asyncio.sleep(delay)
             continue
-        except httpx.TimeoutException as e:
+        except httpx.TransportError as e:
+            # Timeouts and other transport failures (dropped connection, DNS,
+            # protocol error) are transient: retry them with backoff. Before
+            # this, everything but a timeout fell to the catch-all below and
+            # the extraction was dropped as an empty answer with no retry.
             last_exc = e
+            kind = "timeout" if isinstance(e, httpx.TimeoutException) else type(e).__name__
             if attempt >= _MAX_RETRIES:
                 raise LLMUpstreamOutageError(
-                    f"LLM upstream outage (timeouts on {_MAX_RETRIES} attempts)",
+                    f"LLM upstream outage ({'timeouts' if kind == 'timeout' else kind} on {_MAX_RETRIES} attempts)",
                     attempts=attempt,
                     last_status=None,
                 ) from e
@@ -1182,20 +1468,20 @@ async def chat_completion(
             delay = _BACKOFF_DELAYS[min(attempt - 1, len(_BACKOFF_DELAYS) - 1)]
             if cumulative_delay_s + delay > budget_s:
                 raise LLMUpstreamOutageError(
-                    f"LLM upstream outage (budget {budget_s:.0f}s exhausted after {attempt} attempts): timeout",
+                    f"LLM upstream outage (budget {budget_s:.0f}s exhausted after {attempt} attempts): {kind}",
                     attempts=attempt,
                     last_status=None,
                 ) from e
             cumulative_delay_s += delay
             if attempt == 1:
                 logger.warning(
-                    "LLM call timeout (attempt %d/%d, retrying in %.0fs)",
-                    attempt, _MAX_RETRIES, delay,
+                    "LLM call %s (attempt %d/%d, retrying in %.0fs)",
+                    kind, attempt, _MAX_RETRIES, delay,
                 )
             else:
                 logger.debug(
-                    "LLM retry after timeout (attempt %d/%d, wait %.0fs)",
-                    attempt, _MAX_RETRIES, delay,
+                    "LLM retry after %s (attempt %d/%d, wait %.0fs)",
+                    kind, attempt, _MAX_RETRIES, delay,
                 )
             await _asyncio.sleep(delay)
             continue
@@ -1210,6 +1496,138 @@ async def chat_completion(
         attempts=_MAX_RETRIES,
         last_status=last_status,
     )
+
+
+#: Error-body fragments meaning "this MODEL is not available to this key"
+#: (OpenAI ``model_not_found``, "does not exist" / "unknown model" wording
+#: across OpenAI-compatible providers, z.ai codes 1211 model does not
+#: exist / 1220 no permission for the model / 1221 model taken offline).
+#: Deliberately narrow: a malformed request, the content filter (1301) or
+#: a quota error must not demote a model that works.
+_MODEL_UNUSABLE_BODY_RE = re.compile(
+    r"model_not_found|model not found|does not exist|unknown model|invalid model"
+    r"|no such model|not a valid model|unsupported model|not have access"
+    r'|"1211"|"1220"|"1221"',
+    re.IGNORECASE,
+)
+
+
+def classify_model_unusable(status: int, body: str) -> Optional[str]:
+    """Short reason when an HTTP error says the extraction MODEL is unusable
+    (missing, not permitted), or ``None`` for errors that say nothing about
+    the model (bad request, rate limit, outage). Rate limits and 5xx never
+    reach here: :func:`chat_completion` retries them and raises
+    :class:`LLMUpstreamOutageError`, which is never a reason to downgrade.
+    """
+    if status == 404:
+        return "model not found (HTTP 404)"
+    if status in (401, 403):
+        return f"model not permitted (HTTP {status})"
+    if status in (400, 422) and _MODEL_UNUSABLE_BODY_RE.search(body or ""):
+        return f"model rejected (HTTP {status})"
+    return None
+
+
+def _log_extraction_fallback(model: str, next_model: str, base_url: str, reason: str) -> None:
+    logger.info(
+        "TotalReclaw extraction model %s unusable on %s (%s); falling back to %s",
+        model, base_url, reason, next_model,
+    )
+
+
+async def complete_with_extraction_fallback(
+    chat_config: LLMConfig,
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    provider_hint: Optional[str] = None,
+    completion: Any = None,
+) -> tuple[Optional[str], LLMConfig]:
+    """Run an extraction completion, walking the extraction candidates.
+
+    Tries each usable candidate from :func:`extraction_model_plan` in
+    order (same key, same endpoint as the chat config) and returns
+    ``(response, config_that_answered)``. Moves to the next candidate when
+    the current one is unusable:
+
+    * HTTP 404, 401/403, or a 400/422 naming the model as unknown / not
+      permitted: skipped for the rest of the process;
+    * z.ai "Insufficient balance" (1113) on both endpoints, or
+      :data:`_EMPTY_STREAK_LIMIT` empty answers in a row: skipped for
+      :data:`_SOFT_FALLBACK_COOLDOWN_S`, then tried again;
+    * a single empty answer: the next candidate is tried for this call only
+      (the #376 recovery), without skipping the model.
+
+    Transient failures (timeouts, 5xx, ordinary rate limits) propagate
+    from :func:`chat_completion` unchanged and never downgrade anything.
+    The last candidate is the chat model; its errors propagate as-is.
+
+    ``completion`` defaults to :func:`chat_completion`; callers pass their
+    own module-level reference so tests can patch it there.
+    """
+    call = completion or chat_completion
+    base_url = chat_config.base_url
+    provider = (provider_hint or _infer_provider_from_base_url(base_url)).lower()
+    plan = extraction_model_plan(provider, chat_config.model, base_url)
+    candidates = usable_extraction_candidates(plan, base_url)
+
+    config = chat_config
+    for i, model in enumerate(candidates):
+        config = _dc_replace(chat_config, model=model)
+        next_model = candidates[i + 1] if i + 1 < len(candidates) else None
+        kwargs: dict[str, Any] = {}
+        if next_model is not None and _is_zai_base_url(base_url):
+            kwargs["fail_fast_on_balance"] = True
+        try:
+            response = await call(config, system_prompt, user_prompt, **kwargs)
+        except LLMBalanceExhaustedError:
+            if next_model is None:  # pragma: no cover — only raised when asked
+                raise
+            _mark_unusable(base_url, model, soft=True)
+            _log_extraction_fallback(model, next_model, base_url, "insufficient balance (z.ai 1113)")
+            continue
+        except httpx.HTTPStatusError as e:
+            try:
+                body = e.response.text or ""
+            except Exception:
+                body = ""
+            reason = classify_model_unusable(e.response.status_code, body)
+            if reason is None or next_model is None:
+                raise
+            _mark_unusable(base_url, model, soft=False)
+            _log_extraction_fallback(model, next_model, base_url, reason)
+            continue
+
+        key = _fallback_key(base_url, model)
+        if response:
+            _EMPTY_STREAKS.pop(key, None)
+            if _LAST_ANNOUNCED_EXTRACTION_MODEL != [key]:
+                _LAST_ANNOUNCED_EXTRACTION_MODEL[:] = [key]
+                logger.info(
+                    "TotalReclaw extraction LLM: provider=%s chat_model=%s -> "
+                    "extraction_model=%s (source=%s, base_url=%s)",
+                    provider or "unknown", chat_config.model, model,
+                    plan.source if model == plan.candidates[0] else "fallback",
+                    base_url,
+                )
+            return response, config
+        if next_model is None:
+            return response, config
+        streak = _EMPTY_STREAKS.get(key, 0) + 1
+        if streak >= _EMPTY_STREAK_LIMIT:
+            _EMPTY_STREAKS.pop(key, None)
+            _mark_unusable(base_url, model, soft=True)
+            _log_extraction_fallback(
+                model, next_model, base_url, f"empty response {streak} times in a row"
+            )
+        else:
+            _EMPTY_STREAKS[key] = streak
+            logger.info(
+                "TotalReclaw extraction model %s returned empty content; "
+                "retrying this turn with %s",
+                model, next_model,
+            )
+    return None, config
 
 
 #: Providers that return a base_url containing one of these substrings
@@ -1249,6 +1667,26 @@ def _supports_json_object_response_format(base_url: str) -> bool:
         return False
     lower = base_url.lower()
     return any(hint in lower for hint in _JSON_OBJECT_PROVIDER_HINTS)
+
+
+#: z.ai models that refuse ``thinking: {"type": "disabled"}`` (400, code 1210:
+#: "This model always engages in thinking and cannot be disabled"), learned at
+#: runtime so only the first call per process pays the rejected round-trip
+#: (GLM 5.3 Flash is the first such model).
+_ZAI_ALWAYS_THINKING_MODELS: set[str] = set()
+
+#: Completion budget floor for always-thinking models: their reasoning tokens
+#: count against ``max_completion_tokens``, so the extraction-sized budget
+#: would let the reasoning pass crowd out the answer.
+_ALWAYS_THINKING_MIN_TOKENS = 8192
+
+
+def _is_zai_thinking_rejected(resp: httpx.Response) -> bool:
+    """True for z.ai's 400/1210 answer to a request that disabled thinking."""
+    if resp.status_code != 400:
+        return False
+    text = resp.text or ""
+    return "1210" in text and "thinking" in text.lower()
 
 
 def _is_zai_base_url(base_url: str) -> bool:
@@ -1341,17 +1779,31 @@ async def _call_openai(
         # quota-exhausted instant-empty → surface an actionable error) is
         # tracked separately. The recovery + rich diag below cover any
         # residual empty-content case.
-        body["thinking"] = {"type": "disabled"}
+        #
+        # Models that always think (GLM 5.3 Flash) reject the field with
+        # 400/1210; for those we send the server default instead.
+        if config.model in _ZAI_ALWAYS_THINKING_MODELS:
+            body["max_completion_tokens"] = max(max_tokens, _ALWAYS_THINKING_MIN_TOKENS)
+        else:
+            body["thinking"] = {"type": "disabled"}
 
     async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
-        resp = await client.post(
-            f"{config.base_url}/chat/completions",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {config.api_key}",
-            },
-            json=body,
-        )
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {config.api_key}",
+        }
+        resp = await client.post(f"{config.base_url}/chat/completions", headers=headers, json=body)
+        if "thinking" in body and _is_zai_thinking_rejected(resp):
+            # The model cannot turn thinking off. Retry once with the
+            # server default and remember the model for later calls.
+            _ZAI_ALWAYS_THINKING_MODELS.add(config.model)
+            logger.info(
+                "z.ai model %s cannot disable thinking; retrying with the server default",
+                config.model,
+            )
+            del body["thinking"]
+            body["max_completion_tokens"] = max(max_tokens, _ALWAYS_THINKING_MIN_TOKENS)
+            resp = await client.post(f"{config.base_url}/chat/completions", headers=headers, json=body)
         resp.raise_for_status()
         data = resp.json()
         choice = (data.get("choices") or [{}])[0]

@@ -184,6 +184,8 @@ The 20×32 parameter choice was tuned on real data in `lsh-tuning.md` for 98.1% 
 
 All four kinds of blind index land in the same `blind_indices: Vec<String>` field on `PreparedFact`. The subgraph indexes them in a single flat `BlindIndex` table, so the query path does not need to know which kind it is filtering on.
 
+**What blind indices reveal.** Word, stem and entity trapdoors are unkeyed SHA-256, so they only hide text from someone who doesn't guess it. Hashing a wordlist and comparing recovers which words a fact contains, and because indices are emitted in token order (`blind::generate_blind_indices`), often the gist of the sentence. They are public on-chain, and query trapdoors reach subgraph indexers. LSH bucket hashes depend on the per-user `lshSeed`, so they can't be tested this way. Keyed (HMAC) word indices are planned.
+
 ---
 
 ## Phase 4 — content fingerprint (exact-dup detection)
@@ -206,12 +208,14 @@ FactPayload {
   encrypted_blob_hex
   blind_indices    = repeated string
   decay_score      = double        // importance normalized to [0,1]
-  source           = string
+  source           = string        // client struct only: NOT encoded (outer field 9 left the wire in v3)
   content_fp       = string
-  agent_id         = string
+  agent_id         = string        // client struct only: NOT encoded (outer field 11 left the wire in v3)
   encrypted_embedding = string     // optional
 }
 ```
+
+`source` and `agent_id` exist on the client-side structs but are never encoded. Provenance travels only inside the encrypted blob (field 4), so the outer protobuf carries fields 1-8, 10 and 13 (12 is assigned by the subgraph). Every client encoder is pinned to this layout by `tests/parity/fixtures/outer-protobuf-v1.json`: the Rust core, Python, TS/WASM and the MCP server (MCP since PRD-04 F8 / DEP-6).
 
 The DataEdge contract at `0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca` (same address on every chain, deployed via Pimlico's CREATE2 factory) has a `fallback()` function that just emits `Log(bytes)` carrying whatever data it receives. The subgraph indexer listens for that event and decodes the protobuf client-side.
 

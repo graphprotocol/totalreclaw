@@ -140,7 +140,7 @@ const CHEAP_INDICATORS = ['flash', 'mini', 'nano', 'haiku', 'small', 'lite', 'fa
  * was passing gemini-2.5-pro through unchanged because `.includes('mini')`
  * matched the letters inside "gemini"). The canonical cheap-tier naming
  * conventions put the indicator at a hyphen boundary or end of string:
- *   gpt-4.1-mini, claude-haiku-4-5, gemini-flash-lite, glm-4.5-flash, o4-mini
+ *   gpt-4.1-mini, claude-haiku-4-5, gemini-2.5-flash-lite, glm-4.5-flash, o4-mini
  */
 const CHEAP_INDICATOR_RE = new RegExp(
   `(?:^|[-_/.])(?:${CHEAP_INDICATORS.join('|')})(?:[-_/.]|$)`,
@@ -148,7 +148,7 @@ const CHEAP_INDICATOR_RE = new RegExp(
 );
 
 /**
- * LAST-RESORT default cheap extraction model per provider.
+ * LAST-RESORT cheap extraction model candidates per provider, in order.
  *
  * Pedro directive (2026-07-20, internal#502 follow-up): this table is NOT the
  * production default. The extraction model must be the cheapest of the USER'S
@@ -160,23 +160,60 @@ const CHEAP_INDICATOR_RE = new RegExp(
  * best-effort fallback so extraction still has a model id to send. Exported
  * so callers that resolve a provider WITHOUT a model list can still pick one.
  *
- * 3.3.1 update: haiku is now `claude-haiku-4-5-20251001` (latest cheap
- * Claude as of 2026-04). glm-4.5-flash stays the zai FALLBACK (not default).
+ * Must match the Python client's
+ * `python/src/totalreclaw/agent/llm_client.py::_EXTRACTION_MODEL_CANDIDATES_BY_PROVIDER`
+ * entry-for-entry (python/tests/test_extraction_model_defaults.py parses this
+ * file to check), so one z.ai user gets the same extraction model on OpenClaw
+ * and Hermes. The Python client walks the list at runtime when a candidate is
+ * unusable; this plugin uses the first entry.
+ *
+ * 2.5.3rc4 refresh (shared with the Python client):
+ *   - zai: glm-5.3-flash (included in the Coding plan, better extractor in the
+ *     internal benchmark) before glm-4.5-flash. Standard (PAYG) endpoint: see
+ *     `ZAI_STANDARD_CHEAP_MODEL_CANDIDATES`.
+ *   - gemini/google: gemini-2.5-flash-lite (`gemini-flash-lite` is not a
+ *     Gemini model id), then the `gemini-flash-lite-latest` alias.
+ *   - openrouter: OpenRouter's slug `anthropic/claude-haiku-4.5`, then the
+ *     dated Anthropic id.
  */
-export const CHEAP_MODEL_BY_PROVIDER: Record<string, string> = {
-  zai: 'glm-4.5-flash',
-  anthropic: 'claude-haiku-4-5-20251001',
-  openai: 'gpt-4.1-mini',
-  gemini: 'gemini-flash-lite',
-  google: 'gemini-flash-lite',
-  mistral: 'mistral-small-latest',
-  groq: 'llama-3.3-70b-versatile',
-  deepseek: 'deepseek-chat',
-  openrouter: 'anthropic/claude-haiku-4-5-20251001',
-  xai: 'grok-2',
-  together: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
-  cerebras: 'llama3.3-70b',
+export const CHEAP_MODEL_CANDIDATES_BY_PROVIDER: Record<string, readonly string[]> = {
+  zai: ['glm-5.3-flash', 'glm-4.5-flash'],
+  anthropic: ['claude-haiku-4-5-20251001'],
+  openai: ['gpt-4.1-mini'],
+  gemini: ['gemini-2.5-flash-lite', 'gemini-flash-lite-latest'],
+  google: ['gemini-2.5-flash-lite', 'gemini-flash-lite-latest'],
+  mistral: ['mistral-small-latest'],
+  groq: ['llama-3.3-70b-versatile'],
+  deepseek: ['deepseek-chat'],
+  openrouter: ['anthropic/claude-haiku-4.5', 'anthropic/claude-haiku-4-5-20251001'],
+  xai: ['grok-2'],
+  together: ['meta-llama/Llama-3.3-70B-Instruct-Turbo'],
+  cerebras: ['llama3.3-70b'],
 };
+
+/**
+ * z.ai Standard (PAYG) endpoint candidates. Measured 2026-10-29: glm-5.3-flash
+ * is paid there (429 / code 1113 "Insufficient balance" without a balance);
+ * glm-4.5-flash is free.
+ */
+export const ZAI_STANDARD_CHEAP_MODEL_CANDIDATES: readonly string[] = ['glm-4.5-flash'];
+
+/**
+ * Candidates for `provider` on `baseUrl` (empty when there is no default).
+ * Only z.ai is endpoint-dependent; an unknown base URL gets the provider's
+ * default list (Coding, for z.ai).
+ */
+export function cheapModelCandidatesFor(provider: string, baseUrl?: string): readonly string[] {
+  if (provider === 'zai' && (baseUrl ?? '').replace(/\/+$/, '') === ZAI_STANDARD_BASE_URL) {
+    return ZAI_STANDARD_CHEAP_MODEL_CANDIDATES;
+  }
+  return CHEAP_MODEL_CANDIDATES_BY_PROVIDER[provider] ?? [];
+}
+
+/** First candidate per provider (default endpoint). */
+export const CHEAP_MODEL_BY_PROVIDER: Record<string, string> = Object.fromEntries(
+  Object.entries(CHEAP_MODEL_CANDIDATES_BY_PROVIDER).map(([provider, candidates]) => [provider, candidates[0]]),
+);
 
 /**
  * Derive a cheap/fast model suitable for fact extraction, given the user's
@@ -190,7 +227,7 @@ export const CHEAP_MODEL_BY_PROVIDER: Record<string, string> = {
  * word-boundary logic and may be imported externally; prefer
  * `resolveExtractionModel` for new callers.
  */
-export function deriveCheapModel(provider: string, primaryModel: string): string {
+export function deriveCheapModel(provider: string, primaryModel: string, baseUrl?: string): string {
   // If already on a cheap model, use it as-is.
   // Word-boundary match to avoid false positives (see CHEAP_INDICATOR_RE).
   if (CHEAP_INDICATOR_RE.test(primaryModel)) {
@@ -198,7 +235,7 @@ export function deriveCheapModel(provider: string, primaryModel: string): string
   }
 
   // Derive based on provider naming conventions
-  const fromTable = CHEAP_MODEL_BY_PROVIDER[provider];
+  const fromTable = cheapModelCandidatesFor(provider, baseUrl)[0];
   if (fromTable) return fromTable;
 
   // Fallback: use the primary model (best-effort — caller may still work)
@@ -285,6 +322,8 @@ export function resolveExtractionModel(
     modelOverride?: string;
     primaryModelHint?: string;
     configuredModels?: ReadonlyArray<ConfiguredModel>;
+    /** Endpoint the model will be called on (z.ai candidates differ per endpoint). */
+    baseUrl?: string;
   },
 ): { model: string | null; reason: string } {
   if (opts.modelOverride) {
@@ -297,7 +336,7 @@ export function resolveExtractionModel(
   if (fromConfig) {
     return { model: fromConfig, reason: 'cheapest of configured models' };
   }
-  const fromTable = CHEAP_MODEL_BY_PROVIDER[provider];
+  const fromTable = cheapModelCandidatesFor(provider, opts.baseUrl)[0];
   if (fromTable) {
     return { model: fromTable, reason: 'hardcoded table (fallback — no cheap model in config)' };
   }
@@ -365,6 +404,7 @@ function buildConfigForProvider(
     modelOverride: opts.modelOverride,
     primaryModelHint: opts.primaryModelHint,
     configuredModels: opts.configuredModels,
+    baseUrl,
   });
   if (!model) return null;
   const apiFormat: 'openai' | 'anthropic' =
@@ -653,13 +693,12 @@ export function resolveLLMConfig(): LLMClientConfig | null {
   const zaiKey = CONFIG.llmApiKeys.zai;
   const openaiKey = CONFIG.llmApiKeys.openai;
 
-  const model = zaiKey ? 'glm-4.5-flash' : 'gpt-4.1-mini';
-
   if (zaiKey) {
+    const baseUrl = getZaiBaseUrl();
     return {
       apiKey: zaiKey,
-      baseUrl: getZaiBaseUrl(),
-      model,
+      baseUrl,
+      model: cheapModelCandidatesFor('zai', baseUrl)[0],
       apiFormat: 'openai',
     };
   }
@@ -668,7 +707,7 @@ export function resolveLLMConfig(): LLMClientConfig | null {
     return {
       apiKey: openaiKey,
       baseUrl: 'https://api.openai.com/v1',
-      model,
+      model: CHEAP_MODEL_BY_PROVIDER.openai,
       apiFormat: 'openai',
     };
   }

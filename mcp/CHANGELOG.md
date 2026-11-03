@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **On-chain writes no longer carry plaintext provenance tags (PRD-04 F8, DEP-6).** The outer protobuf encoder wrote field 9 (`source`, e.g. `mcp_remember`, `mcp_forget`, `mcp_pin`) and field 11 (`agent_id`, `mcp-server`) as plaintext calldata on every managed-service write. Affected writes were remember, store-time supersede tombstones, forget, debrief, pin/unpin and retype/set-scope, in both phrase and bundle mode. Core and the Python client dropped both fields from the wire in v3. The MCP encoder, now `src/subgraph/protobuf.ts` and re-exported from `src/subgraph/store.ts`, matches them byte-for-byte. Nothing else in the payload changes. The subgraph never indexed these fields, so recall, export and the SPA are unaffected. Facts written by earlier versions keep the tags on-chain, because on-chain data cannot be changed; the tags are fixed write-path labels and never contain memory content. Pinned by the cross-language fixture `tests/parity/fixtures/outer-protobuf-v1.json`: the Rust, Python, WASM and MCP legs ABI-decode the calldata and assert both fields are absent. Staging E2E harness: `tests/e2e-batch/e2e-dep6-mcp-outer-fields.ts`.
+
 ## [3.5.0] - 2026-08-16
 
 Minor release — R3 of the Option E Phase 2 release train. Additive: the

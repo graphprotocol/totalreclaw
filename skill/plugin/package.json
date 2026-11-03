@@ -25,7 +25,7 @@
   "homepage": "https://totalreclaw.xyz",
   "repository": {
     "type": "git",
-    "url": "https://github.com/p-diogo/totalreclaw.git",
+    "url": "https://github.com/graphprotocol/totalreclaw.git",
     "directory": "skill/plugin"
   },
   "author": "TotalReclaw Team",

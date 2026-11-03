@@ -69,3 +69,27 @@ class TestEmbedding:
         results = get_embeddings_batch(["hello", "world"])
         assert len(results) == 2
         assert all(len(e) == dims for e in results)
+
+
+class TestRetrievalQuality:
+    """Harrier pools the last token: without <eos> these rank the wrong fact first."""
+
+    DOCS = [
+        "User moved from Lisbon to Porto and works at Tidewater.",
+        "User has a 1:1 with Ines every Monday at 10:00.",
+        "User uses a ThinkPad X1 Carbon running Fedora.",
+        "User goes bouldering on weekends.",
+        "User uses Bitwarden as a password manager.",
+        "User is vegetarian.",
+    ]
+
+    @pytest.mark.parametrize(
+        "query,want",
+        [("vegetarian", "vegetarian"), ("what laptop do I use", "ThinkPad"), ("what do I do on weekends", "bouldering")],
+    )
+    def test_query_finds_the_right_fact(self, query, want):
+        from totalreclaw.embedding import get_embedding
+
+        q = get_embedding(query)
+        scored = sorted(self.DOCS, key=lambda d: -sum(a * b for a, b in zip(q, get_embedding(d))))
+        assert want in scored[0]

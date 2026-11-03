@@ -167,15 +167,17 @@ class TestIngestTurnIdleCrystals:
         assert "convA" in state._session_slots  # still stashed, never crystallized
 
     def test_active_topic_never_crystallized_midstream(self, monkeypatch) -> None:
-        """The conversation currently being talked to is never swept."""
+        """The conversation currently being talked to is never swept while it
+        stays active. (A gap past the idle timeout does crystallize its earlier
+        part since #630 — see ``test_crystal_segments.py``.)"""
         clock = _Clock()
         monkeypatch.setattr(state_mod.time, "monotonic", clock)
         monkeypatch.setenv("TOTALRECLAW_SESSION_IDLE_MINUTES", "15")
         state = _configured_state()
         with patch.object(hooks, "_auto_extract", return_value=[]), \
              patch.object(hooks, "_finalize_one_conversation") as fin:
-            # Same topic, many turns spread over a long time — never swept.
+            # Same topic, many turns over a long time, each gap under the timeout.
             for i in range(5):
                 hooks.ingest_turn(state, f"m{i}", f"r{i}", session_id="convA")
-                clock.advance(10_000)  # long gaps, but it's the ACTIVE topic each turn
+                clock.advance(600)
         fin.assert_not_called()

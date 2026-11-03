@@ -75,7 +75,7 @@ TotalReclaw uses **LLM extraction** (not pattern matching) to identify facts fro
 1. **Parse**: walk each conversation's mapping tree along the canonical thread (the messages you actually kept — edited or regenerated drafts are skipped) and pull user + assistant messages with their original timestamps. Both roles are included because the assistant's response often clarifies what the user meant. Each ChatGPT conversation becomes one session in your vault, with its own summary card (Crystal), so imported memory stays organized by conversation instead of arriving as loose facts.
 2. **Chunk**: split each conversation into batches of ~20 messages (`CHUNK_SIZE`). Large conversations become multiple chunks (`part 1/N`, `part 2/N`, ...).
 3. **Extract**: each chunk is run through an LLM (the host's LLM on MCP integrations; your gateway's LLM on OpenClaw; Hermes' configured LLM otherwise). The LLM identifies facts, preferences, decisions, goals, and context.
-4. **Triage + profile**: extracted facts are deduplicated and merged into a coherent profile via the smart-import pipeline (see [`rust/totalreclaw-core/src/smart_import.rs`](https://github.com/p-diogo/totalreclaw/blob/main/rust/totalreclaw-core/src/smart_import.rs) for the schema).
+4. **Triage + profile**: extracted facts are deduplicated and merged into a coherent profile via the smart-import pipeline (see [`rust/totalreclaw-core/src/smart_import.rs`](https://github.com/graphprotocol/totalreclaw/blob/main/rust/totalreclaw-core/src/smart_import.rs) for the schema).
 5. **Encrypt + store**: each surviving fact is encrypted with your TotalReclaw key (XChaCha20-Poly1305), fingerprinted for dedup, and stored.
 
 ### What to expect

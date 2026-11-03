@@ -85,24 +85,23 @@ def complete_pairing(
             eoa or "unknown",
             sid_frag,
         )
-        # Provider conformance (#351 §5.4): make TotalReclaw the native, sole
-        # Hermes memory provider the moment the user pairs. Installs the
-        # MemoryProvider sidecar at the discoverable path, sets
-        # ``memory.provider: totalreclaw``, and disables Hermes' builtin local
-        # store (so it stops running in parallel — the split-brain). Without
-        # this, a fresh install pairs but never activates the provider, leaving
-        # the builtin active. Best-effort: a failure here must NEVER fail an
+        # Provider conformance (#351 §5.4): make TotalReclaw the native Hermes
+        # memory provider the moment the user pairs. Installs the
+        # MemoryProvider sidecar at the discoverable path and sets
+        # ``memory.provider: totalreclaw``; Hermes' built-in memory stays on
+        # beside it. Skipped when another provider is active (the setup guide
+        # asks the user). Best-effort: a failure here must NEVER fail an
         # otherwise-successful pairing. Touches only config + sidecar files —
         # no key/phrase/crypto code (phrase-safety preserved).
         try:
-            from .install_memory_provider import install_and_activate
+            from .install_memory_provider import activate_after_pairing
 
-            activation = install_and_activate()
+            activation = activate_after_pairing()
             logger.info(
-                "pair-tool: TotalReclaw activated as the Hermes memory provider "
-                "(sidecar=%s, builtin_disabled=%s)",
-                activation.get("sidecar_path"),
-                activation.get("builtin_disabled"),
+                "pair-tool: memory provider activation after pairing "
+                "(activated=%s, skipped=%s)",
+                activation.get("activated"),
+                activation.get("skipped", ""),
             )
         except Exception as activate_err:  # pragma: no cover — best-effort
             logger.warning(

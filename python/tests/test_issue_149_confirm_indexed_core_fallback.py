@@ -2,7 +2,7 @@
 totalreclaw_core wheel pre-dates the confirm_indexed PyO3 binding
 (published totalreclaw-core==2.2.0 ships without it).
 
-Issue: https://github.com/p-diogo/totalreclaw-internal/issues/149
+Issue: https://github.com/graphprotocol/totalreclaw-internal/issues/149
 """
 from __future__ import annotations
 

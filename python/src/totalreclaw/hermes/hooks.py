@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from totalreclaw.agent.lifecycle import (
     auto_extract as _auto_extract,
+    crystal_gate_passes,
     session_debrief as _session_debrief,
     _is_near_duplicate,
     _fetch_recent_memories,
@@ -427,6 +428,11 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     # that boundary; otherwise a fresh UUIDv7 is minted. Runs before the
     # unconfigured-state early-return so log-only sessions still get an id.
     state.start_session(external_id=(session_id or None))
+    # #630 — a resumed conversation picks up the segment its last finalize
+    # carried over (hosts that pass the id per turn also restore it through
+    # ``activate_conversation``).
+    if hasattr(state, "resume_conversation"):
+        state.resume_conversation(session_id or None)
 
     # 2.3.7rc3 — reset the setup-nudge latch so each new session gets
     # one proactive nudge. Without this, an unconfigured user who
@@ -969,6 +975,32 @@ def _maybe_crystallize_idle_slots(state: "PluginState") -> None:
         logger.warning("TotalReclaw idle-slot crystallize sweep failed: %s", e)
 
 
+def _maybe_crystallize_idle_active(state: "PluginState") -> None:
+    """Crystallize the LIVE conversation's earlier burst when the incoming turn
+    arrives after the idle timeout, keeping its session id (#630).
+
+    Hermes 0.22 no longer rotates gateway conversations on timers, so a Telegram
+    chat is one endless session and ``on_session_finalize`` rarely fires. The
+    idle sweep above only covers *other* conversations; this covers the one
+    being talked to. Threshold: ``TOTALRECLAW_SESSION_IDLE_MINUTES`` (default
+    60; ``0`` disables). Best-effort — never raises into the turn.
+    """
+    try:
+        if not (hasattr(state, "is_idle") and state.is_configured()):
+            return
+        if state.is_idle(_session_idle_seconds()) is not True:
+            return
+        logger.info(
+            "TotalReclaw: conversation idle > %d min; crystallizing its earlier part",
+            _session_idle_seconds() // 60,
+        )
+        _finalize_one_conversation(state)
+        state.clear_messages()
+        state.reset_turn_counter()
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("TotalReclaw idle-conversation crystallize failed: %s", e)
+
+
 def ingest_turn(
     state: "PluginState",
     user_message: str,
@@ -992,6 +1024,9 @@ def ingest_turn(
     # turn counter + message buffer + session id all belong to the right chat.
     if session_id and hasattr(state, "activate_conversation"):
         state.activate_conversation(session_id)
+    # A turn after a long silence starts a new burst: crystallize the earlier
+    # part of THIS conversation first (#630). Must run before ``note_activity``.
+    _maybe_crystallize_idle_active(state)
     # Always track turns and messages (client may be configured mid-session).
     state.increment_turn()
     state.add_message("user", user_message)
@@ -1030,11 +1065,9 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
     the reconfigure ahead of the turn bookkeeping is behavior-equivalent — the
     two touch disjoint state (creds vs turn-count/messages).
     """
-    # Record turn time for idle-timeout session rollover (every turn, either
-    # driver). Kept before the provider gate so activity tracks in both modes.
-    # hasattr-guarded to tolerate legacy state subclasses / test mocks.
-    if hasattr(state, "note_activity"):
-        state.note_activity()
+    # Turn time is recorded by ``ingest_turn`` in both driver modes (here below,
+    # or the provider's ``sync_turn``). Refreshing the clock here, ahead of
+    # ``ingest_turn``, would hide the idle gap from the idle Crystal (#630).
 
     # Fix #191 safety net — pick up a mid-session pair before ingest_turn
     # decides whether the user is configured. Always runs (the provider does
@@ -1073,20 +1106,25 @@ def on_session_end(state: "PluginState", **kwargs) -> None:
     return None
 
 
-def _finalize_one_conversation(state: "PluginState") -> None:
+def _finalize_one_conversation(state: "PluginState") -> bool:
     """Flush any unprocessed messages + run the session debrief (Crystal) for
-    the CURRENTLY-ACTIVE conversation slot. Best-effort — never raises."""
+    the CURRENTLY-ACTIVE conversation slot. Best-effort — never raises.
+
+    Returns whether the segment was long enough for a Crystal. ``False`` means
+    the caller may carry the segment over instead of dropping it (#630)."""
     stored_fact_texts: list[str] = []
     if state.has_unprocessed_messages():
         try:
-            stored_fact_texts = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config())
+            stored_fact_texts = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config()) or []
         except Exception as e:
             logger.warning("TotalReclaw on_session_finalize flush failed: %s", e)
 
+    eligible = crystal_gate_passes(len(state.get_all_messages()), len(stored_fact_texts))
     try:
         _session_debrief(state, stored_fact_texts=stored_fact_texts)
     except Exception as e:
         logger.warning("TotalReclaw on_session_finalize debrief failed: %s", e)
+    return eligible
 
 
 def on_session_finalize(state: "PluginState", **kwargs) -> None:
@@ -1101,6 +1139,13 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
     conversation slots exist), crystallize EACH conversation separately — every
     chat gets its own clean Crystal instead of one mixed summary. Falls back to
     a single pass when the host never supplied per-conversation ids.
+
+    Short segments carry over (#630): on Hermes 0.22 the CLI and TUI are
+    gateway viewers, and the last viewer closing finalizes the session, so a
+    one-shot ``hermes chat -Q`` turn finalizes after every turn. A segment too
+    short to crystallize is kept under its host conversation id (its facts are
+    already flushed) so the resumed conversation keeps accumulating, and the
+    first finalize with enough content crystallizes the whole segment.
     """
     if not state.is_configured():
         # memq-3 — still clear the session id we set in on_session_start
@@ -1111,6 +1156,8 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
             state.reset_conversations()
         return
 
+    carried: dict = {}
+    host_session_id = kwargs.get("session_id") or None
     try:
         if hasattr(state, "stash_active_conversation") and hasattr(state, "pop_next_conversation"):
             # Stash the live conversation, then crystallize each stashed
@@ -1118,7 +1165,10 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
             # slot and loops exactly once → byte-identical to the old behavior.
             state.stash_active_conversation()
             while state.pop_next_conversation():
-                _finalize_one_conversation(state)
+                eligible = _finalize_one_conversation(state)
+                key = state.active_conversation_key or host_session_id
+                if not eligible and key and state.get_all_messages():
+                    carried[key] = state.capture_live_conversation()
         else:
             # Legacy state subclass / test mock without slot support.
             _finalize_one_conversation(state)
@@ -1129,6 +1179,8 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
         state.end_session()
         if hasattr(state, "reset_conversations"):
             state.reset_conversations()
+        if carried:
+            state.carry_conversations(carried)
 
 
 def on_session_reset(state: "PluginState", **kwargs) -> None:

@@ -153,7 +153,7 @@ export function setupRemovedResponse(): ToolResponse {
         message:
           'The totalreclaw_setup tool was removed in @totalreclaw/mcp-server@3.2.1 ' +
           'for phrase-safety. Follow the URL-driven install flow at ' +
-          'https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/claude-code-setup.md. ' +
+          'https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md. ' +
           'The user sources their recovery phrase out-of-band (OpenClaw or Hermes ' +
           'browser pair flow, or an offline BIP-39 generator) and pastes it directly ' +
           'into TOTALRECLAW_RECOVERY_PHRASE in the MCP host config — never into chat.',
@@ -172,7 +172,7 @@ export function notConfiguredResponse(): ToolResponse {
         error: 'not_configured',
         message:
           'TotalReclaw is not configured yet. Follow the URL-driven install flow ' +
-          'at https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/claude-code-setup.md — ' +
+          'at https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md — ' +
           'the user pastes their recovery phrase directly into the MCP host config (TOTALRECLAW_RECOVERY_PHRASE), ' +
           'never into chat.',
       }),

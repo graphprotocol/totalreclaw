@@ -1,7 +1,7 @@
 """credential_provider — credential source abstraction (cred-3 stage 2).
 
 Python mirror of `skill/plugin/credential-provider.ts` (cred-3 stage 1,
-merged in p-diogo/totalreclaw#271). Same shape: a small abstraction over
+merged in graphprotocol/totalreclaw#271). Same shape: a small abstraction over
 where Hermes reads / writes `credentials.json` from, so the daemon can be
 run against either:
 

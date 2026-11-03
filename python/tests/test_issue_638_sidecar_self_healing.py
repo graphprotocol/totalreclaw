@@ -86,9 +86,13 @@ class _FakeCtx:
 
     def __init__(self):
         self.tools = {}
+        self.hooks = {}
 
     def register_tool(self, *, name, toolset, schema, handler, **kw):
         self.tools[name] = {"toolset": toolset, "schema": schema, "handler": handler}
+
+    def register_hook(self, name, callback):
+        self.hooks[name] = callback
 
 
 def _exec_sidecar():
@@ -136,6 +140,8 @@ class TestSidecarExecSelfHeal:
         heal_calls = []
 
         def fake_run(cmd, **kw):
+            if "--version" in cmd:  # the "is pip available?" probe
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
             assert "pip" in cmd and "install" in cmd  # self-heal, not something else
             heal_calls.append(cmd)
             sys.modules["totalreclaw"] = real_totalreclaw
@@ -180,13 +186,18 @@ class TestSidecarExecDegraded:
         ctx = _FakeCtx()
         ns["register"](ctx)
         assert list(ctx.tools) == ["totalreclaw_status"]
+        # ...and the agent is told on the first turn, so the user hears it.
+        assert list(ctx.hooks) == ["pre_llm_call"]
+        notice = ctx.hooks["pre_llm_call"](is_first_turn=True)
+        assert "OFFLINE" in notice["context"]
+        assert ctx.hooks["pre_llm_call"](is_first_turn=False) is None
         assert ctx.tools["totalreclaw_status"]["toolset"] == "totalreclaw"
 
         result = ctx.tools["totalreclaw_status"]["handler"]({})
         assert result["ok"] is False
         assert result["degraded"] is True
         assert "missing from this Hermes venv" in result["error"]
-        assert "pip install" in result["fix"]
+        assert "pip" in result["fix"] and "install" in result["fix"]
         assert result["detail"] == ns["_LOAD_ERROR"]
 
     def test_degraded_register_survives_broken_ctx(self, monkeypatch, caplog):

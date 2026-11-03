@@ -357,8 +357,7 @@ def _current_disclosure_provider() -> str:
 
 
 # Disclosure tokens are one-time, hash-at-rest consent tokens (#437). The
-# generic mint/redeem now live in ``hermes.consent_tokens`` (shared with the
-# pair-replace guard, #466); these thin wrappers pin the ``"disclosure"`` kind
+# generic mint/redeem live in ``hermes.consent_tokens``; these thin wrappers pin the ``"disclosure"`` kind
 # and the token subject = the import ``source``.
 _DISCLOSURE_TOKEN_TTL_S = consent_tokens.TOKEN_TTL_S
 

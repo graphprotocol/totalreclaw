@@ -110,22 +110,24 @@ def test_install_doc_supervisor_requirement():
 
 
 def test_install_doc_install_order_pip_before_plugin():
-    """Install the Python package before enabling the plugin manifest. (The
-    old SIGUSR1-reload-race rationale is NOT asserted — the validated source
+    """Install the Python package before enabling the plugin. (The old
+    SIGUSR1-reload-race rationale is NOT asserted — the validated source
     shows install writes files with no live reload — but pip-before-plugin
     is kept as the convention so implementations are on disk first.)"""
     body = _read(INSTALL_DOC)
-    pip_idx = body.find('"$HERMES_PYTHON" -m pip install')
-    plugin_idx = body.find("hermes plugins install p-diogo/totalreclaw-hermes")
-    assert pip_idx > 0 and plugin_idx > 0, (
-        "hermes-setup.md install procedure must contain both the pip install "
-        "and the `hermes plugins install` canonical lines."
+    pip_idx = body.find('-m pip --python "$HERMES_PYTHON" install')
+    enable_idx = body.find("hermes plugins enable totalreclaw")
+    plugin_idx = body.find("hermes plugins install graphprotocol/totalreclaw-hermes")
+    assert pip_idx > 0 and enable_idx > 0 and plugin_idx > 0, (
+        "hermes-setup.md install procedure must contain the pip install, the "
+        "`hermes plugins enable` step and the `hermes plugins install` "
+        "fallback line."
     )
-    assert pip_idx < plugin_idx, (
-        "Install ordering regressed: pip install must precede `hermes plugins "
-        "install` so the Python package is on disk before the manifest is "
-        "enabled."
+    assert pip_idx < enable_idx < plugin_idx, (
+        "Install ordering regressed: pip install must precede enabling the "
+        "plugin, so the Python package is on disk before it is enabled."
     )
+    assert "p-diogo/" not in body  # the plugin repo moved to graphprotocol
 
 
 # ---------------------------------------------------------------------------

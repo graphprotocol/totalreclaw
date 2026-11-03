@@ -32,7 +32,7 @@ import totalreclaw_core
 from .llm_client import (
     LLMConfig,
     chat_completion,
-    derive_extraction_config,
+    complete_with_extraction_fallback,
     detect_llm_config,
 )
 # Re-exported under its historical private name so existing callers
@@ -995,16 +995,6 @@ async def extract_facts_llm(
         )
         return []
 
-    # rc.24 F2 — same-provider cheap-model selection (Pedro 2026-04-26).
-    # The user's chat model is often a flagship (GLM-5.1, GPT-4, Sonnet)
-    # that's both expensive and — in the GLM-5.1-on-Coding case — known
-    # to silently return empty content for the merged-extraction prompt.
-    # Swap to the same-provider cheap workhorse (GLM-4.5-flash, gpt-4o-mini,
-    # claude-haiku-4-5, etc.). Same key, same provider, same auth surface;
-    # only model + (for zai) base URL change. Operator override:
-    # ``TOTALRECLAW_EXTRACTION_MODEL``.
-    config = derive_extraction_config(chat_config)
-
     if not messages:
         logger.info("extract_facts_llm: no messages to process")
         return []
@@ -1035,60 +1025,41 @@ async def extract_facts_llm(
         else f"Extract ALL valuable long-term memories from this conversation before it is lost:\n\n{conversation_text}{memories_ctx}"
     )
 
+    # Same-provider cheap-model selection (rc.24 F2, Pedro 2026-04-26) with
+    # runtime fallback (2.5.3rc4): try the extraction candidates in order
+    # (e.g. glm-5.3-flash -> glm-4.5-flash on the z.ai Coding plan), ending
+    # with the user's chat model. Same key, same endpoint; only the model
+    # changes. An empty answer moves to the next candidate for this turn,
+    # which also covers the #376 "cheap model returned empty" recovery.
+    # ``chat_completion`` is passed from this module so tests can patch it.
     try:
-        response = await chat_completion(config, EXTRACTION_SYSTEM_PROMPT, user_prompt)
+        response, config = await complete_with_extraction_fallback(
+            chat_config, EXTRACTION_SYSTEM_PROMPT, user_prompt,
+            completion=chat_completion,
+        )
     except Exception as e:
         logger.warning("extract_facts_llm: chat_completion threw: %s", e)
         return []
 
-    if not response and config.model != chat_config.model:
-        # #376: the cheap extraction model returned empty. Retry ONCE with
-        # the user's flagship chat model on the SAME endpoint (Pedro's
-        # 2026-04-26 directive: never flip the endpoint — the API key is
-        # endpoint-scoped). The flagship is more capable and recovers turns
-        # the cheap workhorse silently empties. Same key/auth; only the
-        # model differs from ``config``.
-        logger.warning(
-            "extract_facts_llm: cheap extraction model %r returned empty — "
-            "retrying once with chat model %r (#376 fallback).",
-            config.model, chat_config.model,
-        )
-        try:
-            response = await chat_completion(
-                chat_config, EXTRACTION_SYSTEM_PROMPT, user_prompt
-            )
-        except Exception as e:
-            logger.warning(
-                "extract_facts_llm: #376 fallback chat_completion threw: %s", e
-            )
-            response = None
-
     if not response:
-        # F2 (rc.24) — bumped from INFO to WARNING. An empty extraction
-        # response is a CORRECTNESS bug, not a routine event: the LLM
-        # accepted the call without raising, but content was empty —
-        # this is what surfaced in the rc.23 QA report as 100% silent
-        # auto-extraction failure on Z.AI/GLM-5.1. ``chat_completion``
-        # already logs the underlying request shape (finish_reason,
-        # usage, response_format) at WARN; this line tells the operator
-        # WHERE the empty bubbled up so they can correlate the two.
-        # Reaching here means BOTH the cheap model and the chat-model
-        # fallback (#376) came back empty.
+        # F2 (rc.24) — WARNING, not INFO. An empty extraction response is
+        # a CORRECTNESS bug, not a routine event: the LLM accepted the call
+        # without raising, but content was empty. ``chat_completion``
+        # already logs the underlying request shape (finish_reason, usage,
+        # response_format) at WARN; this line tells the operator WHERE the
+        # empty bubbled up so they can correlate the two. Reaching here
+        # means every extraction candidate, including the chat model, came
+        # back empty.
         logger.warning(
-            "extract_facts_llm: chat_completion returned None/empty for "
-            "BOTH the cheap extraction model (%r) and the chat-model #376 "
-            "fallback (%r) on %s — auto-extraction is a NO-OP for this turn. "
-            "ACTION: set TOTALRECLAW_EXTRACTION_MODEL to a model that returns "
-            "content on your endpoint (for z.ai Coding/Standard, a known-good "
-            "value is 'glm-4.5-flash'; this is already the default, so if it "
-            "is STILL empty your key/plan may not serve it — try your chat "
-            "model name explicitly, e.g. TOTALRECLAW_EXTRACTION_MODEL=%s). "
-            "See the preceding 'LLM returned empty content' log for the "
-            "underlying response shape (finish_reason / usage).",
-            config.model,
+            "extract_facts_llm: chat_completion returned None/empty for every "
+            "extraction model, ending with the chat model (%r) on %s — auto-extraction is a NO-OP for "
+            "this turn. ACTION: ask the agent to pick a model that answers on "
+            "this endpoint (totalreclaw_set_extraction_model; for z.ai a "
+            "known-good value is 'glm-4.5-flash'), or have the operator set "
+            "TOTALRECLAW_EXTRACTION_MODEL. See the preceding 'LLM returned "
+            "empty content' log for the response shape (finish_reason / usage).",
             chat_config.model,
             config.base_url,
-            chat_config.model,
         )
         return []
 
@@ -1163,12 +1134,6 @@ async def extract_facts_compaction(
         )
         return []
 
-    # rc.24 F2 — same-provider cheap-model selection (parity with
-    # extract_facts_llm above). Compaction is a STRUCTURED-OUTPUT call
-    # exactly like turn-mode extraction, so the same cheap-pick rule
-    # applies. See ``derive_extraction_config`` for the mapping.
-    config = derive_extraction_config(chat_config)
-
     conversation_text = _truncate_messages(messages)
     if len(conversation_text) < 20:
         logger.info(
@@ -1191,31 +1156,34 @@ async def extract_facts_compaction(
         f"{conversation_text}{memories_ctx}"
     )
 
+    # Same candidate walk as ``extract_facts_llm`` (compaction is the same
+    # kind of structured-output call).
     try:
-        response = await chat_completion(config, COMPACTION_SYSTEM_PROMPT, user_prompt)
+        response, config = await complete_with_extraction_fallback(
+            chat_config, COMPACTION_SYSTEM_PROMPT, user_prompt,
+            completion=chat_completion,
+        )
     except Exception as e:
         logger.warning("extract_facts_compaction: chat_completion threw: %s", e)
         return []
 
     if not response:
-        # F2 (rc.24) — bumped from INFO to WARNING for the same reason
-        # as ``extract_facts_llm`` above. Compaction is the LAST chance
-        # to capture facts before the conversation is collapsed; a
-        # silent empty-response here is a hard data-loss event.
+        # F2 (rc.24) — WARNING for the same reason as ``extract_facts_llm``
+        # above. Compaction is the LAST chance to capture facts before the
+        # conversation is collapsed; a silent empty response here is a hard
+        # data-loss event.
         logger.warning(
-            "extract_facts_compaction: chat_completion returned None/empty "
-            "for the extraction model (%r) on %s — compaction extraction is a "
-            "NO-OP for this conversation (hard data-loss: this is the last "
+            "extract_facts_compaction: chat_completion returned None/empty for "
+            "every extraction model, ending with the chat model (%r) on %s — compaction extraction is "
+            "a NO-OP for this conversation (hard data-loss: this is the last "
             "chance to capture facts before the context is collapsed). "
-            "ACTION: set TOTALRECLAW_EXTRACTION_MODEL to a model that returns "
-            "content on your endpoint (for z.ai a known-good value is "
-            "'glm-4.5-flash'; if that is STILL empty, set it to your chat "
-            "model name, e.g. TOTALRECLAW_EXTRACTION_MODEL=%s). See the "
-            "preceding 'LLM returned empty content' log for the underlying "
-            "response shape.",
-            config.model,
-            config.base_url,
+            "ACTION: ask the agent to pick a model that answers on this "
+            "endpoint (totalreclaw_set_extraction_model; for z.ai a known-good "
+            "value is 'glm-4.5-flash'), or have the operator set "
+            "TOTALRECLAW_EXTRACTION_MODEL. See the preceding 'LLM returned "
+            "empty content' log for the response shape.",
             chat_config.model,
+            config.base_url,
         )
         return []
 
