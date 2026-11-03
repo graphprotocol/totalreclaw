@@ -73,8 +73,12 @@ import {
 import {
   resolveChainConfig,
   buildSubgraphOverrides,
-  fetchChainConfig,
+  fetchChainConfigWithRetry,
+  ensureWriteChainResolved,
   assertDataEdgeResolvable,
+  STARTUP_BILLING_RETRY,
+  WRITE_BILLING_RETRY,
+  type FetchedChainConfig,
 } from './subgraph/chain-config.js';
 import {
   resolveManagedCredential,
@@ -351,6 +355,13 @@ interface SubgraphState {
   chainId: number;
   /** DataEdge contract — resolved verbatim from billing data_edge_address (#439). Undefined ⇒ env/default. */
   dataEdgeAddress?: string;
+  /**
+   * #689: true once a billing lookup succeeded (or TOTALRECLAW_DATA_EDGE_ADDRESS
+   * is set). While false, `writeConfigFor` re-runs the lookup before any
+   * write and fails the write if it still can't resolve — it never sends a
+   * write to the production default DataEdge.
+   */
+  chainResolved: boolean;
 }
 
 /**
@@ -368,7 +379,51 @@ function stateWriteOverrides(state: SubgraphState): Partial<SubgraphStoreConfig>
     walletAddress: state.smartAccountAddress,
     chainId: state.chainId,
     dataEdgeAddress: state.dataEdgeAddress,
+    chainResolved: state.chainResolved,
   });
+}
+
+/** Billing lookup for a state, with retries; shared by init and the lazy write path. */
+function lookupChainConfig(
+  state: Pick<SubgraphState, 'serverUrl' | 'smartAccountAddress' | 'authKey' | 'chainId'>,
+  label: string,
+  retry = WRITE_BILLING_RETRY,
+): Promise<FetchedChainConfig> {
+  return fetchChainConfigWithRetry(
+    {
+      serverUrl: state.serverUrl,
+      smartAccountAddress: state.smartAccountAddress,
+      authKeyHex: Buffer.from(state.authKey).toString('hex'),
+      headers: buildRelayHeaders(),
+      fallbackChainId: state.chainId,
+      onResolved: (billing, resolved) => {
+        console.error(
+          `TotalReclaw: ${label}tier=${billing.tier ?? 'unknown'}, chain=${resolved.chainId}` +
+            (resolved.dataEdgeAddress ? `, dataEdge=${resolved.dataEdgeAddress}` : '') + '.',
+        );
+      },
+      onBillingUnavailable: (reason) => {
+        console.error(`TotalReclaw: ${label}billing lookup failed (${reason}).`);
+      },
+    },
+    retry,
+  );
+}
+
+/**
+ * The write config for a managed-service write (#439 chain/DataEdge + #581
+ * signing source). #689: resolves chain + DataEdge first if startup could
+ * not, and throws `DataEdgeUnresolvedError` (write not sent) if it still
+ * can't. Every on-chain write site goes through here.
+ */
+async function writeConfigFor(state: SubgraphState): Promise<SubgraphStoreConfig> {
+  await ensureWriteChainResolved(
+    state,
+    () => lookupChainConfig(state, 'write-time '),
+    process.env.TOTALRECLAW_DATA_EDGE_ADDRESS,
+    state.serverUrl,
+  );
+  return getSubgraphConfig(stateWriteOverrides(state));
 }
 
 let subgraphState: SubgraphState | null = null;
@@ -408,7 +463,6 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
   // First derive on Base Sepolia (free tier default), then query billing to detect
   // Pro tier and switch to Gnosis if needed.
   const entryPointAddr = (process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || entryPoint07Address) as Address;
-  const authKeyHex = Buffer.from(authKey).toString('hex');
   const ownerAccount = mnemonicToAccount(mnemonic);
 
   // Smart Account address is deterministic via CREATE2 — use Base Sepolia for derivation
@@ -437,43 +491,10 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
   // relay's values verbatim means a future chain move needs zero client release.
   // (The client `TOTALRECLAW_CHAIN_ID` override was removed in v1.)
   //
-  // #581 P2-13: this is now `fetchChainConfig` (subgraph/chain-config.ts) —
-  // the SAME function `initSubgraphStateFromBundle` below calls, so there is
-  // no code path that can independently "forget" to make this call.
+  // #581 P2-13: the billing lookup is shared with `initSubgraphStateFromBundle`
+  // (`fetchChainConfig`, here via `lookupChainConfig`'s retry wrapper), so no
+  // code path can independently "forget" to make this call.
   //
-  // Mnemonic mode keeps the pre-existing #439 behaviour on a failed billing
-  // lookup: fall back to the Gnosis default / no DataEdge override (the
-  // store then falls to env / its own PROD default) rather than blocking
-  // startup. #618 adversarial-review fixup: that silent fallback used to
-  // have NO log line at all when the billing call failed outright — add
-  // one, naming the prod default explicitly, so a mnemonic-mode write that
-  // silently lands on production (e.g. a staging run with an unreachable
-  // relay and no TOTALRECLAW_DATA_EDGE_ADDRESS override) leaves a trace in
-  // stderr instead of looking identical to a normal write.
-  const { chainId, dataEdgeAddress, billingResolved } = await fetchChainConfig({
-    serverUrl: SERVER_URL,
-    smartAccountAddress,
-    authKeyHex,
-    headers: buildRelayHeaders(),
-    fallbackChainId: 100, // Gnosis default when billing is unreachable
-    onResolved: (billing, resolved) => {
-      console.error(
-        `TotalReclaw: tier=${billing.tier ?? 'unknown'}, chain=${resolved.chainId}` +
-          (resolved.dataEdgeAddress ? `, dataEdge=${resolved.dataEdgeAddress}` : '') + '.',
-      );
-    },
-    onBillingUnavailable: (reason) => {
-      console.error(`TotalReclaw: billing lookup failed (${reason}).`);
-    },
-  });
-  if (!billingResolved && !process.env.TOTALRECLAW_DATA_EDGE_ADDRESS) {
-    console.error(
-      `TotalReclaw: proceeding without a confirmed DataEdge — writes will target the ` +
-        `PRODUCTION default (${DEFAULT_DATA_EDGE_ADDRESS}) unless TOTALRECLAW_DATA_EDGE_ADDRESS ` +
-        'is set. Retry once the relay is reachable if this is not the intended environment.',
-    );
-  }
-
   // Register auth key with relay (idempotent — relay returns 200 for existing users).
   // Without this, all relay queries return 401 when using env var mnemonic path
   // (the setup wizard handles registration, but the env var path previously skipped it).
@@ -490,9 +511,29 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
     const saltHexForReg = Buffer.from(salt).toString('hex');
     await registerWithServer(SERVER_URL, authKeyHashForReg, saltHexForReg);
   } catch {
-    // Best-effort — if relay is unreachable, billing check above may have also failed.
+    // Best-effort — if the relay is unreachable, the billing lookup below may fail too.
     // The server returns 200 for already-registered users, so this only fails on network errors.
     console.error('TotalReclaw: Registration with relay failed (best-effort, will retry on next start).');
+  }
+
+  // #689: registration runs first (above) so a just-created account's billing
+  // lookup doesn't fail on "unknown wallet". The lookup is retried with
+  // backoff; if it still fails, the state stays UNRESOLVED and the first
+  // write re-runs it (writeConfigFor). There is NO fallback to the production
+  // default DataEdge any more: before #689 a staging server on a cold relay
+  // wrote to production for its whole lifetime.
+  const envDataEdge = process.env.TOTALRECLAW_DATA_EDGE_ADDRESS;
+  const { chainId, dataEdgeAddress, billingResolved } = await lookupChainConfig(
+    { serverUrl: SERVER_URL, smartAccountAddress, authKey, chainId: 100 }, // Gnosis default until billing answers
+    '',
+    STARTUP_BILLING_RETRY,
+  );
+  if (!billingResolved && !envDataEdge) {
+    console.error(
+      'TotalReclaw: DataEdge not confirmed yet (billing lookup failed). Recall works; the first ' +
+        'write will retry the lookup and is refused if it still fails. Writes never fall back to ' +
+        `the production default (${DEFAULT_DATA_EDGE_ADDRESS}).`,
+    );
   }
 
   return {
@@ -508,6 +549,7 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
     smartAccountAddress,
     chainId,
     dataEdgeAddress,
+    chainResolved: billingResolved || !!envDataEdge,
   };
 }
 
@@ -554,10 +596,9 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
  *      `TOTALRECLAW_DATA_EDGE_ADDRESS` override now throws rather than
  *      proceeding — bundle mode has no other way to learn which DataEdge
  *      belongs to this environment, so guessing "production" is never
- *      acceptable. Mnemonic mode (`initSubgraphState` above) deliberately
- *      keeps the pre-existing #439 fallback instead of throwing — a
- *      scoped, reviewed decision (loud `console.error` naming the prod
- *      default, no throw), not an oversight.
+ *      acceptable. Mnemonic mode (`initSubgraphState` above) no longer falls
+ *      back to the prod default either (#689): it starts unresolved and
+ *      resolves on the first write, refusing the write if it can't.
  *
  * Only `signing.kind === "owner-eoa"` is supported (Phase 2's shipping
  * configuration). A `session-key` bundle is parsed and validated fine at
@@ -582,25 +623,15 @@ async function initSubgraphStateFromBundle(bundle: DerivedBundleV1): Promise<Sub
   // account.smart_account is already resolved — no RPC round-trip, no
   // mnemonic-derived owner. See the docstring above, point 2.
   const smartAccountAddress = bundle.account.smart_account.toLowerCase();
-  const authKeyHex = vault.authKey.toString('hex');
 
-  // See the docstring above, point 4 — the load-bearing fix.
-  const { chainId, dataEdgeAddress, billingResolved } = await fetchChainConfig({
-    serverUrl: SERVER_URL,
-    smartAccountAddress,
-    authKeyHex,
-    headers: buildRelayHeaders(),
-    fallbackChainId: bundle.account.chain_id,
-    onResolved: (billing, resolved) => {
-      console.error(
-        `TotalReclaw: bundle-mode, tier=${billing.tier ?? 'unknown'}, chain=${resolved.chainId}` +
-          (resolved.dataEdgeAddress ? `, dataEdge=${resolved.dataEdgeAddress}` : '') + '.',
-      );
-    },
-    onBillingUnavailable: (reason) => {
-      console.error(`TotalReclaw: bundle-mode billing lookup failed (${reason}).`);
-    },
-  });
+  // See the docstring above, point 4 — the load-bearing fix. #689: retried
+  // with backoff like mnemonic mode; bundle mode still fails closed below if
+  // every attempt fails (it has no other source for the DataEdge).
+  const { chainId, dataEdgeAddress, billingResolved } = await lookupChainConfig(
+    { serverUrl: SERVER_URL, smartAccountAddress, authKey: vault.authKey, chainId: bundle.account.chain_id },
+    'bundle-mode, ',
+    STARTUP_BILLING_RETRY,
+  );
 
   // FAIL CLOSED (#618 adversarial review — the sibling variant of the S1
   // bug, see the docstring above, point 4). A bundle carries no
@@ -646,6 +677,8 @@ async function initSubgraphStateFromBundle(bundle: DerivedBundleV1): Promise<Sub
     smartAccountAddress,
     chainId,
     dataEdgeAddress,
+    // assertDataEdgeResolvable above guarantees billing succeeded or an env override is set.
+    chainResolved: true,
   };
 }
 
@@ -1150,7 +1183,7 @@ async function handleRememberSubgraph(
   // Batch-submit all payloads (tombstones + facts) in a single UserOp
   if (pendingPayloads.length > 0) {
     try {
-      const batchConfig = getSubgraphConfig(stateWriteOverrides(state));
+      const batchConfig = await writeConfigFor(state);
       const batchResult = await submitFactBatchOnChain(pendingPayloads, batchConfig);
       for (const meta of pendingFactMeta) {
         results.push({
@@ -1258,7 +1291,7 @@ async function handleDebriefSubgraph(
         encryptedEmbedding: encryptedEmb,
       };
 
-      const batchConfig = getSubgraphConfig(stateWriteOverrides(state));
+      const batchConfig = await writeConfigFor(state);
       const batchResult = await submitFactBatchOnChain([encodeFactProtobuf(factPayload)], batchConfig);
       console.error(`Crystal debrief stored (tx=${batchResult.txHash.slice(0, 10)}...)`);
       return {
@@ -1333,7 +1366,7 @@ async function handleDebriefSubgraph(
 
   if (pendingPayloads.length > 0) {
     try {
-      const batchConfig = getSubgraphConfig(stateWriteOverrides(state));
+      const batchConfig = await writeConfigFor(state);
       const batchResult = await submitFactBatchOnChain(pendingPayloads, batchConfig);
       for (const meta of pendingFactMeta) {
         results.push({ success: batchResult.success, fact_id: meta.factId, tx_hash: batchResult.txHash });
@@ -1604,7 +1637,7 @@ async function handleForgetSubgraph(
     };
 
     const protobuf = encodeFactProtobuf(tombstonePayload);
-    const config = getSubgraphConfig(stateWriteOverrides(state));
+    const config = await writeConfigFor(state);
 
     const { txHash, success } = await submitFactOnChain(protobuf, config);
 
@@ -1675,7 +1708,7 @@ function buildPinDepsFromState(state: SubgraphState): PinOpDeps {
       return Buffer.from(base64, 'base64').toString('hex');
     },
     submitBatch: async (payloads: Buffer[]) => {
-      const config = getSubgraphConfig(stateWriteOverrides(state));
+      const config = await writeConfigFor(state);
       const batchResult = await submitFactBatchOnChain(payloads, config);
       return { txHash: batchResult.txHash, success: batchResult.success };
     },
