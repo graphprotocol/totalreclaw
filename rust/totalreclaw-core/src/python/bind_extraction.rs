@@ -60,3 +60,33 @@ pub(crate) fn py_get_compaction_system_prompt() -> &'static str {
     crate::prompts::get_compaction_system_prompt()
 }
 
+
+// ---------------------------------------------------------------------------
+// Forget guard (internal#605 / #640)
+// ---------------------------------------------------------------------------
+
+/// Does an extracted candidate restate a fact the user explicitly forgot?
+///
+/// ``embedding_json`` is a JSON array of numbers or ``"null"``.
+/// ``entries_json`` is a JSON array of ``{"id", "text", "embedding"?}``
+/// (the client's forgotten-facts ledger, decrypted in memory). Returns
+/// ``"null"`` or ``{"id", "reason", "cosine"}`` as JSON, where reason is
+/// ``exact`` / ``subset`` / ``superset`` / ``anchor``. Raises ``ValueError`` on bad JSON.
+#[pyfunction]
+#[pyo3(name = "match_forgotten")]
+pub(crate) fn py_match_forgotten(
+    text: &str,
+    embedding_json: &str,
+    entries_json: &str,
+) -> PyResult<String> {
+    crate::forget_guard::match_forgotten_json(text, embedding_json, entries_json)
+        .map_err(PyValueError::new_err)
+}
+
+/// True when ``text`` is a note about deleting a memory ("User asked to
+/// forget X") rather than a fact about the user.
+#[pyfunction]
+#[pyo3(name = "is_forget_request")]
+pub(crate) fn py_is_forget_request(text: &str) -> bool {
+    crate::forget_guard::is_forget_request(text)
+}

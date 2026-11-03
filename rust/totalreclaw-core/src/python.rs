@@ -123,6 +123,10 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_parse_debrief_response, m)?)?;
     m.add_function(wrap_pyfunction!(py_get_debrief_system_prompt, m)?)?;
 
+    // Forget guard: keep auto-extraction from re-creating forgotten facts (internal#605).
+    m.add_function(wrap_pyfunction!(py_match_forgotten, m)?)?;
+    m.add_function(wrap_pyfunction!(py_is_forget_request, m)?)?;
+
     // Canonical extraction + compaction system prompts (core 2.2.0 hoist).
     m.add_function(wrap_pyfunction!(py_get_extraction_system_prompt, m)?)?;
     m.add_function(wrap_pyfunction!(py_get_compaction_system_prompt, m)?)?;

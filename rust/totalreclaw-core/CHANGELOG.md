@@ -5,6 +5,12 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`forget_guard`: keep auto-extraction from re-creating a fact the user forgot (internal#605, #640).** Pure write-time checks for a client-side list of explicitly forgotten facts. `match_forgotten(text, embedding, entries)` returns the first entry the candidate restates: `exact` (normalized text equal; no embedding needed), `subset` (candidate adds no content word, cosine >= 0.70), `superset` (candidate keeps every content word, cosine >= 0.80) or `anchor` (2+ and at least half of the forgotten text's capitalized / numeric words, cosine >= 0.80). A candidate that drops and adds ordinary words never matches, so value swaps ("blue" → "green", "Lisbon" → "Porto") still store. `is_forget_request(text)` flags notes about a deletion ("User asked to forget X", "asked for that record to be removed"); it needs a request verb before "to forget" or a memory/record target, so "tends to forget appointments" and "wants to delete their Facebook account" pass. Bindings: PyO3 `match_forgotten(text, embedding_json, entries_json) -> str` and `is_forget_request(text) -> bool`; WASM `matchForgotten` / `isForgetRequest`. Cross-language fixture `tests/parity/fixtures/forget-guard-v1.json`, checked by the Rust tests, `tests/parity/forget-guard-parity.test.ts` (WASM) and `python/tests/test_forget_guard.py`. No on-chain or protobuf change.
+
 ## [2.6.1] - 2026-11-02
 
 Packaging-only release for the PyPI wheel. No source, API or output changes:

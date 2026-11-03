@@ -1234,6 +1234,56 @@ async def _fetch_fact_by_id(
     return data.get("data", {}).get("fact")
 
 
+async def fetch_fact_plaintext(
+    fact_id: str,
+    owner: str,
+    relay: RelayClient,
+    keys: DerivedKeys,
+) -> Optional[dict]:
+    """Fetch one fact by id and decrypt it in memory.
+
+    Returns ``{"id", "text", "embedding"}`` (``embedding`` may be ``None``),
+    or ``None`` when the fact is missing, belongs to another owner, is a
+    digest blob, or cannot be decrypted. Used by ``forget`` to snapshot the
+    fact for the client-side forget ledger (internal#605) before it is
+    tombstoned. Never raises.
+    """
+    try:
+        fact = await _fetch_fact_by_id(fact_id, owner, relay)
+        if not fact:
+            return None
+        fact_owner = str(fact.get("owner") or "").lower()
+        if fact_owner and owner and fact_owner != str(owner).lower():
+            return None
+        blob_hex = fact.get("encryptedBlob", "") or ""
+        if blob_hex.startswith("0x"):
+            blob_hex = blob_hex[2:]
+        if not blob_hex:
+            return None
+        decrypted = decrypt(
+            base64.b64encode(bytes.fromhex(blob_hex)).decode("ascii"),
+            keys.encryption_key,
+        )
+        if is_digest_blob(decrypted):
+            return None
+        text = read_claim_from_blob(decrypted).get("text") or ""
+        if not text:
+            return None
+        embedding: Optional[list[float]] = None
+        enc_emb = fact.get("encryptedEmbedding")
+        if enc_emb:
+            try:
+                embedding = decrypt_embedding(enc_emb, keys.encryption_key)
+            except Exception:
+                embedding = None
+        if embedding and len(embedding) != get_embedding_dims():
+            embedding = None
+        return {"id": fact_id, "text": text, "embedding": embedding}
+    except Exception as e:
+        logger.debug("fetch_fact_plaintext(%s) failed: %s", fact_id, type(e).__name__)
+        return None
+
+
 def _decrypt_and_parse_claim(
     fact: dict,
     keys: DerivedKeys,

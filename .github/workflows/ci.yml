@@ -367,6 +367,8 @@ jobs:
         run: cd tests/parity && npx tsx session-key-grant-roundtrip.ts
       - name: Outer protobuf fields 9/11 absent — MCP + WASM calldata parity (PRD-04 F8 / DEP-6)
         run: cd tests/parity && npx tsx outer-protobuf-parity.test.ts
+      - name: Forget-guard parity (TS/WASM side, internal#605)
+        run: cd tests/parity && npx tsx forget-guard-parity.test.ts
 
   # NOTE: Relay unit tests run in the private totalreclaw-relay repo CI.
   # This job runs the E2E smoke test against a real relay + PostgreSQL
