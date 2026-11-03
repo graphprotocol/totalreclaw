@@ -25,7 +25,7 @@ When you create a vault, after writing down and confirming your phrase, you're a
 
 > **Back up your recovery phrase?**
 
-- **Back up my phrase** — stores an encrypted copy with TotalReclaw. On a new device, tap "Recover with passkey" and, if your passkey synced, you're back in with one biometric prompt — no typing.
+- **Back up my phrase** — stores an encrypted copy with TotalReclaw. On a new device, tap "Recover with passkey" and, if your passkey synced, you're back in with one biometric prompt — no typing. TotalReclaw can't read the copy, but the passkey alone opens it: anyone who gets into the account that syncs your passkey (Apple, Google or your password manager), along with its PIN or device passcode, could recover your phrase. Our servers are not a second lock.
 - **Download an encrypted file instead** — no TotalReclaw storage at all. You get a `totalreclaw-backup-YYYY-MM-DD.json` file, opens only with the same passkey. **Where you save it matters** — see the caveat below.
 - **Not now** — proceeds with no backup. Enable one later from **Settings → Passkeys & backup**.
 
