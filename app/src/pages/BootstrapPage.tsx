@@ -1,16 +1,18 @@
 import { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useCrypto, type EscrowChoice } from "../contexts/CryptoContext";
 import { isMnemonicValid } from "../lib/crypto";
-import { isPasskeyPrfAvailable } from "../lib/auth/prf-support";
+import { assessPasskeySupport, currentPasskeyPlatform, type PasskeySupport } from "../lib/auth/prf-support";
 import { PrfUnsupportedError } from "../lib/auth/passkey";
 import { download } from "../lib/download";
 import { escrowFilename } from "../lib/auth/escrow";
 import { recordFileBackup } from "../lib/vault/fileBackupRecord";
+import { PasskeyAdvisoryNotice, PasskeyUnsupportedNotice } from "../components/PasskeySupportNotice";
 
 type Step =
   | "checking"
   | "unsupported"
+  | "advisory"
   | "choose"
   | "show-phrase"
   | "confirm-backup"
@@ -38,19 +40,40 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * Router state the /unlock front door passes when the user picked "Create a
+ * vault", so this page skips its own create-or-restore choice.
+ */
+export type BootstrapIntent = { intent?: "create" };
+
+/**
+ * Where the browser check sends the user (support matrix §5.2): a hard block
+ * only when WebAuthn is missing; an advisory, with "Continue anyway", when no
+ * built-in passkey was reported; otherwise straight on — to the new phrase if
+ * the front door already chose "Create a vault", else to the create-or-
+ * restore choice.
+ */
+export function stepAfterSupportCheck(
+  support: PasskeySupport,
+  wantsCreate: boolean,
+): "unsupported" | "advisory" | "create" | "choose" {
+  if (support === "blocked") return "unsupported";
+  if (support === "advisory") return "advisory";
+  return wantsCreate ? "create" : "choose";
+}
+
 export function BootstrapPage() {
   const { generatePhrase, bootstrap } = useCrypto();
   const navigate = useNavigate();
+  const location = useLocation();
+  const wantsCreate = (location.state as BootstrapIntent | null)?.intent === "create";
+  const platform = currentPasskeyPlatform();
   const [step, setStep] = useState<Step>("checking");
   const [phrase, setPhrase] = useState("");
   const [positions, setPositions] = useState<number[]>([]);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [importValue, setImportValue] = useState("");
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    isPasskeyPrfAvailable().then((ok) => setStep(ok ? "choose" : "unsupported"));
-  }, []);
 
   const words = phrase ? phrase.trim().split(/\s+/) : [];
 
@@ -92,6 +115,29 @@ export function BootstrapPage() {
     setStep("show-phrase");
   }, [generatePhrase]);
 
+  // After the browser check passes (or the user accepts the advisory): go
+  // straight to the phrase when they already chose "Create a vault".
+  const afterSupportCheck = useCallback(() => {
+    if (stepAfterSupportCheck("ok", wantsCreate) === "create") startCreate();
+    else setStep("choose");
+  }, [wantsCreate, startCreate]);
+
+  // Support-matrix §5.2 pre-gate. "advisory" warns but lets the user go on;
+  // the enrol-time PRF check stays authoritative (PrfUnsupportedError below).
+  useEffect(() => {
+    let cancelled = false;
+    void assessPasskeySupport().then((support) => {
+      if (cancelled) return;
+      const next = stepAfterSupportCheck(support, wantsCreate);
+      if (next === "create") startCreate();
+      else setStep(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Run once on mount: the check is not re-run if the intent changes.
+  }, []);
+
   const beginBackupCheck = useCallback(() => {
     setPositions(pickPositions(words.length, 3));
     setAnswers({});
@@ -115,16 +161,15 @@ export function BootstrapPage() {
   if (step === "unsupported") {
     return (
       <Shell>
-        <h1 className="font-display text-2xl font-semibold text-ink">Passkeys not available</h1>
-        <p className="mt-3 text-ink-muted">
-          TotalReclaw needs a passkey (the WebAuthn <span className="font-mono text-sm">prf</span>{" "}
-          extension) to protect your vault key on this device. Your browser or platform doesn’t
-          support it yet.
-        </p>
-        <p className="mt-3 text-ink-muted">
-          Try a recent Chrome, Edge, or Safari 18+ (iOS 18+) on a device with Touch ID / Face ID / Windows
-          Hello.
-        </p>
+        <PasskeyUnsupportedNotice platform={platform} />
+      </Shell>
+    );
+  }
+
+  if (step === "advisory") {
+    return (
+      <Shell>
+        <PasskeyAdvisoryNotice platform={platform} onContinue={afterSupportCheck} />
       </Shell>
     );
   }

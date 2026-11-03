@@ -3,6 +3,44 @@ import { useNavigate } from "react-router-dom";
 import { useCrypto } from "../contexts/CryptoContext";
 import { isMnemonicValid } from "../lib/crypto";
 import { mapUnlockError, type UnlockErrorContext } from "../lib/errorTaxonomy";
+import type { BootstrapIntent } from "./BootstrapPage";
+
+/**
+ * Shown before starting a new vault ONLY after a recovery attempt on this
+ * device failed — that is the one moment a returning user might be about to
+ * create a second, empty vault by mistake. First-time creation from the
+ * front door has no confirm (passkey review §4.4).
+ */
+export const CREATE_AFTER_FAILED_RECOVERY_CONFIRM =
+  "Start a new, empty vault instead? Your existing vault isn’t deleted — you can still recover it later with its passkey, backup file, or recovery phrase.";
+
+export function createVaultConfirmMessage(recoveryFailed: boolean): string | null {
+  return recoveryFailed ? CREATE_AFTER_FAILED_RECOVERY_CONFIRM : null;
+}
+
+/** First screen on a device with no vault: create (primary) or recover (secondary). */
+export function NoVaultFrontDoor({ onCreate, onHaveOne }: { onCreate: () => void; onHaveOne: () => void }) {
+  return (
+    <>
+      <h1 className="font-display text-3xl font-semibold text-ink">Your memory, kept safe.</h1>
+      <p className="mt-3 text-ink-muted">Encrypted on your device. We can’t read it.</p>
+      <div className="mt-8 space-y-3">
+        <button
+          onClick={onCreate}
+          className="w-full rounded-control bg-clay px-5 py-3 font-semibold text-warm-white transition duration-200 ease-keeper hover:bg-clay-deep"
+        >
+          Create a vault
+        </button>
+        <button
+          onClick={onHaveOne}
+          className="w-full rounded-control bg-surface px-5 py-3 font-semibold text-ink ring-1 ring-hairline transition duration-200 ease-keeper hover:ring-clay"
+        >
+          I already have one
+        </button>
+      </div>
+    </>
+  );
+}
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -25,6 +63,9 @@ export function UnlockPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [showPhrase, setShowPhrase] = useState(false);
   const [phrase, setPhrase] = useState("");
+  // No-vault branch only: front door first, recovery choices behind "I already have one".
+  const [noVaultView, setNoVaultView] = useState<"front" | "recover">("front");
+  const [recoveryFailed, setRecoveryFailed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const goVault = useCallback(() => navigate("/memory", { replace: true }), [navigate]);
@@ -37,6 +78,7 @@ export function UnlockPage() {
       try {
         await fn();
       } catch (e) {
+        setRecoveryFailed(true); // only read on the no-vault branch
         setError(mapUnlockError(e, context).message);
       } finally {
         setBusy(false);
@@ -44,6 +86,12 @@ export function UnlockPage() {
     },
     [],
   );
+
+  /** A recovery attempt finished without unlocking: show why, and remember it. */
+  const recoveryNotice = useCallback((message: string) => {
+    setRecoveryFailed(true);
+    setNotice(message);
+  }, []);
 
   const handlePasskey = useCallback(
     () =>
@@ -59,14 +107,14 @@ export function UnlockPage() {
       runGuarded("escrow", async () => {
         const result = await restoreFromEscrow();
         if (result === "no-escrow") {
-          setNotice(
+          recoveryNotice(
             "We couldn’t find a backup for this passkey. Try a different passkey, or use your recovery phrase.",
           );
           return;
         }
         goVault();
       }),
-    [runGuarded, restoreFromEscrow, goVault],
+    [runGuarded, restoreFromEscrow, goVault, recoveryNotice],
   );
 
   const handleFileChange = useCallback(
@@ -77,21 +125,21 @@ export function UnlockPage() {
       void runGuarded("file", async () => {
         const result = await restoreFromFile(file);
         if (result === "bad-file") {
-          setNotice("This doesn’t look like a TotalReclaw backup file.");
+          recoveryNotice("This doesn’t look like a TotalReclaw backup file.");
           return;
         }
         if (result === "unsupported-version") {
-          setNotice("This backup was made by a newer version of TotalReclaw.");
+          recoveryNotice("This backup was made by a newer version of TotalReclaw.");
           return;
         }
         if (result === "wrong-passkey") {
-          setNotice("This backup was made with a different passkey.");
+          recoveryNotice("This backup was made with a different passkey.");
           return;
         }
         goVault();
       });
     },
-    [runGuarded, restoreFromFile, goVault],
+    [runGuarded, restoreFromFile, goVault, recoveryNotice],
   );
 
   const handlePhrase = useCallback(
@@ -104,15 +152,11 @@ export function UnlockPage() {
   );
 
   const handleCreateNew = useCallback(() => {
-    if (
-      !confirm(
-        "Create a new vault instead of recovering? Your existing memories aren’t deleted — you can still reach them later with the right passkey or phrase — but this device will start a separate, empty vault.",
-      )
-    ) {
-      return;
-    }
-    navigate("/bootstrap");
-  }, [navigate]);
+    const message = createVaultConfirmMessage(recoveryFailed);
+    if (message && !confirm(message)) return;
+    const state: BootstrapIntent = { intent: "create" };
+    navigate("/bootstrap", { state });
+  }, [navigate, recoveryFailed]);
 
   const phraseEntry = (
     <div className="mt-4">
@@ -147,14 +191,20 @@ export function UnlockPage() {
     </div>
   );
 
-  // ---- no local VaultRecord: four-way recovery choice (§6.3) ----
+  // ---- no local VaultRecord: front door, then the recovery choices (§6.3) ----
+  if (status === "no-vault" && noVaultView === "front") {
+    return (
+      <Shell>
+        <NoVaultFrontDoor onCreate={handleCreateNew} onHaveOne={() => setNoVaultView("recover")} />
+      </Shell>
+    );
+  }
+
   if (status === "no-vault") {
     return (
       <Shell>
         <h1 className="font-display text-3xl font-semibold text-ink">Welcome back.</h1>
-        <p className="mt-3 text-ink-muted">
-          This device doesn’t have a vault yet. Recover an existing one, or start fresh.
-        </p>
+        <p className="mt-3 text-ink-muted">Recover your vault on this device.</p>
         <ErrorBanner message={error} />
         {notice && <p className="mt-4 rounded-control bg-surface px-3 py-2 text-sm text-ink-muted ring-1 ring-hairline">{notice}</p>}
 
@@ -192,13 +242,24 @@ export function UnlockPage() {
             >
               Use recovery phrase instead
             </button>
-            <div className="pt-2 text-center">
+            <div className="flex justify-center gap-4 pt-2">
+              <button
+                disabled={busy}
+                onClick={() => {
+                  setError(null);
+                  setNotice(null);
+                  setNoVaultView("front");
+                }}
+                className="text-xs font-semibold text-ink-muted hover:text-ink"
+              >
+                Back
+              </button>
               <button
                 disabled={busy}
                 onClick={handleCreateNew}
                 className="text-xs font-semibold text-ink-muted underline decoration-dotted hover:text-ink"
               >
-                Create a new vault
+                Create a new vault instead
               </button>
             </div>
           </div>

@@ -116,6 +116,7 @@ try {
   await wipeLocalStorage();
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForURL("**/unlock", { timeout: 15000 });
+  await page.getByText("I already have one", { exact: true }).click(); // front door → recovery choices
   await page.getByText("Recover with passkey", { exact: true }).click();
 
   await page

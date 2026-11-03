@@ -139,6 +139,7 @@ try {
   await wipeLocalStorage();
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForURL("**/unlock", { timeout: 15000 });
+  await page.getByText("I already have one", { exact: true }).click(); // front door → recovery choices
   await page.getByText("Open a backup file", { exact: true }).waitFor({ timeout: 10000 });
 
   const fileChooserPromise = page.waitForEvent("filechooser");
