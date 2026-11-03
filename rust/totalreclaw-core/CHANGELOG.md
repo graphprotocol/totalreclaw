@@ -5,6 +5,25 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Extraction prompt stores fewer non-facts.** The canonical `extraction.md` gains
+  three rules and two sharper type definitions: a memory is a full sentence with a
+  subject, never a clause or question (internal #620, #662); a single request is
+  not a trait, and one-off tasks are skipped unless they belong to the user's job or
+  project (what a request reveals about the user is still kept); the assistant's
+  suggestions are not stored as the user's decisions (#638); `commitment` excludes
+  past and ongoing activity (#344). Measured on the internal small-model testbed with
+  GLM 5.3 Flash through the shipped Python pipeline: on real user chats
+  (held out from tuning) precision rises by 9.7 points on Enclave-style batches and
+  10.4 on 3-turn plugin windows, recall moves by -3.2 and -2.3 (95% intervals
+  include zero), and facts stored on windows with nothing worth storing drop by 11
+  and 15 points. Applies to every client that reads the core prompt (Python/Hermes,
+  NanoClaw). The OpenClaw plugin and MCP server keep their own copies of the prompt
+  and are unchanged.
+
 ## [2.6.1] - 2026-11-02
 
 Packaging-only release for the PyPI wheel. No source, API or output changes:

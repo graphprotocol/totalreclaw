@@ -6,6 +6,16 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Auto-extraction stores fewer non-facts** once the client runs on a core release with the new extraction prompt (see the core changelog): no assistant advice recorded as the user's decision, no traits inferred from a single request, no past activity typed as `commitment`. On a held-out set of real chats, precision of stored facts rises about 10 points at a recall cost of about 2 to 3 points.
+
+### Fixed
+
+- **Sentence fragments are no longer stored as facts.** Auto-extraction stored a question fragment ("these days?") and a bare clause ("to restore it, not create a new one") as user facts. A narrow post-filter now drops a candidate fact that is a question, or that starts lower-case with no capital letter and no "user" anywhere. On the small-model testbed it matches 9 of about 21,000 stored facts, none of them a gold fact. Runs in both `extract_facts_llm` and `extract_facts_compaction`, next to the #471 filter.
+
 ## [2.5.3] — 2026-11-02
 
 ### Added
