@@ -35,6 +35,16 @@
  * (Claude Desktop / Cursor / Claude Code) for the server to re-read
  * credentials.json and switch out of `unconfigured` mode.
  *
+ * Existing-credentials guard: `~/.totalreclaw/credentials.json` is shared
+ * with every TotalReclaw client on the machine (Hermes reads the same file).
+ * Pairing over it would move all of them to a different account, so when the
+ * server is configured or the file exists (even one this server can't read,
+ * such as a Hermes OS-keychain file), the tool refuses with
+ * `already_configured` and opens nothing. The credentials are created with
+ * an exclusive open, so a file that appears while the browser step runs is
+ * never overwritten either. There is no replace path here; a user-confirmed
+ * replace mode (relay PR #72, mirroring Hermes) is #716's to add.
+ *
  * Reference implementation: `skill/plugin/index.ts` (totalreclaw_pair tool
  * handler) and `skill/plugin/pair-cli-relay.ts` (CLI runner). The crypto +
  * WS-client code in `pair-crypto.ts` and `pair-remote-client.ts` is a
@@ -49,6 +59,7 @@ import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
 import type { ToolContext } from './types.js';
+import type { UnusableCredentials } from '../dispatch.js';
 import { PAIR_TOOL_DESCRIPTION } from '../prompts.js';
 import {
   openRemotePairSession,
@@ -145,24 +156,50 @@ function relayBaseToHttps(relayBase: string): string {
     .replace(/\/+$/, '');
 }
 
+/** Thrown when pairing would overwrite a credentials.json that already exists. */
+export class CredentialsExistError extends Error {
+  constructor() {
+    super('credentials.json already exists');
+    this.name = 'CredentialsExistError';
+  }
+}
+
+/**
+ * Create credentials.json at mode 0600 with an exclusive open (`wx`). If a
+ * credentials file appeared after the tool's guard ran (another pairing,
+ * another client), the write fails with `CredentialsExistError` instead of
+ * overwriting it.
+ */
+function writeCredentialsFileExclusive(credentialsPath: string, body: string): void {
+  const dir = path.dirname(credentialsPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  try {
+    fs.writeFileSync(credentialsPath, body, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
+      throw new CredentialsExistError();
+    }
+    throw err;
+  }
+}
+
 /**
  * Write credentials.json with 0600 permissions. Mirrors `cli/setup.ts`
  * `saveCredentials` but accepts a richer payload (`mnemonic`, `salt` hex,
- * `userId`, `serverUrl`).
+ * `userId`, `serverUrl`). Never overwrites an existing file.
  */
-function writePairedCredentials(creds: {
-  userId: string;
-  salt: string;
-  serverUrl: string;
-  mnemonic: string;
-}): void {
-  if (!fs.existsSync(CREDENTIALS_DIR)) {
-    fs.mkdirSync(CREDENTIALS_DIR, { recursive: true, mode: 0o700 });
-  }
-  fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(creds, null, 2) + '\n', {
-    encoding: 'utf-8',
-    mode: 0o600,
-  });
+function writePairedCredentials(
+  creds: {
+    userId: string;
+    salt: string;
+    serverUrl: string;
+    mnemonic: string;
+  },
+  credentialsPath: string,
+): void {
+  writeCredentialsFileExclusive(credentialsPath, JSON.stringify(creds, null, 2) + '\n');
 }
 
 /**
@@ -184,7 +221,7 @@ function writePairedCredentials(creds: {
  * this object needs, since `DerivedBundleV1`'s shape IS the wire shape
  * (see `subgraph/bundle.ts`).
  */
-function writePairedBundleCredentials(bundle: DerivedBundleV1): void {
+function writePairedBundleCredentials(bundle: DerivedBundleV1, credentialsPath: string): void {
   const wire = {
     version: 2 as const,
     schema: 'derived-bundle-v1' as const,
@@ -194,13 +231,7 @@ function writePairedBundleCredentials(bundle: DerivedBundleV1): void {
     provisioned_at: bundle.provisioned_at,
     provisioned_by: bundle.provisioned_by,
   };
-  if (!fs.existsSync(CREDENTIALS_DIR)) {
-    fs.mkdirSync(CREDENTIALS_DIR, { recursive: true, mode: 0o700 });
-  }
-  fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(wire, null, 2) + '\n', {
-    encoding: 'utf-8',
-    mode: 0o600,
-  });
+  writeCredentialsFileExclusive(credentialsPath, JSON.stringify(wire, null, 2) + '\n');
 }
 
 /**
@@ -255,6 +286,8 @@ export async function runPairBackgroundTask(opts: {
   serverUrl: string;
   hardTimeoutMs?: number;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
+  /** Override the credentials.json path — for tests. */
+  credentialsPath?: string;
 }): Promise<void> {
   const log =
     opts.log ??
@@ -270,6 +303,18 @@ export async function runPairBackgroundTask(opts: {
   const hardTimeoutMs = opts.hardTimeoutMs ?? PAIR_TOOL_HARD_TIMEOUT_MS;
   const httpsBase = relayBaseToHttps(opts.relayBaseUrl);
   const tokenTail = opts.session.token.slice(0, 8);
+  const credentialsPath = opts.credentialsPath ?? CREDENTIALS_PATH;
+
+  /** Map a credentials write failure to the nack the relay gets. */
+  const writeFailure = (writeErr: unknown): { state: 'error'; error: string } => {
+    if (writeErr instanceof CredentialsExistError) {
+      log('warn', 'pair: credentials.json appeared during pairing; not overwriting it');
+      return { state: 'error', error: 'already_configured' };
+    }
+    const m = writeErr instanceof Error ? writeErr.message : String(writeErr);
+    log('error', `pair: credentials.json write failed: ${m}`);
+    return { state: 'error', error: 'credentials_write_failed' };
+  };
 
   const phraseUploadPromise = awaitPhraseUpload(opts.session, {
     phraseValidator: (p: string) => validateMnemonic(p, wordlist),
@@ -299,16 +344,17 @@ export async function runPairBackgroundTask(opts: {
         }
 
         try {
-          writePairedCredentials({
-            userId: registeredUserId,
-            salt: saltHex,
-            serverUrl: opts.serverUrl,
-            mnemonic,
-          });
+          writePairedCredentials(
+            {
+              userId: registeredUserId,
+              salt: saltHex,
+              serverUrl: opts.serverUrl,
+              mnemonic,
+            },
+            credentialsPath,
+          );
         } catch (writeErr) {
-          const m = writeErr instanceof Error ? writeErr.message : String(writeErr);
-          log('error', `pair: credentials.json write failed: ${m}`);
-          return { state: 'error', error: 'credentials_write_failed' };
+          return writeFailure(writeErr);
         }
 
         log(
@@ -336,7 +382,11 @@ export async function runPairBackgroundTask(opts: {
         // POST /v1/register. The vault is registered by the provisioning
         // origin (the SPA, which holds the root), which is the only party
         // able to register correctly.
-        writePairedBundleCredentials(bundle);
+        try {
+          writePairedBundleCredentials(bundle, credentialsPath);
+        } catch (writeErr) {
+          return writeFailure(writeErr);
+        }
         log(
           'info',
           `pair: session ${tokenTail}… completed via derived-bundle-v1; ` +
@@ -398,7 +448,37 @@ export interface HandlePairOptions {
   awaitBackground?: boolean;
   /** Logger override (tests). Default writes to stderr. */
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
+  /**
+   * True when the running server already has a credential (managed or
+   * self-hosted mode). Wired by `index.ts`. The guard also checks
+   * credentials.json on disk, which covers a pairing completed earlier in
+   * this process (the server stays unconfigured until restart) and a file
+   * this server can't read.
+   */
+  isConfigured?: () => boolean;
+  /** Set when startup found a credentials file it can't use. Wired by `index.ts`. */
+  getUnusableCredentials?: () => UnusableCredentials | undefined;
+  /** Override the credentials.json path — for tests. */
+  credentialsPath?: string;
+  /** Override the session opener — for tests. */
+  openSession?: typeof openRemotePairSession;
 }
+
+/** Refusal when the server is already set up. */
+export const ALREADY_CONFIGURED_MESSAGE =
+  'TotalReclaw is already set up on this machine, so there is nothing to pair. Tell the user ' +
+  'their account is already set up. Pairing again would switch this app to a DIFFERENT ' +
+  'account, and every other TotalReclaw client on this machine (such as Hermes) with it, ' +
+  'because they share ~/.totalreclaw/credentials.json. This tool does not do that. Do not ' +
+  'move, rename or delete the credentials file to get around this.';
+
+/** Refusal when a credentials file exists that this server doesn't (yet) use. */
+export const CREDENTIALS_FILE_EXISTS_MESSAGE =
+  'A TotalReclaw credentials file already exists at ~/.totalreclaw/credentials.json. ' +
+  'Pairing would replace that account for every TotalReclaw client on this machine (such as ' +
+  'Hermes), so this tool refuses. If the user just finished pairing, they need to fully quit ' +
+  'and reopen this app so the server loads it. Do not move, rename or delete the credentials ' +
+  'file to get around this.';
 
 /**
  * Handle a totalreclaw_pair tool call. Returns the URL + PIN + expires_at_ms
@@ -410,15 +490,43 @@ export async function handlePair(
   args: Record<string, unknown> | undefined,
   opts: HandlePairOptions = {},
 ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
+  const credentialsPath = opts.credentialsPath ?? CREDENTIALS_PATH;
+
+  // Existing-credentials guard, both modes: a generate pairing always makes
+  // a different account, and an import over a file this server can't read
+  // (e.g. Hermes' keychain storage) can't be checked to be the same account.
+  const configured = opts.isConfigured?.() ?? false;
+  if (configured || fs.existsSync(credentialsPath)) {
+    const unusable = configured ? undefined : opts.getUnusableCredentials?.();
+    const message = configured
+      ? ALREADY_CONFIGURED_MESSAGE
+      : unusable
+        ? `${unusable.message} Do not move, rename or delete the credentials file to get around this.`
+        : CREDENTIALS_FILE_EXISTS_MESSAGE;
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            already_configured: true,
+            ...(unusable ? { reason: unusable.reason } : {}),
+            message,
+          }),
+        },
+      ],
+    };
+  }
+
   const rawMode = args?.mode;
   const mode: 'generate' | 'import' = rawMode === 'import' ? 'import' : 'generate';
 
   const relayBaseUrl = opts.relayBaseUrl ?? resolvePairRelayUrl();
   const serverUrl = opts.serverUrl ?? process.env.TOTALRECLAW_SERVER_URL ?? 'https://api.totalreclaw.xyz';
+  const openSession = opts.openSession ?? openRemotePairSession;
 
   let session: RemotePairSession;
   try {
-    session = await openRemotePairSession({
+    session = await openSession({
       relayBaseUrl,
       mode: mode === 'generate' ? 'generate' : 'import',
     });
@@ -454,6 +562,7 @@ export async function handlePair(
     relayBaseUrl,
     serverUrl,
     log: opts.log,
+    credentialsPath,
   });
 
   if (opts.awaitBackground) {

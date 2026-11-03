@@ -79,8 +79,10 @@ import {
 import {
   resolveManagedCredential,
   isV2BundleCredentialsFile,
+  UnsupportedCredentialsError,
   type ResolvedCredential,
 } from './subgraph/credentials.js';
+import type { UnusableCredentials } from './dispatch.js';
 import { bundleVaultToBuffers, redactedBundleSummary, type DerivedBundleV1 } from './subgraph/bundle.js';
 import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, fetchFactById } from './subgraph/search.js';
 import { confirmIndexed } from './subgraph/confirm-indexed.js';
@@ -240,6 +242,14 @@ function resolveMnemonic(): string | undefined {
 
 
 let currentMode: ServerMode = 'unconfigured';
+
+/**
+ * Set at startup when credentials.json exists but this server can't use it
+ * (OS-keychain-wrapped, or an unknown `version`). The server then runs
+ * unconfigured and says why on every tool call; `totalreclaw_pair` refuses
+ * to overwrite the file either way.
+ */
+let unusableCredentials: UnusableCredentials | undefined;
 
 // Store-time near-duplicate detection is always ON in v1.
 // The TOTALRECLAW_STORE_DEDUP env var was removed.
@@ -1958,7 +1968,11 @@ const callToolHandler = createCallToolHandler({
   getMode: () => currentMode,
   handleSupport: (args) =>
     handleSupport({ walletAddress: subgraphState?.smartAccountAddress ?? null }, args),
-  handlePair: (args) => handlePair({}, args as Record<string, unknown> | undefined),
+  handlePair: (args) =>
+    handlePair({}, args as Record<string, unknown> | undefined, {
+      isConfigured: () => currentMode !== 'unconfigured',
+      getUnusableCredentials: () => unusableCredentials,
+    }),
   common: commonHandlers,
   resolveBundle,
   isQuotaExceededError,
@@ -1966,6 +1980,7 @@ const callToolHandler = createCallToolHandler({
   isAuthError,
   authHintResponse,
   onMutate,
+  getUnusableCredentials: () => unusableCredentials,
 });
 
 // ── Show-phrase CLI subcommand ────────────────────────────────────────────────
@@ -2048,19 +2063,31 @@ async function main(): Promise<void> {
     try {
       credential = resolveManagedCredential();
     } catch (err) {
-      // Loud, actionable, FATAL — never a silent downgrade. An unknown
-      // credentials.json `version`, a `keychain_wrapped` file this server
-      // can't unwrap, or a bundle that fails §4.7 validation are all
-      // evidence of a corrupted/tampered/misconfigured credential store,
-      // not transient conditions to paper over with a caught exception.
-      // Crashing the process with the error on stderr IS the correct loud
-      // posture for a long-running server — see derived-bundle-v1.md §3.2's
-      // "the one place a well-meaning try/except would create a security
-      // bug" warning, and mcp/tests/credentials.test.ts's coverage of every
-      // one of these throw paths.
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`TotalReclaw MCP: fatal credential error: ${msg}`);
-      throw err;
+      if (err instanceof UnsupportedCredentialsError) {
+        // A real credential from another client (Hermes keychain storage)
+        // or a newer client (unknown `version`) that this server can't
+        // read. Not evidence of tampering, so start UNCONFIGURED instead of
+        // crashing: a crash makes the host drop every tool and leaves the
+        // reason in a log the user never sees. Still not a downgrade —
+        // nothing in the file is used — and the reason is returned on every
+        // tool call (dispatch.ts notConfiguredResponse). totalreclaw_pair
+        // refuses to overwrite the file.
+        unusableCredentials = { reason: err.reason, message: err.message };
+        currentMode = 'unconfigured';
+        console.error(`TotalReclaw MCP server started (unconfigured): ${err.message}`);
+      } else {
+        // Loud, actionable, FATAL — never a silent downgrade. A bundle that
+        // fails §4.7 validation is evidence of a corrupted/tampered
+        // credential store, not a transient condition to paper over with a
+        // caught exception. Crashing the process with the error on stderr
+        // IS the correct loud posture — see derived-bundle-v1.md §3.2's "the
+        // one place a well-meaning try/except would create a security bug"
+        // warning, and mcp/tests/credentials.test.ts's coverage of the
+        // throw paths.
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`TotalReclaw MCP: fatal credential error: ${msg}`);
+        throw err;
+      }
     }
 
     if (credential?.kind === 'bundle') {
@@ -2073,10 +2100,10 @@ async function main(): Promise<void> {
       currentMode = 'subgraph';
       subgraphState = await initSubgraphState(credential.mnemonic);
       console.error(`TotalReclaw MCP server started (managed service, owner: ${subgraphState.smartAccountAddress})`);
-    } else {
+    } else if (!unusableCredentials) {
       currentMode = 'unconfigured';
       console.error(
-        'TotalReclaw MCP server started (unconfigured — set TOTALRECLAW_RECOVERY_PHRASE in the MCP host config; see docs/guides/claude-code-setup.md)',
+        'TotalReclaw MCP server started (unconfigured — ask the assistant to run totalreclaw_pair to set up an account)',
       );
     }
   }

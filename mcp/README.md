@@ -205,7 +205,13 @@ explicitly, not silently unsupported:
 - **No OS-keychain unwrap.** MCP only reads the plaintext ("headless / no
   keychain") bundle storage form. A `version: 2` file with
   `"keychain_wrapped": true` (the desktop-keychain storage form Hermes
-  writes) is a loud, actionable error, not a silent skip.
+  writes), or Hermes' older `__keychain__:v1:` marker file, is not read. The
+  server starts unconfigured and every tool call returns `not_configured`
+  with `reason: "keychain_wrapped"` and an explanation (before 3.5.1 the
+  server exited at startup, so the host showed no tools). `totalreclaw_pair`
+  refuses to overwrite the file. The same applies to an unknown `version`
+  (`reason: "unknown_version"`). A `version: 2` bundle that fails validation
+  is still fatal at startup.
 - **No `TOTALRECLAW_CREDENTIALS_PROVIDER` / external-secret-manager
   transport.** MCP always reads `credentials.json` from disk (or
   `TOTALRECLAW_CREDENTIALS_PATH`) — it has no `file` / `external` provider
