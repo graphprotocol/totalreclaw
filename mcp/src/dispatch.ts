@@ -141,6 +141,12 @@ export interface DispatchDeps {
   authHintResponse: () => ToolResponse;
   /** Invalidate the memory-context resource cache + notify subscribers. */
   onMutate: () => void;
+  /**
+   * Set when startup found a credentials file it could not use (see
+   * `UnusableCredentials`). Unconfigured-mode responses then explain that
+   * instead of the generic setup guidance.
+   */
+  getUnusableCredentials?: () => UnusableCredentials | undefined;
 }
 
 /** Response for the removed `totalreclaw_setup` tool (phrase-safety, 3.2.1). */
@@ -163,8 +169,33 @@ export function setupRemovedResponse(): ToolResponse {
   };
 }
 
+/**
+ * Why the server is unconfigured even though a credentials file exists: a
+ * file written by another TotalReclaw client in a form this server can't
+ * read (see `UnsupportedCredentialsError` in `subgraph/credentials.ts`).
+ */
+export interface UnusableCredentials {
+  reason: 'keychain_wrapped' | 'unknown_version';
+  message: string;
+}
+
 /** Response when a tool is called before the server is configured. */
-export function notConfiguredResponse(): ToolResponse {
+export function notConfiguredResponse(unusable?: UnusableCredentials): ToolResponse {
+  if (unusable) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          error: 'not_configured',
+          reason: unusable.reason,
+          message:
+            `${unusable.message} Tell the user this plainly. Do not call totalreclaw_pair ` +
+            '(it would refuse), and do not move, rename or delete the credentials file.',
+        }),
+      }],
+      isError: true,
+    };
+  }
   return {
     content: [{
       type: 'text',
@@ -218,7 +249,7 @@ export function createCallToolHandler(
 
     // 4. Unconfigured: everything else returns setup guidance.
     const mode = deps.getMode();
-    if (mode === 'unconfigured') return notConfiguredResponse();
+    if (mode === 'unconfigured') return notConfiguredResponse(deps.getUnusableCredentials?.());
 
     // 5. Configured dispatch, wrapped in the shared quota → auth → generic funnel.
     try {
