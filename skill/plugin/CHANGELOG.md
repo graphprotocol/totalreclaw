@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Changed
+
+- **Recall downloads much less data on large vaults.** Blind-index queries now return fact ids only. Each unique fact's payload (blob + embedding) is then fetched once, in batches of 100, with at most 6 subgraph queries in flight. Before, every trapdoor batch carried the full payload of every fact it matched, so a fact that matched several batches was downloaded several times. Same candidates in the same order, so ranking is unchanged. On a mocked 1,000-fact vault, a recall dropped from about 10 MB to 3.2 MB. Port of the Python change (public #703); internal #666.
+
 ## [3.4.5] — 2026-09-06
 
 ### Fixed
