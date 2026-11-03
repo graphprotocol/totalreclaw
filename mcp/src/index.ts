@@ -17,6 +17,8 @@ import {
   parseDebriefResponse,
   handleSupport,
   handleAccount,
+  accountContextFromState,
+  accountUnavailableResponse,
   handlePair,
 } from './tools/index.js';
 import { getLastBillingResponse } from './tools/status.js';
@@ -310,9 +312,10 @@ interface SubgraphState {
    * Exactly one of `mnemonic` / `ownerPrivateKeyHex` is set (Option E Phase
    * 2 / #581, P2-13). `credentialKind` says which. A bundle-configured
    * state has NO mnemonic anywhere in the process (derived-bundle-v1.md
-   * §4.6 point 1) — `mnemonic` is `undefined`, not an empty string, so a
-   * stray `.split()` crashes loudly instead of silently hinting nothing
-   * (see `accountHandler` below, which reads this).
+   * §4.6 point 1) — `mnemonic` is `undefined`, not an empty string.
+   * No tool-output path may read `mnemonic` (#670: `accountHandler` used to
+   * hint its first/last words into model context; it now reads only
+   * `credentialKind`).
    */
   credentialKind: 'mnemonic' | 'bundle';
   mnemonic?: string;
@@ -1873,42 +1876,16 @@ async function upgradeHandler(args: unknown): Promise<ToolResponse> {
 }
 
 async function accountHandler(args: unknown): Promise<ToolResponse> {
-  if (!subgraphState) {
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          error: 'Account details require managed service mode (subgraph). Self-hosted mode does not track billing.',
-        }),
-      }],
-      isError: true,
-    };
-  }
-  const authKeyHex = Buffer.from(subgraphState.authKey).toString('hex');
-  // #581 P2-13: bundle-mode state has no `mnemonic` (derived-bundle-v1.md
-  // §4.6 point 1 — no code path may reconstruct one), so there is no phrase
-  // to hint at. `.split()` on `undefined` would throw; branch explicitly
-  // instead and surface the credential kind so the agent can tell the user
-  // why no phrase hint is available.
-  const mnemonicHint =
-    subgraphState.credentialKind === 'mnemonic' && subgraphState.mnemonic
-      ? (() => {
-          const words = subgraphState!.mnemonic!.split(/\s+/);
-          return `${words[0]} ... ${words[words.length - 1]}`;
-        })()
-      : '(no recovery phrase on this host — configured from a derived-bundle-v1 credential)';
-  const getFactCount = () => getOwnerFactCount(
-    subgraphState!.smartAccountAddress,
-    subgraphState!.serverUrl,
-    authKeyHex,
+  if (!subgraphState) return accountUnavailableResponse();
+  const state = subgraphState;
+  const authKeyHex = Buffer.from(state.authKey).toString('hex');
+  return handleAccount(
+    accountContextFromState(state, {
+      serverUrl: SERVER_URL,
+      getFactCount: () => getOwnerFactCount(state.smartAccountAddress, state.serverUrl, authKeyHex),
+    }),
+    args,
   );
-  return handleAccount({
-    serverUrl: SERVER_URL,
-    authKeyHex,
-    walletAddress: subgraphState.smartAccountAddress,
-    mnemonicHint,
-    getFactCount,
-  }, args);
 }
 
 const commonHandlers: HandlerBundle = {
