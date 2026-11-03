@@ -257,12 +257,14 @@ export function BootstrapPage() {
       <Shell>
         <h1 className="font-display text-2xl font-semibold text-ink">Back up your recovery phrase?</h1>
         <p className="mt-3 text-ink-muted">
-          We can store an encrypted copy of your phrase, locked to this passkey. If you lose this
-          device, your passkey unlocks it again on a new one.
+          We can store an encrypted copy of your phrase that only this passkey can open. If you lose
+          this device, the passkey opens it on any other device where you have it, such as a phone
+          or laptop signed in to the same Apple, Google or password manager account. A passkey that
+          stays on one device, like Windows Hello or a security key, can’t do that.
         </p>
         <p className="mt-3 text-ink-muted">
-          We can’t read it — only your passkey can unlock it. But it does mean someone who takes over
-          both our servers and your Apple or Google account could reach your memories. Without a
+          We can’t read the copy. But anyone who gets into the account that syncs this passkey,
+          along with its PIN or device passcode, could open it and reach your memories. Without a
           backup, losing this device and your written phrase means losing your vault permanently.
         </p>
         <div className="mt-6 space-y-3">
