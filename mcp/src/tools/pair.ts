@@ -28,12 +28,15 @@
  *      relay, and writes credentials.json.
  *
  * MCP-process lifecycle note: stdio MCP servers stay alive until the host
- * disconnects, so the background WS-await runs to completion or the relay
- * 5-minute TTL, whichever is first. There is a 60-second hard timeout
- * (matching the plugin) so a slow / abandoned browser flow doesn't hold the
- * process hostage. After completion the user must restart their MCP host
- * (Claude Desktop / Cursor / Claude Code) for the server to re-read
- * credentials.json and switch out of `unconfigured` mode.
+ * disconnects, so the background WS-await runs until the browser uploads or
+ * the relay's pairing session expires (the `expires_at` the relay returns,
+ * 10 minutes on the current relay, plus a short grace). It used to stop
+ * after 60 seconds, which closed the session before a user in generate mode
+ * could write down 12 words and retype 3 of them. Credentials are read once,
+ * at startup (`index.ts` `main()`), so after completion the user must fully
+ * quit and reopen their MCP host (Claude Desktop / Cursor / Claude Code) for
+ * the server to re-read credentials.json and switch out of `unconfigured`
+ * mode.
  *
  * Reference implementation: `skill/plugin/index.ts` (totalreclaw_pair tool
  * handler) and `skill/plugin/pair-cli-relay.ts` (CLI runner). The crypto +
@@ -66,12 +69,36 @@ const CREDENTIALS_DIR = path.join(os.homedir(), '.totalreclaw');
 const CREDENTIALS_PATH = path.join(CREDENTIALS_DIR, 'credentials.json');
 
 /**
- * Hard timeout for the background WS-await. Matches the plugin
- * (`PAIR_TOOL_HARD_TIMEOUT_MS = 60_000`) — long enough for a slow
- * scan-and-paste, short enough that a stuck browser doesn't hold the
- * MCP process indefinitely.
+ * Lifetime of a relay pairing session: `SESSION_TTL_MS` in totalreclaw-relay
+ * `src/services/pair-sessions.ts` (10 minutes since internal#194; 5 minutes
+ * was too tight for the browser flow). Only used when the relay's `opened`
+ * frame has no usable `expires_at`; normally the wait follows the relay's own
+ * expiry, so a future TTL change on the relay needs no change here.
  */
-const PAIR_TOOL_HARD_TIMEOUT_MS = 60_000;
+export const RELAY_PAIR_SESSION_TTL_MS = 10 * 60_000;
+
+/** Slack after the relay's expiry, so an upload that lands at the deadline is still read. */
+const PAIR_WAIT_GRACE_MS = 15_000;
+
+/** Bounds on the wait, so a skewed clock or a bad `expires_at` can't make it absurd. */
+const PAIR_WAIT_MIN_MS = 60_000;
+const PAIR_WAIT_MAX_MS = 15 * 60_000;
+
+/**
+ * How long the background task keeps the relay WebSocket open waiting for
+ * the browser's upload: until the relay's pairing session expires, plus
+ * {@link PAIR_WAIT_GRACE_MS}. The user has to finish the whole browser step
+ * (PIN, then writing down 12 words and retyping 3 in generate mode) inside
+ * this window. Falls back to {@link RELAY_PAIR_SESSION_TTL_MS} when
+ * `expiresAt` is unparsable or already in the past by the local clock, and
+ * is clamped to [1 min, 15 min]. Exported for tests.
+ */
+export function pairWaitMs(expiresAt: string, now: number = Date.now()): number {
+  const parsed = Date.parse(expiresAt);
+  const untilExpiry =
+    Number.isFinite(parsed) && parsed > now ? parsed - now : RELAY_PAIR_SESSION_TTL_MS;
+  return Math.min(PAIR_WAIT_MAX_MS, Math.max(PAIR_WAIT_MIN_MS, untilExpiry + PAIR_WAIT_GRACE_MS));
+}
 
 const DEFAULT_RELAY_URL_WSS = 'wss://api.totalreclaw.xyz';
 
@@ -267,7 +294,7 @@ export async function runPairBackgroundTask(opts: {
         console.error(prefix, msg);
       }
     });
-  const hardTimeoutMs = opts.hardTimeoutMs ?? PAIR_TOOL_HARD_TIMEOUT_MS;
+  const hardTimeoutMs = opts.hardTimeoutMs ?? pairWaitMs(opts.session.expiresAt);
   const httpsBase = relayBaseToHttps(opts.relayBaseUrl);
   const tokenTail = opts.session.token.slice(0, 8);
 
@@ -356,7 +383,7 @@ export async function runPairBackgroundTask(opts: {
   // open but the browser never POSTs (rare; matches plugin's 3.3.4-rc.2 fix).
   const TIMEOUT_SENTINEL = {
     status: 'timed_out' as const,
-    message: `Pair flow timed out (${hardTimeoutMs / 1000}s) — generate a new URL with totalreclaw_pair.`,
+    message: `Pair flow timed out (${Math.round(hardTimeoutMs / 1000)}s) — generate a new URL with totalreclaw_pair.`,
   };
   let hardTimer: ReturnType<typeof setTimeout> | undefined;
   const hardTimeoutPromise = new Promise<typeof TIMEOUT_SENTINEL>((resolve) => {
@@ -443,7 +470,8 @@ export async function handlePair(
   const parsedExpiresMs = Date.parse(session.expiresAt);
   const expiresAtMs = Number.isFinite(parsedExpiresMs)
     ? parsedExpiresMs
-    : Date.now() + 5 * 60_000;
+    : Date.now() + RELAY_PAIR_SESSION_TTL_MS;
+  const minutesLeft = Math.min(15, Math.max(1, Math.round((expiresAtMs - Date.now()) / 60_000)));
 
   // Schedule the background WS-await. In production we DO NOT await it —
   // the tool returns URL+PIN immediately so the agent can hand the URL to
@@ -469,10 +497,7 @@ export async function handlePair(
     });
   }
 
-  const instructions =
-    mode === 'generate'
-      ? `The browser will generate a NEW 12-word recovery phrase and ask the user to write it down + retype 3 words before finalizing.`
-      : `The browser will accept an EXISTING phrase that the user pastes in the browser (never through chat).`;
+  const instructions = pairInstructions(mode, minutesLeft);
 
   return {
     content: [
@@ -484,15 +509,30 @@ export async function handlePair(
           expires_at_ms: expiresAtMs,
           mode,
           relay_base_url: relayBaseUrl,
-          instructions: [
-            `Open the URL above on the user's phone or another browser (copy-paste).`,
-            instructions,
-            `Enter the 6-digit PIN shown above into the browser.`,
-            `The encrypted phrase uploads to this MCP server — it NEVER touches the LLM.`,
-            `After the browser shows "Pairing complete", restart the MCP host (Claude Desktop / Cursor / Claude Code) so the server re-reads ~/.totalreclaw/credentials.json. The session expires in ~5 minutes.`,
-          ],
+          expires_in_minutes: minutesLeft,
+          instructions,
         }),
       },
     ],
   };
+}
+
+/**
+ * The steps the agent relays to the user. Kept in step with what actually
+ * happens: the relay page ends on "You're all set", the link lives as long as
+ * the relay session, and the memory tools only work after the host restarts
+ * (credentials are read once, at startup). Exported for tests.
+ */
+export function pairInstructions(mode: 'generate' | 'import', minutesLeft: number): string[] {
+  const phraseStep =
+    mode === 'generate'
+      ? `The page creates a NEW 12-word recovery phrase. The user writes it down somewhere safe (paper or a password manager) and retypes 3 of the words to confirm. That phrase is the only way to recover their memories.`
+      : `The user enters their EXISTING 12-word recovery phrase on the page, never in this chat.`;
+  return [
+    `Give the user the link and the 6-digit PIN above. They open the link in a browser (on this computer or their phone) and enter the PIN there.`,
+    phraseStep,
+    `The link works for about ${minutesLeft} minutes, so there is time to write the phrase down carefully. If it expires, call totalreclaw_pair again for a new link.`,
+    `The phrase is encrypted in the browser and sent to this MCP server. It never passes through this chat. Never ask the user to paste it here.`,
+    `When the page says "You're all set", tell the user to fully quit and reopen this app (Claude Desktop, Cursor, Claude Code or whichever app runs this server; closing the window is not enough). The memory tools start working after that restart; until then they return not_configured.`,
+  ];
 }
