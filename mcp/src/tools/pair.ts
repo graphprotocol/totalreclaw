@@ -46,7 +46,8 @@
  *   the upload is refused unless the relay forwards that confirmation. The
  *   agent never holds anything that authorises a replacement. Before a
  *   confirmed replacement overwrites the file, the old one is kept as
- *   `credentials.json.replaced-<UTC>` (0600). A normal (non-replace) pairing
+ *   `credentials.json.replaced-<UTC>-<rand>` (0600); the new file is written
+ *   atomically (temp file + rename). A normal (non-replace) pairing
  *   creates the file with an exclusive open, so it can never overwrite one
  *   that appeared after the guard ran.
  *
@@ -59,6 +60,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { randomBytes } from 'node:crypto';
 
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
@@ -184,19 +186,48 @@ class CredentialsExistError extends Error {
  * `replace: false` creates the file exclusively (`wx`): if a credentials file
  * appeared after the tool's guard ran (another pairing, another client), the
  * write fails with `CredentialsExistError` instead of overwriting it.
+ *
  * `replace: true` is only used after the user confirmed a replacement on the
- * pair page and the old file was preserved.
+ * pair page and the old file was preserved. It writes a temp file in the same
+ * directory (`wx`, 0600), fsyncs it and renames it over credentials.json, so
+ * the file is never half-written, a symlinked credentials.json is replaced
+ * rather than written through, and the result is always mode 0600.
  */
 function writeCredentialsFile(credentialsPath: string, body: string, replace: boolean): void {
   const dir = path.dirname(credentialsPath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
+  if (replace) {
+    const tmp = path.join(
+      dir,
+      `.${path.basename(credentialsPath)}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`,
+    );
+    try {
+      const fd = fs.openSync(tmp, 'wx', 0o600);
+      try {
+        fs.fchmodSync(fd, 0o600);
+        fs.writeSync(fd, body, null, 'utf-8');
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.renameSync(tmp, credentialsPath);
+    } catch (err) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        // Not created, or already renamed.
+      }
+      throw err;
+    }
+    return;
+  }
   try {
     fs.writeFileSync(credentialsPath, body, {
       encoding: 'utf-8',
       mode: 0o600,
-      flag: replace ? 'w' : 'wx',
+      flag: 'wx',
     });
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
@@ -206,52 +237,93 @@ function writeCredentialsFile(credentialsPath: string, body: string, replace: bo
   }
 }
 
+/** `20261103T010203.456Z-1a2b3c`: UTC to the millisecond plus a random suffix. */
+function replacedStamp(now: Date): string {
+  return `${now.toISOString().replace(/[-:]/g, '')}-${randomBytes(3).toString('hex')}`;
+}
+
 /**
- * Keep the outgoing account's credential files before a user-confirmed
- * replacement overwrites them. Mirrors Python's
- * `hermes/auto_migrate.py::preserve_credentials_before_replace`:
+ * Step 1 of a user-confirmed replacement, before anything is overwritten.
+ * Mirrors Python's `hermes/auto_migrate.py::preserve_credentials_before_replace`.
  *
- * - `credentials.json` is copied to `credentials.json.replaced-<UTC>`
- *   (mode 0600 from the first byte; the original stays in place until the
- *   new credentials are written over it).
- * - `credentials.json.bak` (Hermes' backup from an earlier phrase-to-bundle
- *   migration), if present, is renamed to `credentials.json.bak.replaced-<UTC>`.
- *
- * Bytes-for-bytes copy: no parsing, nothing logged but paths. Throws if a copy
- * cannot be made, so the caller fails the pairing rather than overwrite
- * unpreserved files. Exported for tests.
+ * Copies `credentials.json` to `credentials.json.replaced-<stamp>` (mode 0600
+ * from the first byte). The original stays in place until the new credentials
+ * are written over it. Bytes-for-bytes copy: no parsing, nothing logged but
+ * paths. Throws if the copy cannot be made, so the caller fails the pairing
+ * rather than overwrite an unpreserved file. Returns the copy's path, or
+ * undefined when there is no credentials.json. Exported for tests.
  */
 export function preserveCredentialsBeforeReplace(
   credentialsPath: string,
   now: Date = new Date(),
-): string[] {
-  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-  const kept: string[] = [];
-
-  if (fs.existsSync(credentialsPath)) {
-    const dest = `${credentialsPath}.replaced-${stamp}`;
-    const data = fs.readFileSync(credentialsPath);
+): string | undefined {
+  if (!fs.existsSync(credentialsPath)) return undefined;
+  const dest = `${credentialsPath}.replaced-${replacedStamp(now)}`;
+  const data = fs.readFileSync(credentialsPath);
+  let created = false;
+  try {
+    const fd = fs.openSync(dest, 'wx', 0o600);
+    created = true;
     try {
-      const fd = fs.openSync(dest, 'wx', 0o600);
-      try {
-        fs.writeSync(fd, data);
-        fs.fsyncSync(fd);
-      } finally {
-        fs.closeSync(fd);
-      }
+      fs.writeSync(fd, data);
+      fs.fsyncSync(fd);
     } finally {
-      data.fill(0);
+      fs.closeSync(fd);
     }
-    kept.push(dest);
+  } catch (err) {
+    if (created) {
+      try {
+        fs.unlinkSync(dest);
+      } catch {
+        // Leave it; the caller fails the pairing either way.
+      }
+    }
+    throw err;
+  } finally {
+    data.fill(0);
   }
+  return dest;
+}
 
+/**
+ * Step 2, only after the new credentials were written: rename Hermes'
+ * `credentials.json.bak` (from an earlier phrase-to-bundle migration), if
+ * present, to `credentials.json.bak.replaced-<stamp>` so the new account
+ * cannot overwrite it. Returns the new path, or undefined. Exported for tests.
+ */
+export function moveBackupAsideAfterReplace(
+  credentialsPath: string,
+  now: Date = new Date(),
+): string | undefined {
   const bakPath = `${credentialsPath}.bak`;
-  if (fs.existsSync(bakPath)) {
-    const dest = `${bakPath}.replaced-${stamp}`;
-    fs.renameSync(bakPath, dest);
-    kept.push(dest);
+  if (!fs.existsSync(bakPath)) return undefined;
+  const dest = `${bakPath}.replaced-${replacedStamp(now)}`;
+  fs.renameSync(bakPath, dest);
+  return dest;
+}
+
+/**
+ * The replacement failed before the new credentials were written. Remove the
+ * step-1 copy, but only if credentials.json is still a regular file
+ * byte-identical to it; otherwise keep the copy. Returns true if removed.
+ * Exported for tests.
+ */
+export function discardPreservedCopyIfUnchanged(credentialsPath: string, copyPath: string): boolean {
+  let original: Buffer | undefined;
+  let copy: Buffer | undefined;
+  try {
+    if (!fs.lstatSync(credentialsPath).isFile()) return false;
+    original = fs.readFileSync(credentialsPath);
+    copy = fs.readFileSync(copyPath);
+    if (!original.equals(copy)) return false;
+    fs.unlinkSync(copyPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    original?.fill(0);
+    copy?.fill(0);
   }
-  return kept;
 }
 
 /**
@@ -381,21 +453,44 @@ export async function runPairBackgroundTask(opts: {
   const replace = opts.session.replace === true;
 
   /**
-   * Replace mode only: keep the old credential files before anything is
-   * overwritten. Reached only after `awaitPhraseUpload` saw the user's
-   * confirmation from the pair page. Returns an error result on failure so
-   * the relay is nacked and nothing is overwritten.
+   * Replace mode, step 1: copy the old credentials.json aside before anything
+   * is overwritten. Reached only after `awaitPhraseUpload` saw the user's
+   * confirmation from the pair page. On failure the relay is nacked and
+   * nothing is overwritten.
    */
-  const preserveIfReplacing = (): { state: 'error'; error: string } | undefined => {
-    if (!replace) return undefined;
+  const preserveIfReplacing = (): {
+    copyPath?: string;
+    failure?: { state: 'error'; error: string };
+  } => {
+    if (!replace) return {};
     try {
-      const kept = preserveCredentialsBeforeReplace(credentialsPath);
-      for (const p of kept) log('info', `pair replace: kept the previous credentials at ${p}`);
-      return undefined;
+      const copyPath = preserveCredentialsBeforeReplace(credentialsPath);
+      if (copyPath) log('info', `pair replace: kept the previous credentials at ${copyPath}`);
+      return { copyPath };
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
       log('error', `pair replace: could not keep the previous credentials, not replacing: ${m}`);
-      return { state: 'error', error: 'credentials_preserve_failed' };
+      return { failure: { state: 'error', error: 'credentials_preserve_failed' } };
+    }
+  };
+
+  /**
+   * Replace mode, last step. After a successful write, move Hermes' `.bak`
+   * aside. If the write did not happen, drop the step-1 copy, but only when
+   * credentials.json is still byte-identical to it.
+   */
+  const finishReplace = (written: boolean, copyPath: string | undefined): void => {
+    if (!replace) return;
+    if (written) {
+      try {
+        const moved = moveBackupAsideAfterReplace(credentialsPath);
+        if (moved) log('info', `pair replace: moved the previous backup to ${moved}`);
+      } catch (err) {
+        const m = err instanceof Error ? err.message : String(err);
+        log('error', `pair replace: new credentials written, but could not move credentials.json.bak aside: ${m}`);
+      }
+    } else if (copyPath && !discardPreservedCopyIfUnchanged(credentialsPath, copyPath)) {
+      log('warn', `pair replace: not replaced; keeping the copy at ${copyPath}`);
     }
   };
 
@@ -413,8 +508,9 @@ export async function runPairBackgroundTask(opts: {
   const phraseUploadPromise = awaitPhraseUpload(opts.session, {
     phraseValidator: (p: string) => validateMnemonic(p, wordlist),
     completePairing: async ({ mnemonic }) => {
-      const preserveFailed = preserveIfReplacing();
-      if (preserveFailed) return preserveFailed;
+      const preserved = preserveIfReplacing();
+      if (preserved.failure) return preserved.failure;
+      let written = false;
       try {
         // Derive auth key + salt — matches setup.ts deriveAuthKey shape.
         const { authKeyHex, saltHex } = deriveAuthKey(mnemonic);
@@ -450,6 +546,7 @@ export async function runPairBackgroundTask(opts: {
             credentialsPath,
             replace,
           );
+          written = true;
         } catch (writeErr) {
           return writeFailure(writeErr);
         }
@@ -463,6 +560,8 @@ export async function runPairBackgroundTask(opts: {
         const msg = err instanceof Error ? err.message : String(err);
         log('error', `pair: completePairing failed: ${msg}`);
         return { state: 'error', error: msg };
+      } finally {
+        finishReplace(written, preserved.copyPath);
       }
     },
     // Option E Phase 2 / #581 (P2-13) — payload_type: "derived-bundle-v1"
@@ -473,8 +572,9 @@ export async function runPairBackgroundTask(opts: {
     // tests. Wired here anyway so the contract is complete and P2-11
     // landing on the relay side needs zero MCP-side follow-up.
     completePairingBundle: async ({ bundle }) => {
-      const preserveFailed = preserveIfReplacing();
-      if (preserveFailed) return preserveFailed;
+      const preserved = preserveIfReplacing();
+      if (preserved.failure) return preserved.failure;
+      let written = false;
       try {
         // NO registerWithServer()/registerUser() call — derived-bundle-v1.md
         // §4.5's normative rule: a bundle-configured client MUST NOT call
@@ -483,6 +583,7 @@ export async function runPairBackgroundTask(opts: {
         // able to register correctly.
         try {
           writePairedBundleCredentials(bundle, credentialsPath, replace);
+          written = true;
         } catch (writeErr) {
           return writeFailure(writeErr);
         }
@@ -496,6 +597,8 @@ export async function runPairBackgroundTask(opts: {
         const msg = err instanceof Error ? err.message : String(err);
         log('error', `pair: completePairingBundle failed: ${msg}`);
         return { state: 'error', error: msg };
+      } finally {
+        finishReplace(written, preserved.copyPath);
       }
     },
     timeoutMs: hardTimeoutMs,

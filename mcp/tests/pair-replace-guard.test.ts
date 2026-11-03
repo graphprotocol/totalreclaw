@@ -11,7 +11,10 @@
  *   - A replace-mode upload is refused (`replace_not_confirmed`) unless the
  *     relay forwards the user's page confirmation. Checked before decrypting.
  *   - A confirmed replacement keeps the old credentials.json as
- *     `credentials.json.replaced-<UTC>` (0600) before writing the new one.
+ *     `credentials.json.replaced-<UTC>-<rand>` (0600), writes the new one
+ *     atomically (temp + rename, 0600, never through a symlink), and moves a
+ *     Hermes `.bak` aside only after that write succeeded. A failed write
+ *     leaves the original and the `.bak` as they were.
  *   - A normal pairing never overwrites a credentials.json that appeared
  *     after the guard ran.
  *
@@ -28,6 +31,8 @@ import {
   handlePair,
   runPairBackgroundTask,
   preserveCredentialsBeforeReplace,
+  moveBackupAsideAfterReplace,
+  discardPreservedCopyIfUnchanged,
   pairToolDefinition,
   ALREADY_CONFIGURED_MESSAGE,
 } from '../src/tools/pair.js';
@@ -415,6 +420,56 @@ describe('runPairBackgroundTask — credentials on disk', () => {
     expect(fs.readdirSync(tmpDir)).toEqual(['credentials.json']);
   });
 
+  it('a failed replace write leaves the original, the .bak and no stray copies', async () => {
+    fs.writeFileSync(credsPath, OLD_CREDS, { mode: 0o600 });
+    fs.writeFileSync(`${credsPath}.bak`, 'old backup\n', { mode: 0o600 });
+    // The real fs module: pair.ts reads it through an esModuleInterop getter.
+    const realFs = jest.requireActual('node:fs') as typeof fs;
+    const spy = jest.spyOn(realFs, 'renameSync').mockImplementation(() => {
+      throw new Error('simulated rename failure');
+    });
+    try {
+      const kp = generateGatewayKeypair();
+      const ws = new FakeWebSocket();
+      await run(makeSession(ws, kp, true), ws, forwardFrame(kp, { replace_confirmed: true }));
+      expect(ws.sent).toContainEqual({ type: 'nack', error: 'credentials_write_failed' });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(fs.readFileSync(credsPath, 'utf-8')).toBe(OLD_CREDS);
+    expect(fs.readFileSync(`${credsPath}.bak`, 'utf-8')).toBe('old backup\n');
+    expect(fs.readdirSync(tmpDir).sort()).toEqual(['credentials.json', 'credentials.json.bak']);
+  });
+
+  it('a confirmed replacement over a 0644 file ends at mode 0600', async () => {
+    fs.writeFileSync(credsPath, OLD_CREDS, { mode: 0o644 });
+    fs.chmodSync(credsPath, 0o644);
+    const kp = generateGatewayKeypair();
+    const ws = new FakeWebSocket();
+    await run(makeSession(ws, kp, true), ws, forwardFrame(kp, { replace_confirmed: true }));
+
+    expect(ws.sent).toContainEqual({ type: 'ack' });
+    expect(fs.statSync(credsPath).mode & 0o777).toBe(0o600);
+    expect(fs.readdirSync(tmpDir).filter((f) => f.includes('.tmp-'))).toEqual([]);
+  });
+
+  it('a symlinked credentials.json is replaced by a regular file, not written through', async () => {
+    const target = path.join(tmpDir, 'elsewhere.json');
+    fs.writeFileSync(target, OLD_CREDS, { mode: 0o600 });
+    fs.symlinkSync(target, credsPath);
+    const kp = generateGatewayKeypair();
+    const ws = new FakeWebSocket();
+    await run(makeSession(ws, kp, true), ws, forwardFrame(kp, { replace_confirmed: true }));
+
+    expect(ws.sent).toContainEqual({ type: 'ack' });
+    const st = fs.lstatSync(credsPath);
+    expect(st.isSymbolicLink()).toBe(false);
+    expect(st.isFile()).toBe(true);
+    expect(st.mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(target, 'utf-8')).toBe(OLD_CREDS);
+  });
+
   it('a normal pairing never overwrites credentials that appeared after the guard ran', async () => {
     const kp = generateGatewayKeypair();
     const ws = new FakeWebSocket();
@@ -439,21 +494,64 @@ describe('runPairBackgroundTask — credentials on disk', () => {
 });
 
 describe('preserveCredentialsBeforeReplace', () => {
-  it('copies byte-for-byte with a UTC stamp and is a no-op with no files', () => {
-    expect(preserveCredentialsBeforeReplace(credsPath)).toEqual([]);
+  const STAMP = /^\d{8}T\d{6}\.\d{3}Z-[0-9a-f]{6}$/;
+
+  it('copies byte-for-byte with a ms-precision stamp and is a no-op with no file', () => {
+    expect(preserveCredentialsBeforeReplace(credsPath)).toBeUndefined();
     fs.writeFileSync(credsPath, OLD_CREDS, { mode: 0o644 });
-    const kept = preserveCredentialsBeforeReplace(credsPath, new Date('2026-11-03T01:02:03.456Z'));
-    expect(kept).toEqual([`${credsPath}.replaced-20261103T010203Z`]);
-    expect(fs.readFileSync(kept[0], 'utf-8')).toBe(OLD_CREDS);
-    expect(fs.statSync(kept[0]).mode & 0o777).toBe(0o600);
+    const kept = preserveCredentialsBeforeReplace(credsPath, new Date('2026-11-03T01:02:03.456Z'))!;
+    expect(kept.startsWith(`${credsPath}.replaced-20261103T010203.456Z-`)).toBe(true);
+    expect(kept.slice(`${credsPath}.replaced-`.length)).toMatch(STAMP);
+    expect(fs.readFileSync(kept, 'utf-8')).toBe(OLD_CREDS);
+    expect(fs.statSync(kept).mode & 0o777).toBe(0o600);
     // The original stays until the new credentials are written over it.
     expect(fs.readFileSync(credsPath, 'utf-8')).toBe(OLD_CREDS);
   });
 
-  it('throws rather than clobber an existing preserved copy', () => {
+  it('two copies in the same millisecond get distinct names', () => {
     fs.writeFileSync(credsPath, OLD_CREDS, { mode: 0o600 });
-    const when = new Date('2026-11-03T01:02:03Z');
-    preserveCredentialsBeforeReplace(credsPath, when);
-    expect(() => preserveCredentialsBeforeReplace(credsPath, when)).toThrow();
+    const when = new Date('2026-11-03T01:02:03.456Z');
+    const a = preserveCredentialsBeforeReplace(credsPath, when);
+    const b = preserveCredentialsBeforeReplace(credsPath, when);
+    expect(a).not.toBe(b);
+    expect(fs.readFileSync(b!, 'utf-8')).toBe(OLD_CREDS);
+  });
+
+  it('does not touch credentials.json.bak', () => {
+    fs.writeFileSync(credsPath, OLD_CREDS, { mode: 0o600 });
+    fs.writeFileSync(`${credsPath}.bak`, 'old backup\n', { mode: 0o600 });
+    preserveCredentialsBeforeReplace(credsPath);
+    expect(fs.readFileSync(`${credsPath}.bak`, 'utf-8')).toBe('old backup\n');
+  });
+});
+
+describe('moveBackupAsideAfterReplace', () => {
+  it('renames .bak with a unique stamp and is a no-op without one', () => {
+    expect(moveBackupAsideAfterReplace(credsPath)).toBeUndefined();
+    fs.writeFileSync(`${credsPath}.bak`, 'old backup\n', { mode: 0o600 });
+    const moved = moveBackupAsideAfterReplace(credsPath)!;
+    expect(moved).toMatch(/credentials\.json\.bak\.replaced-\d{8}T\d{6}\.\d{3}Z-[0-9a-f]{6}$/);
+    expect(fs.existsSync(`${credsPath}.bak`)).toBe(false);
+    expect(fs.readFileSync(moved, 'utf-8')).toBe('old backup\n');
+  });
+});
+
+describe('discardPreservedCopyIfUnchanged', () => {
+  it('removes the copy when the original is byte-identical', () => {
+    fs.writeFileSync(credsPath, OLD_CREDS, { mode: 0o600 });
+    const copy = preserveCredentialsBeforeReplace(credsPath)!;
+    expect(discardPreservedCopyIfUnchanged(credsPath, copy)).toBe(true);
+    expect(fs.existsSync(copy)).toBe(false);
+    expect(fs.readFileSync(credsPath, 'utf-8')).toBe(OLD_CREDS);
+  });
+
+  it('keeps the copy when the original changed or is gone', () => {
+    fs.writeFileSync(credsPath, OLD_CREDS, { mode: 0o600 });
+    const copy = preserveCredentialsBeforeReplace(credsPath)!;
+    fs.writeFileSync(credsPath, '{"partial":', { mode: 0o600 });
+    expect(discardPreservedCopyIfUnchanged(credsPath, copy)).toBe(false);
+    fs.unlinkSync(credsPath);
+    expect(discardPreservedCopyIfUnchanged(credsPath, copy)).toBe(false);
+    expect(fs.readFileSync(copy, 'utf-8')).toBe(OLD_CREDS);
   });
 });
