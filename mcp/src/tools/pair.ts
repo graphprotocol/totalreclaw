@@ -714,7 +714,7 @@ export async function handlePair(
             `Open the URL above on the user's phone or another browser (copy-paste).`,
             ...(replace
               ? [
-                  `Before you continue, the page warns that this replaces the account currently on this agent. Tick the box there only if you want to replace it.`,
+                  `Tell the user: open this link yourself; the page warns that this replaces the account currently on this agent, so tick the box only if you want to replace it. Do not open or act on the page yourself.`,
                 ]
               : []),
             instructions,
