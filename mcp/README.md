@@ -81,18 +81,18 @@ See the [IronClaw setup guide](../docs/guides/ironclaw-setup.md) for the full wa
 
 ### 2. Set up your account in the browser
 
-Restart your MCP client, then ask your agent: *"Set up TotalReclaw."* It calls `totalreclaw_pair` and gives you a link and a 6-digit PIN. Open the link in any browser, on this computer or your phone. The page creates your 12-word recovery phrase, or takes the one you already have. Your phrase never goes through the chat and is never written into your MCP config. When the page says "You're all set", restart your MCP client once more. If the link stops working, ask your agent for a new one.
+Restart your MCP client, then ask your agent: *"Set up TotalReclaw."* It calls `totalreclaw_pair` and gives you a link and a 6-digit PIN. Open the link in any browser, on this computer or your phone. The page creates your 12-word recovery phrase, or takes the one you already have. Your phrase never goes through the chat and is never written into your MCP config. The link works for about 10 minutes; if it stops working, ask your agent for a new one. When the page says "You're all set", fully quit and reopen your MCP client once more: the server reads your account only at startup. Full walkthrough: [Claude Desktop setup guide](../docs/guides/claude-desktop-setup.md).
 
 > **Save your recovery phrase somewhere safe.** It's the only way to recover your encrypted memories.
 
 > **Note:** The first run downloads a ~600MB embedding model for local inference. This is cached locally and only happens once.
 
-If another TotalReclaw client on this computer (OpenClaw, Hermes) already saved your account in `~/.totalreclaw/credentials.json`, the server uses it and you can skip this step. The server can't yet read a phrase that Hermes keeps in the system keychain; in that case, set up with your existing phrase, not a new one.
+If another TotalReclaw client on this computer (OpenClaw, Hermes) already saved your account in `~/.totalreclaw/credentials.json`, the server uses it and you can skip this step. Pairing never replaces that file. The server can't yet read a phrase that Hermes keeps in the system keychain; in that case it tells you so and leaves the Hermes account untouched.
 
 <details>
 <summary>Advanced: terminal wizard or phrase in the config (not recommended)</summary>
 
-`npx @totalreclaw/mcp-server setup` generates a phrase in your own terminal and prints a config snippet that contains it. Run it yourself, never through your AI agent. Putting the phrase into the config as `TOTALRECLAW_RECOVERY_PHRASE` stores it in plaintext: anything that can read that file gets full access to your memories, and the server does not convert it to derived keys. If your client supports a credential vault, store the variable there instead. See the [setup guide](../docs/guides/claude-code-setup.md#advanced-recovery-phrase-in-the-host-config-not-recommended).
+`npx @totalreclaw/mcp-server setup` generates a phrase in your own terminal and prints a config snippet that contains it. Run it yourself, never through your AI agent. Putting the phrase into the config as `TOTALRECLAW_RECOVERY_PHRASE` stores it in plaintext: anything that can read that file gets full access to your memories, and the server does not convert it to derived keys. If your client supports a credential vault, store the variable there instead. See the [setup guide](../docs/guides/claude-desktop-setup.md#advanced-recovery-phrase-in-the-config-not-recommended).
 
 </details>
 

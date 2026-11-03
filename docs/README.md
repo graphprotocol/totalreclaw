@@ -10,7 +10,7 @@ Index for a first-time visitor browsing `docs/`.
 
 ## Guides
 
-- Setup per client: [OpenClaw](guides/openclaw-setup.md) · [Hermes](guides/hermes-setup.md) · [NanoClaw](guides/nanoclaw-getting-started.md) · [ZeroClaw](guides/zeroclaw-setup.md) · [Claude Code](guides/claude-code-setup.md) · [IronClaw](guides/ironclaw-setup.md) · [universal install line](guides/install.md)
+- Setup per client: [OpenClaw](guides/openclaw-setup.md) · [Hermes](guides/hermes-setup.md) · [NanoClaw](guides/nanoclaw-getting-started.md) · [ZeroClaw](guides/zeroclaw-setup.md) · [Claude Desktop](guides/claude-desktop-setup.md) · [Claude Code](guides/claude-code-setup.md) · [IronClaw](guides/ironclaw-setup.md) · [universal install line](guides/install.md)
 - [Importing memories](guides/importing-memories.md) — from ChatGPT / Claude / Gemini / Mem0 ([ChatGPT](guides/importing-from-chatgpt.md) · [Claude](guides/importing-from-claude.md) · [Gemini](guides/importing-from-gemini.md))
 - [Memory types](guides/memory-types-guide.md) · [dedup & consolidation](guides/memory-dedup.md)
 - [Environment variables](guides/env-vars-reference.md)

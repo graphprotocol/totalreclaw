@@ -1,10 +1,14 @@
-# TotalReclaw for Claude Code, Claude Desktop, Cursor, and Windsurf
+# TotalReclaw for Claude Code, Cursor, and Windsurf
 
-TotalReclaw gives any MCP-compatible agent (Claude Code, Claude Desktop, Cursor, Windsurf, IronClaw) encrypted, persistent memory. The fastest setup is a single chat message — the agent fetches this guide, runs the MCP install for you, and gives you a link to finish setup in your browser. **You do nothing in the terminal, and your recovery phrase never goes through the chat.**
+TotalReclaw gives MCP-capable coding tools (Claude Code, Cursor, Windsurf, IronClaw) encrypted, persistent memory. The fastest setup is a single chat message — the agent fetches this guide, runs the MCP install for you, and gives you a link to finish setup in your browser. **You do nothing in the terminal, and your recovery phrase never goes through the chat.**
 
-> **Wrong runtime?** This guide is for **MCP-compatible hosts** (Claude Code, Claude Desktop, Cursor, Windsurf, IronClaw). If you are an **OpenClaw** agent, follow [`openclaw-setup.md`](./openclaw-setup.md); if you are a **Hermes** agent, follow [`hermes-setup.md`](./hermes-setup.md); if you are unsure which runtime you are, follow the universal dispatcher [`install.md`](./install.md) instead.
+> **Using Claude Desktop or another chat app?** Follow [`claude-desktop-setup.md`](./claude-desktop-setup.md) instead. Chat apps are the main audience for the MCP server; this guide covers coding tools.
+>
+> **A dedicated integration for coding tools is planned**: hooks plus a CLI skill, so recall and capture happen automatically. Until it ships, this guide sets up the same MCP server that chat apps use.
 
-If you already have Claude Code (or Claude Desktop / Cursor / Windsurf) running, paste this into your chat:
+> **Wrong runtime?** This guide is for **MCP-capable coding tools** (Claude Code, Cursor, Windsurf, IronClaw). For **Claude Desktop**, follow [`claude-desktop-setup.md`](./claude-desktop-setup.md). If you are an **OpenClaw** agent, follow [`openclaw-setup.md`](./openclaw-setup.md); if you are a **Hermes** agent, follow [`hermes-setup.md`](./hermes-setup.md); if you are unsure which runtime you are, follow the universal dispatcher [`install.md`](./install.md) instead.
+
+If you already have Claude Code (or Cursor / Windsurf) running, paste this into your chat:
 
 > **Install TotalReclaw, see <https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md>**
 
@@ -12,16 +16,16 @@ Your agent will fetch this page, run the MCP install command, and then give you 
 
 ---
 
-## Agent instructions (read this if you are a Claude Code / Claude Desktop / Cursor / Windsurf agent that just fetched this URL)
+## Agent instructions (read this if you are a Claude Code / Cursor / Windsurf agent that just fetched this URL)
 
-You have been asked to install TotalReclaw. Run the steps below in order. Do not deviate. **Do not invoke `npx @totalreclaw/mcp-server setup` or any other phrase-touching CLI / tool — those return the recovery phrase through your context, which violates the phrase-safety rule.** Account setup happens in the user's browser through `totalreclaw_pair` (Step 4). It needs `@totalreclaw/mcp-server` 3.5.0 or later.
+You have been asked to install TotalReclaw. Run the steps below in order. Do not deviate. **Do not invoke `npx @totalreclaw/mcp-server setup` or any other phrase-touching CLI / tool — those return the recovery phrase through your context, which violates the phrase-safety rule.** Account setup happens in the user's browser through `totalreclaw_pair` (Step 4). It needs `@totalreclaw/mcp-server` 3.5.1 or later. If you are running inside **Claude Desktop**, stop and follow [`claude-desktop-setup.md`](./claude-desktop-setup.md) instead.
 
 ### Step 1 — Detect the host runtime
 
 Decide which of these the user is running:
 
 - **Claude Code** — has the `claude` CLI on PATH (run `command -v claude`).
-- **Claude Desktop** — macOS / Windows native app; config at `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows).
+- **Claude Desktop** — not covered here; follow [`claude-desktop-setup.md`](./claude-desktop-setup.md).
 - **Cursor / Windsurf** — config via Settings UI or `.cursor/mcp.json` / `~/.codeium/windsurf/mcp_config.json`.
 - **IronClaw (NEAR AI)** — config at `~/.ironclaw/mcp.json` or via the IronClaw dashboard. See [ironclaw-setup.md](./ironclaw-setup.md) for the IronClaw-specific walkthrough.
 
@@ -45,7 +49,7 @@ If the CLI exits cleanly, continue to Step 3. If it fails with `command not foun
 
 Tell the user verbatim:
 
-> *Open your MCP config file (Claude Desktop on macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`, Windows: `%APPDATA%\Claude\claude_desktop_config.json`; Cursor: `.cursor/mcp.json` or Settings → MCP Servers; Windsurf: `~/.codeium/windsurf/mcp_config.json`) and paste the block below into `mcpServers`. There is no recovery phrase to add — you'll set up your account in the browser in a moment. Reply `done` once the file is saved.*
+> *Open your MCP config file (Cursor: `.cursor/mcp.json` or Settings → MCP Servers; Windsurf: `~/.codeium/windsurf/mcp_config.json`) and paste the block below into `mcpServers`. There is no recovery phrase to add — you'll set up your account in the browser in a moment. Reply `done` once the file is saved.*
 
 ```json
 {
@@ -64,17 +68,21 @@ Wait for `done` before continuing.
 
 Tell the user verbatim:
 
-> *Restart your host so it loads TotalReclaw: in Claude Code, quit and reopen `claude`; in Claude Desktop, quit (Cmd-Q on macOS) and relaunch; in Cursor / Windsurf, restart the app from Settings → MCP Servers (toggle off / on) or quit and relaunch. Reply `done` once it's back up.*
+> *Restart your host so it loads TotalReclaw: in Claude Code, quit and reopen `claude`; in Cursor / Windsurf, restart the app from Settings → MCP Servers (toggle off / on) or quit and relaunch. Reply `done` once it's back up.*
 
 MCP is stateless JSON-RPC — there is no auto-reload, the host has to spawn a fresh `mcp-server` process to pick up the new config.
 
 ### Step 4 — Set up the account in the browser with `totalreclaw_pair`
 
-Call `totalreclaw_status` first. If it reports a configured account, skip to Step 6: the server found an existing `~/.totalreclaw/credentials.json` from another TotalReclaw client on this machine and is using it. (It can't read a phrase that Hermes keeps in the system keychain yet. In that case the status is "not configured", and the user sets up with their existing phrase below.)
+Call `totalreclaw_status` first.
 
-Otherwise, ask the user one question: *"Are you new to TotalReclaw, or do you already have a TotalReclaw recovery phrase?"* Then call `totalreclaw_pair` with `mode: "generate"` for a new user, or `mode: "import"` for a user who already has a phrase. Pairing replaces `~/.totalreclaw/credentials.json`, which other TotalReclaw clients on this computer share, so if the user already uses TotalReclaw here (for example through Hermes or OpenClaw), always use `import` with that same phrase, never `generate`. The tool returns a `url` and a 6-digit `pin`. Tell the user verbatim, filling in the two values:
+- If it reports a configured account, skip to Step 6: the server found an existing `~/.totalreclaw/credentials.json` from another TotalReclaw client on this machine and is using it.
+- If it returns `not_configured` with a `reason` (for example `keychain_wrapped`: Hermes keeps the phrase in the system keychain, which the server can't read yet), tell the user the `message` in plain words and stop. Don't pair.
+- If it returns `not_configured` with no `reason`, continue below.
 
-> *Open this link in any browser — on this computer or your phone: <url>. Enter this PIN when asked: <pin>. The link only works for a short time; if it stops working, tell me and I'll make a new one. Reply `done` when the page says "You're all set".*
+Ask the user one question: *"Are you new to TotalReclaw, or do you already have a TotalReclaw recovery phrase?"* Then call `totalreclaw_pair` with `mode: "generate"` for a new user, or `mode: "import"` for a user who already has a phrase. Other TotalReclaw clients on this computer (for example Hermes or OpenClaw) share `~/.totalreclaw/credentials.json`. From 3.5.1, `totalreclaw_pair` refuses with `already_configured` when that file exists, so it never replaces another client's account. Tell the user they are already set up, and never move, rename or delete the file. Older servers replaced the file, so if the user already uses TotalReclaw on this computer, always use `import` with that same phrase, never `generate`. The tool returns a `url` and a 6-digit `pin`. Tell the user verbatim, filling in the two values:
+
+> *Open this link in any browser — on this computer or your phone: <url>. Enter this PIN when asked: <pin>. The link works for about 10 minutes; if it stops working, tell me and I'll make a new one. Reply `done` when the page says "You're all set".*
 
 Then add the one line that matches their answer:
 
@@ -95,7 +103,7 @@ Once the user replies `done`, ask the agent's own internal toolset (yourself): *
 
 ### Phrase safety (HARD — never break)
 
-NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `npx @totalreclaw/mcp-server setup`, `npx @totalreclaw/totalreclaw generate-mnemonic`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The MCP server is stateless JSON-RPC (no HTTP server of its own), but it DOES expose a browser-mediated account-setup flow via the `totalreclaw_pair` tool — the phrase is generated/imported in the browser, uploaded as ciphertext, decrypted in-memory, and written to `~/.totalreclaw/credentials.json`, so it never enters your context. Always use `totalreclaw_pair`. An existing `~/.totalreclaw/credentials.json` from another TotalReclaw client on the same machine is used as is, with nothing to copy. Never suggest generating a phrase with another tool, and never suggest putting the phrase into the config file unless the user explicitly asks for the advanced path below. If the user pastes a phrase in chat anyway: tell them it is compromised and they need to create a fresh account with `totalreclaw_pair` (`mode: "generate"`).
+NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `npx @totalreclaw/mcp-server setup`, `npx @totalreclaw/totalreclaw generate-mnemonic`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The MCP server is stateless JSON-RPC (no HTTP server of its own), but it DOES expose a browser-mediated account-setup flow via the `totalreclaw_pair` tool — the phrase is generated/imported in the browser, uploaded as ciphertext, decrypted in-memory, and written to `~/.totalreclaw/credentials.json`, so it never enters your context. Always use `totalreclaw_pair`. An existing `~/.totalreclaw/credentials.json` from another TotalReclaw client on the same machine is used as is, with nothing to copy. Never suggest generating a phrase with another tool, and never suggest putting the phrase into the config file unless the user explicitly asks for the advanced path below. If the user pastes a phrase in chat anyway: don't repeat it, tell them it is compromised and should be replaced with a new account, and call `totalreclaw_support` for how to get help. (`totalreclaw_pair` won't replace an existing account on this computer.)
 
 ---
 
@@ -114,7 +122,7 @@ First real interaction downloads a ~600 MB embedding model (cached locally, one-
 ## Prerequisites
 
 - **Node.js 18+** (22 recommended)
-- **An MCP-compatible host:** Claude Code, Claude Desktop, Cursor, Windsurf, IronClaw, or similar
+- **An MCP-capable coding tool:** Claude Code, Cursor, Windsurf, IronClaw, or similar (for Claude Desktop, see [`claude-desktop-setup.md`](./claude-desktop-setup.md))
 - **A browser** on this computer or your phone, for the one-time pairing step. You don't need a recovery phrase beforehand: pairing creates one, or takes the one you already have.
 
 ---
@@ -144,8 +152,7 @@ claude mcp add -s user totalreclaw -- npx -y @totalreclaw/mcp-server
 | Host | Config file |
 |---|---|
 | Claude Code | `~/.claude.json` (or `claude mcp add -s user`) |
-| Claude Desktop (macOS) | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Claude Desktop (Windows) | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Claude Desktop | see [`claude-desktop-setup.md`](./claude-desktop-setup.md) |
 | Cursor | `.cursor/mcp.json` (project) or Settings → MCP Servers (global) |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 | IronClaw | `~/.ironclaw/mcp.json` or IronClaw dashboard — see [ironclaw-setup.md](./ironclaw-setup.md) |
@@ -255,11 +262,12 @@ Upgrade: *"Upgrade my TotalReclaw subscription."*
 - **Agent says "I'm not familiar with TotalReclaw"**: paste the canonical message above with the URL — the agent fetches the guide and follows the install steps.
 - **Agent can't see TotalReclaw tools after restart**: confirm `claude mcp list` (Claude Code) or your host's MCP UI lists `totalreclaw`, then restart the host again.
 - **Tools return "TotalReclaw is not configured"**: pairing hasn't finished, or the host wasn't restarted after it. Ask your agent to *"Set up TotalReclaw"* (it calls `totalreclaw_pair`), finish in the browser, then restart the host. Your host's MCP server logs show a `TotalReclaw configured` line once it worked.
-- **`totalreclaw_pair` is missing or the pairing page fails**: you may be running an older cached server. Set `args` to `["-y", "@totalreclaw/mcp-server@latest"]` and restart the host.
+- **`totalreclaw_pair` is missing, or the pairing page says "Gateway could not finish pairing"**: you may be running an older cached server (before 3.5.1 it stopped waiting for the browser after 60 seconds). Set `args` to `["-y", "@totalreclaw/mcp-server@latest"]`, restart the host, and ask for a new link.
+- **`totalreclaw_pair` says TotalReclaw is already set up**: a credentials file already exists on this computer, so pairing won't replace it. If tools still say "not configured", restart the host; if they mention the keychain, the account belongs to a Hermes install that keeps its phrase in the system keychain, which the MCP server can't read yet.
 - **"Not authenticated" / 401**: if you imported an existing phrase, check it — exact words, exact order. Pair again with `mode: "import"` to re-enter it.
 - **First-run is slow / model download**: the embedding model is ~600 MB, downloaded once and cached. Be patient on first call.
 - **Quota exceeded (403)**: free tier has a monthly memory cap. Upgrade with *"Upgrade my TotalReclaw subscription"*.
-- **Recovery phrase appeared in chat**: file a bug. Create a fresh account with `totalreclaw_pair` (`mode: "generate"`). The leaked phrase is unrecoverable once shipped through LLM context.
+- **Recovery phrase appeared in chat**: treat it as exposed and file a bug. The leaked phrase can't be made private again once it has been through LLM context; move your memories to a new account (ask `totalreclaw_support` for help).
 
 ---
 
