@@ -39,7 +39,7 @@ def test_flags_fragments(text: str) -> None:
         "User lives in Porto and works at The Graph Foundation.",
         "Enjoys speedcubing",
         "iPhone 15 owner",
-        "pedro's wife is Ana",
+        "maria's dog is Rex",
         "zsh is the user's shell",
         "macOS is the user's main OS",
         "用户正在学习中文",  # Chinese, no case

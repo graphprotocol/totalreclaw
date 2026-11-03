@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Sentence fragments are no longer stored as facts.** Auto-extraction stored a question fragment ("these days?") and a bare clause ("to restore it, not create a new one") as user facts. A narrow post-filter now drops a candidate fact that is a question, or that starts lower-case with no capital letter and no "user" anywhere. On the small-model testbed it matches 9 of about 21,000 stored facts, none of them a gold fact. Runs in both `extract_facts_llm` and `extract_facts_compaction`, next to the #471 filter.
+- **Sentence fragments are no longer stored as facts.** Auto-extraction stored a question fragment ("these days?") and a bare clause ("to restore it, not create a new one") as user facts. A narrow post-filter now drops a candidate fact that is a question, or that starts lower-case with no capital letter and no "user" anywhere. On the small-model testbed it matches 9 of about 38,000 stored facts from earlier runs, none of them a gold fact. Runs in both `extract_facts_llm` and `extract_facts_compaction`, next to the #471 filter.
 
 ## [2.5.3] — 2026-11-02
 

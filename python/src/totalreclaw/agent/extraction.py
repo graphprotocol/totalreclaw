@@ -959,10 +959,10 @@ def _filter_instruction_fragment_facts(
 #: time" (#471). The rule below is deliberately narrow: a question, or text
 #: that starts lower-case and has no capital letter and no "user" anywhere.
 #: That keeps subject-less but real facts ("Enjoys speedcubing"), names and
-#: brands ("iPhone 15 owner", "pedro's wife is Ana"), lower-case tool names in
+#: brands ("iPhone 15 owner", "maria's dog is Rex"), lower-case tool names in
 #: a sentence about the user ("zsh is the user's shell") and non-Latin
-#: scripts. On the small-model testbed (about 21,000 stored facts across
-#: synthetic, WildChat and private real chat) it matches 9 facts, 1 judged
+#: scripts. On the small-model testbed (about 38,000 stored facts across
+#: synthetic, WildChat and real chat) it matches 9 facts, 1 judged
 #: worth keeping, none matching a gold fact.
 _FRAGMENT_LOWER_START = re.compile(r"^[a-z\u00df-\u00ff]")
 _FRAGMENT_USER_WORD = re.compile(r"\buser\b", re.IGNORECASE)
