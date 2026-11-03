@@ -81,13 +81,13 @@ See the [IronClaw setup guide](../docs/guides/ironclaw-setup.md) for the full wa
 
 ### 2. Set up your account in the browser
 
-Restart your MCP client, then ask your agent: *"Set up TotalReclaw."* It calls `totalreclaw_pair` and gives you a link and a 6-digit PIN. Open the link in any browser, on this computer or your phone. The page creates your 12-word recovery phrase, or takes the one you already have. Your phrase never goes through the chat and is never written into your MCP config. When the page says "Pairing complete", restart your MCP client once more.
+Restart your MCP client, then ask your agent: *"Set up TotalReclaw."* It calls `totalreclaw_pair` and gives you a link and a 6-digit PIN. Open the link in any browser, on this computer or your phone. The page creates your 12-word recovery phrase, or takes the one you already have. Your phrase never goes through the chat and is never written into your MCP config. When the page says "You're all set", restart your MCP client once more. If the link stops working, ask your agent for a new one.
 
 > **Save your recovery phrase somewhere safe.** It's the only way to recover your encrypted memories.
 
 > **Note:** The first run downloads a ~600MB embedding model for local inference. This is cached locally and only happens once.
 
-If another TotalReclaw client on this computer (OpenClaw, Hermes) already set up `~/.totalreclaw/credentials.json`, the server uses it automatically and you can skip this step.
+If another TotalReclaw client on this computer (OpenClaw, Hermes) already saved your account in `~/.totalreclaw/credentials.json`, the server uses it and you can skip this step. The server can't yet read a phrase that Hermes keeps in the system keychain; in that case, set up with your existing phrase, not a new one.
 
 <details>
 <summary>Advanced: terminal wizard or phrase in the config (not recommended)</summary>

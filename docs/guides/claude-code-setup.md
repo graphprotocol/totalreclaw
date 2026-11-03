@@ -64,24 +64,24 @@ Wait for `done` before continuing.
 
 Tell the user verbatim:
 
-> *Restart your host so it loads TotalReclaw: in Claude Code, run `claude mcp restart totalreclaw` (or quit and reopen `claude`); in Claude Desktop, quit (Cmd-Q on macOS) and relaunch; in Cursor / Windsurf, restart the app from Settings → MCP Servers (toggle off / on) or quit and relaunch. Reply `done` once it's back up.*
+> *Restart your host so it loads TotalReclaw: in Claude Code, quit and reopen `claude`; in Claude Desktop, quit (Cmd-Q on macOS) and relaunch; in Cursor / Windsurf, restart the app from Settings → MCP Servers (toggle off / on) or quit and relaunch. Reply `done` once it's back up.*
 
 MCP is stateless JSON-RPC — there is no auto-reload, the host has to spawn a fresh `mcp-server` process to pick up the new config.
 
 ### Step 4 — Set up the account in the browser with `totalreclaw_pair`
 
-Call `totalreclaw_status` first. If it reports a configured account, skip to Step 6: the server found an existing `~/.totalreclaw/credentials.json` from another TotalReclaw client on this machine and uses it automatically.
+Call `totalreclaw_status` first. If it reports a configured account, skip to Step 6: the server found an existing `~/.totalreclaw/credentials.json` from another TotalReclaw client on this machine and is using it. (It can't read a phrase that Hermes keeps in the system keychain yet. In that case the status is "not configured", and the user sets up with their existing phrase below.)
 
-Otherwise, ask the user one question: *"Are you new to TotalReclaw, or do you already have a TotalReclaw recovery phrase?"* Then call `totalreclaw_pair` with `mode: "generate"` for a new user, or `mode: "import"` for a user who already has a phrase. The tool returns a `url` and a 6-digit `pin`. Tell the user verbatim, filling in the two values:
+Otherwise, ask the user one question: *"Are you new to TotalReclaw, or do you already have a TotalReclaw recovery phrase?"* Then call `totalreclaw_pair` with `mode: "generate"` for a new user, or `mode: "import"` for a user who already has a phrase. Pairing replaces `~/.totalreclaw/credentials.json`, which other TotalReclaw clients on this computer share, so if the user already uses TotalReclaw here (for example through Hermes or OpenClaw), always use `import` with that same phrase, never `generate`. The tool returns a `url` and a 6-digit `pin`. Tell the user verbatim, filling in the two values:
 
-> *Open this link in any browser — on this computer or your phone: <url>. Enter this PIN when asked: <pin>. The link expires in about 5 minutes. Reply `done` when the page says "Pairing complete".*
+> *Open this link in any browser — on this computer or your phone: <url>. Enter this PIN when asked: <pin>. The link only works for a short time; if it stops working, tell me and I'll make a new one. Reply `done` when the page says "You're all set".*
 
 Then add the one line that matches their answer:
 
 - New user: *"The page will create your recovery phrase. Write it down on paper and keep it safe — it is the only way back into your memories if you lose this computer."*
 - Existing phrase: *"Type your recovery phrase into that page, not into this chat."*
 
-Wait for `done`. If the link expired, call `totalreclaw_pair` again for a fresh link and PIN. Do not at any point ask the user to type the phrase into chat or into a config file. Do not run `npx @totalreclaw/mcp-server setup` via your shell tool — its stdout contains the phrase.
+Wait for `done`. If the link expired or the page couldn't finish, call `totalreclaw_pair` again for a fresh link and PIN. Do not at any point ask the user to type the phrase into chat or into a config file. Do not run `npx @totalreclaw/mcp-server setup` via your shell tool — its stdout contains the phrase.
 
 ### Step 5 — Restart the host again
 
@@ -95,7 +95,7 @@ Once the user replies `done`, ask the agent's own internal toolset (yourself): *
 
 ### Phrase safety (HARD — never break)
 
-NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `npx @totalreclaw/mcp-server setup`, `npx @totalreclaw/totalreclaw generate-mnemonic`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The MCP server is stateless JSON-RPC (no HTTP server of its own), but it DOES expose a browser-mediated account-setup flow via the `totalreclaw_pair` tool — the phrase is generated/imported in the browser, uploaded as ciphertext, decrypted in-memory, and written to `~/.totalreclaw/credentials.json`, so it never enters your context. Always use `totalreclaw_pair`. An existing `~/.totalreclaw/credentials.json` from another TotalReclaw client on the same machine is picked up automatically, with nothing to copy. Never suggest generating a phrase with another tool, and never suggest putting the phrase into the config file unless the user explicitly asks for the advanced path below. If the user pastes a phrase in chat anyway: tell them it is compromised and they need to create a fresh account with `totalreclaw_pair` (`mode: "generate"`).
+NEVER echo, generate, or ask the user to paste a recovery phrase in chat. NEVER invoke `npx @totalreclaw/mcp-server setup`, `npx @totalreclaw/totalreclaw generate-mnemonic`, or any phrase-touching CLI via your shell tool — stdout enters LLM context. The MCP server is stateless JSON-RPC (no HTTP server of its own), but it DOES expose a browser-mediated account-setup flow via the `totalreclaw_pair` tool — the phrase is generated/imported in the browser, uploaded as ciphertext, decrypted in-memory, and written to `~/.totalreclaw/credentials.json`, so it never enters your context. Always use `totalreclaw_pair`. An existing `~/.totalreclaw/credentials.json` from another TotalReclaw client on the same machine is used as is, with nothing to copy. Never suggest generating a phrase with another tool, and never suggest putting the phrase into the config file unless the user explicitly asks for the advanced path below. If the user pastes a phrase in chat anyway: tell them it is compromised and they need to create a fresh account with `totalreclaw_pair` (`mode: "generate"`).
 
 ---
 
