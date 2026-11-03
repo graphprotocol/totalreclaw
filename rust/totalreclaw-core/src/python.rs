@@ -130,6 +130,10 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Topical dedup context for the extraction prompt (PRD-04 DEP-3).
     m.add_function(wrap_pyfunction!(py_build_dedup_context, m)?)?;
 
+    // Store-time write gate (normalized exact + cosine near-duplicate).
+    m.add_function(wrap_pyfunction!(py_normalize_fact_text, m)?)?;
+    m.add_function(wrap_pyfunction!(py_decide_write, m)?)?;
+
     // Reranker
     m.add_function(wrap_pyfunction!(py_rerank, m)?)?;
     m.add_function(wrap_pyfunction!(py_rerank_with_config, m)?)?;

@@ -29,6 +29,7 @@
 //! - [`secrets`] — API-key vault: detect + redact 14 secret pattern classes (am-6)
 //! - [`session_segmentation`] — Centroid-walk session segmentation for imports (#368)
 //! - [`dedup_context`] — "Existing memories" block for extraction prompts: pinned + topical + recent, dedupe by fact id (PRD-04 DEP-3)
+//! - [`write_gate`] — Store-time write gate: normalized exact match + cosine near-duplicate decision shared by every write path
 //! - [`kg_ffi`] — Shared JSON-in/JSON-out knowledge-graph marshalling helpers behind the WASM/PyO3 bindings
 
 pub mod blind;
@@ -66,6 +67,7 @@ pub mod wallet;
 pub mod search;
 #[cfg(feature = "managed")]
 pub mod userop;
+pub mod write_gate;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;

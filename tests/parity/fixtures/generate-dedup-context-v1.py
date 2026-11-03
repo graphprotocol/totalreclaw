@@ -21,6 +21,10 @@ Rules (mirrors the module doc of dedup_context.rs):
   4. The first occurrence of an id wins (dedupe by fact id).
   5. At most ``cap`` lines are kept.
   6. Output = HEADER + "\\n" + lines joined by "\\n"; "" when no line survives.
+  7. A line from the pinned section is "[ID: <id>] [pinned, read-only] <text>",
+     and when at least one survives, PINNED_NOTE is appended as a last line
+     (not counted against ``cap``). Added by the write-gate PR on top of #701,
+     before any release, so the v1 file was regenerated in place.
 
 This is a new fixture (no legacy vector). Regenerate only if the rules above
 change; if they do, move the old file to ``tests/parity/fixtures/legacy/`` and
@@ -40,6 +44,12 @@ HEADER = (
     "UPDATE/DELETE/NOOP if they conflict or overlap):"
 )
 DEFAULT_CAP = 30
+PINNED_TAG = "[pinned, read-only]"
+PINNED_NOTE = (
+    "Memories marked [pinned, read-only] were pinned by the user. Never UPDATE "
+    "or DELETE them: if a new fact only restates one, use NOOP; if it adds or "
+    "changes information, ADD it as a new fact."
+)
 OUT_PATH = Path(__file__).resolve().parent / "dedup-context-v1.json"
 
 
@@ -64,18 +74,27 @@ def reference_build(topical, pinned, recent, cap):
         return ""
     seen = set()
     lines = []
-    for item in list(pinned) + list(topical) + list(recent):
+    pinned_lines = 0
+    tagged = [(i, True) for i in pinned] + [(i, False) for i in topical] + [(i, False) for i in recent]
+    for item, is_pinned in tagged:
         item_id = single_line(item.get("id", ""))
         text = single_line(item.get("text", ""))
         if not item_id or not text or item_id in seen:
             continue
         seen.add(item_id)
-        lines.append(f"[ID: {item_id}] {text}")
+        if is_pinned:
+            pinned_lines += 1
+            lines.append(f"[ID: {item_id}] {PINNED_TAG} {text}")
+        else:
+            lines.append(f"[ID: {item_id}] {text}")
         if len(lines) == cap:
             break
     if not lines:
         return ""
-    return HEADER + "\n" + "\n".join(lines)
+    out = HEADER + "\n" + "\n".join(lines)
+    if pinned_lines:
+        out += "\n" + PINNED_NOTE
+    return out
 
 
 def it(item_id, text, **extra):
@@ -212,6 +231,13 @@ CASES = [
         "cap": 30,
     },
     {
+        "name": "pinned_note_not_counted_against_cap",
+        "topical": [it("t1", "Topical one")],
+        "pinned": [it("p1", "Pinned one")],
+        "recent": [],
+        "cap": 1,
+    },
+    {
         "name": "production_shape_default_cap_30",
         "topical": [it(f"t{n:02d}", f"Topical fact {n:02d}") for n in range(1, 21)],
         "pinned": [it("p01", "Pinned fact 01"), it("p02", "Pinned fact 02")],
@@ -231,6 +257,8 @@ def main() -> None:
         "_generator": "tests/parity/fixtures/generate-dedup-context-v1.py (PRD-04 DEP-3). Expected values come from an independent Python reference implementation, not from the Rust code under test.",
         "version": 1,
         "header": HEADER,
+        "pinned_tag": PINNED_TAG,
+        "pinned_note": PINNED_NOTE,
         "default_cap": DEFAULT_CAP,
         "cases": cases,
     }

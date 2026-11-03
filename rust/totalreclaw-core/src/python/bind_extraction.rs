@@ -88,3 +88,44 @@ pub(crate) fn py_build_dedup_context(
         .map_err(to_pyerr)
 }
 
+// ---------------------------------------------------------------------------
+// Store-time write gate
+// ---------------------------------------------------------------------------
+
+/// Normalize a fact for the write gate's exact-duplicate check (NFC,
+/// lowercase, typographic folding, whitespace collapse, edge punctuation
+/// stripped). See ``write_gate::normalize_fact_text``.
+#[pyfunction]
+#[pyo3(name = "normalize_fact_text")]
+pub(crate) fn py_normalize_fact_text(text: &str) -> String {
+    crate::write_gate::normalize_fact_text(text)
+}
+
+/// Decide whether a new fact should be written.
+///
+/// Args:
+///     text: The new fact.
+///     embedding_json: JSON array of floats, or ``"null"`` / ``"[]"``.
+///     candidates_json: JSON array of ``{"id", "text", "embedding"?, "pinned"?}``.
+///     mode: ``"auto"`` | ``"explicit"`` | ``"exact_only"``.
+///     threshold: Cosine threshold in (0, 1]; ``None`` means 0.85.
+///
+/// Returns:
+///     JSON ``{"action": "store"|"skip"|"confirm", "match": null | {...}}``.
+///     Raises ``ValueError`` on malformed input.
+#[pyfunction]
+#[pyo3(
+    name = "decide_write",
+    signature = (text, embedding_json, candidates_json, mode = "auto", threshold = None)
+)]
+pub(crate) fn py_decide_write(
+    text: &str,
+    embedding_json: &str,
+    candidates_json: &str,
+    mode: &str,
+    threshold: Option<f64>,
+) -> PyResult<String> {
+    crate::write_gate::decide_write_json(text, embedding_json, candidates_json, threshold, mode)
+        .map_err(to_pyerr)
+}
+
