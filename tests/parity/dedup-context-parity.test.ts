@@ -28,7 +28,7 @@ const wasm = require(
     topicalJson: string,
     pinnedJson: string,
     recentJson: string,
-    cap: number,
+    cap?: number | null,
   ) => string;
 };
 
@@ -74,7 +74,7 @@ function check(ok: boolean, label: string, detail = ''): void {
 }
 
 check(fixture.header === HEADER, 'fixture header is the pre-DEP-3 header');
-check(fixture.cases.length === 14, 'fixture carries 14 cases', ` — got ${fixture.cases.length}`);
+check(fixture.cases.length === 16, 'fixture carries 16 cases', ` — got ${fixture.cases.length}`);
 
 for (const c of fixture.cases) {
   const actual = wasm.buildDedupContext(
@@ -95,13 +95,28 @@ for (const c of fixture.cases) {
 
 check(wasm.buildDedupContext('null', 'null', 'null', 30) === '', 'null sections are treated as empty');
 
-let threw = false;
-try {
-  wasm.buildDedupContext('not json', '[]', '[]', 30);
-} catch {
-  threw = true;
+function throws(fn: () => unknown): boolean {
+  try {
+    fn();
+  } catch {
+    return true;
+  }
+  return false;
 }
-check(threw, 'malformed topical JSON throws');
+
+check(throws(() => wasm.buildDedupContext('not json', '[]', '[]', 30)), 'malformed topical JSON throws');
+
+// cap: omitted / null -> default 30. Anything that is not a non-negative
+// integer throws instead of being coerced (a usize parameter turned -1 into
+// "no cap" and NaN into an empty block).
+const forty = JSON.stringify(Array.from({ length: 40 }, (_, n) => ({ id: `t${n}`, text: `fact ${n}` })));
+for (const cap of [undefined, null]) {
+  const lines = wasm.buildDedupContext(forty, '[]', '[]', cap).split('\n').length - 1;
+  check(lines === 30, `cap ${cap} defaults to 30 lines`, ` — got ${lines}`);
+}
+for (const cap of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+  check(throws(() => wasm.buildDedupContext(forty, '[]', '[]', cap)), `cap ${cap} throws`);
+}
 
 console.log('\n========================================');
 console.log(`dedup-context TS/WASM parity: ${passed}/${passed + failed} assertions passed`);

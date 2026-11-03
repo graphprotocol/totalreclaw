@@ -45,7 +45,7 @@ def test_fixture_header_matches_pre_dep3_python_header():
 
 
 def test_fixture_has_all_cases():
-    assert len(FIXTURE["cases"]) == 14
+    assert len(FIXTURE["cases"]) == 16
 
 
 @pytest.mark.parametrize(
@@ -81,3 +81,15 @@ def test_malformed_json_raises_value_error():
 def test_negative_cap_is_rejected():
     with pytest.raises(OverflowError):
         totalreclaw_core.build_dedup_context("[]", "[]", "[]", -1)
+
+
+def test_non_array_section_raises_value_error():
+    with pytest.raises(ValueError, match="invalid pinned JSON"):
+        totalreclaw_core.build_dedup_context("[]", '{"id": "p1", "text": "x"}', "[]", 30)
+
+
+def test_cap_defaults_to_30():
+    items = json.dumps([{"id": f"t{n}", "text": f"fact {n}"} for n in range(40)])
+    out = totalreclaw_core.build_dedup_context(items, "[]", "[]")
+    assert out.count("\n") == 30
+    assert out.endswith("[ID: t29] fact 29")

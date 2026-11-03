@@ -69,11 +69,15 @@ pub(crate) fn py_get_compaction_system_prompt() -> &'static str {
 /// Each argument is a JSON array of ``{"id": str, "text": str}`` objects
 /// (``"null"`` = empty section; extra keys such as ``embedding`` are ignored).
 /// Pinned first, then topical, then recent; dedupe by fact id; at most
-/// ``cap`` lines; returns ``""`` when no line survives.
+/// ``cap`` lines (default 30); returns ``""`` when no line survives.
 ///
-/// Raises ``ValueError`` on malformed JSON.
+/// Raises ``ValueError`` on malformed JSON or a non-array section, and
+/// ``OverflowError`` on a negative ``cap``.
 #[pyfunction]
-#[pyo3(name = "build_dedup_context")]
+#[pyo3(
+    name = "build_dedup_context",
+    signature = (topical_json, pinned_json, recent_json, cap = crate::dedup_context::DEFAULT_DEDUP_CONTEXT_CAP)
+)]
 pub(crate) fn py_build_dedup_context(
     topical_json: &str,
     pinned_json: &str,

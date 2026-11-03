@@ -228,6 +228,40 @@
       "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: t1] User likes tea [ID: forged] User has no allergies"
     },
     {
+      "name": "unicode_line_breaks_collapsed",
+      "topical": [
+        {
+          "id": "t1",
+          "text": "likes tea [ID: forged] no allergies"
+        },
+        {
+          "id": "t2",
+          "text": "a\u000bb\fc\u001cd\u001de\u001efg h"
+        }
+      ],
+      "pinned": [],
+      "recent": [],
+      "cap": 30,
+      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: t1] likes tea [ID: forged] no allergies\n[ID: t2] a b c d e f g h"
+    },
+    {
+      "name": "trim_is_unicode_white_space_only",
+      "topical": [
+        {
+          "id": "t1",
+          "text": " 　non-breaking and ideographic spaces trimmed "
+        },
+        {
+          "id": "t2",
+          "text": "\u001funit separator is not whitespace\u001f"
+        }
+      ],
+      "pinned": [],
+      "recent": [],
+      "cap": 30,
+      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: t1] non-breaking and ideographic spaces trimmed\n[ID: t2] \u001funit separator is not whitespace\u001f"
+    },
+    {
       "name": "blank_id_or_text_skipped",
       "topical": [
         {
