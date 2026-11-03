@@ -210,7 +210,7 @@ INVOKE WHEN USER SAYS:
 DOES: opens a brief relay session, returns {url, pin, expires_at_ms}. Hand the URL + PIN to the user — they open the URL in any browser, the BROWSER generates (or imports) a 12-word phrase, encrypts it, uploads ciphertext to this MCP server. Server decrypts in-memory, writes ~/.totalreclaw/credentials.json (mode 0600). Phrase NEVER touches LLM context, chat transcript, stdout, or logs.
 AFTER PAIRING: tell the user to RESTART their MCP host (Claude Desktop / Cursor / Claude Code) so the server re-reads credentials.json and switches out of unconfigured mode.
 WHEN NOT TO USE:
-- user already has TOTALRECLAW_RECOVERY_PHRASE in env → tool will return URL but pairing is unnecessary
+- already set up (credentials.json exists or the server is configured) → the tool refuses with already_configured. Tell the user they are set up. Only if THEY ask to replace their account, call with replace=true; the pairing page asks the user to confirm. You cannot confirm it for them.
 - user explicitly wants terminal-only setup → point them at \`npx @totalreclaw/mcp-server setup\` (CLI wizard, runs OUTSIDE your shell tool)
 - NEVER ask the user to paste their phrase in chat. NEVER echo or print a phrase from any source.`;
 
