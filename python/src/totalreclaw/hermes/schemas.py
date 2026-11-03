@@ -26,7 +26,9 @@ REMEMBER = {
         "session-scoped and not encrypted, TotalReclaw is durable and "
         "private. Uses Memory Taxonomy v1 (claim | preference | directive "
         "| commitment | episode | summary); legacy v0 tokens (fact, "
-        "decision, episodic, goal, context, rule) are coerced transparently."
+        "decision, episodic, goal, context, rule) are coerced transparently. "
+        "Secrets and sensitive identifiers are refused unless the user "
+        "confirms — see allow_sensitive."
     ),
     "parameters": {
         "type": "object",
@@ -83,6 +85,19 @@ REMEMBER = {
                     "you believe the extractor would paraphrase. For ordinary "
                     "'remember X' intents, omit this param + trust the "
                     "auto-extract path."
+                ),
+            },
+            "allow_sensitive": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Default false. Text that looks like a secret or sensitive "
+                    "identifier (API key, token, password/PIN, private key, "
+                    "recovery phrase, payment card, IBAN, government ID) is NOT "
+                    "stored: the result has blocked='sensitive' plus a message "
+                    "— relay that message to the user. Set true ONLY when "
+                    "retrying after the user explicitly confirmed they want "
+                    "that exact item stored."
                 ),
             },
         },
