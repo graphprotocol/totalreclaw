@@ -33,38 +33,35 @@ etc.) and don't need to know about RCs.
 
 ## Environment binding rule (HARD INVARIANT)
 
-**RC artifacts default to STAGING. Stable artifacts default to PRODUCTION.**
+**RC and stable artifacts both default to PRODUCTION
+(`https://api.totalreclaw.xyz`). Staging is opt-in at runtime.**
 
-| `release-type` | Default `TOTALRECLAW_SERVER_URL` | Audience |
+| `release-type` | Default `TOTALRECLAW_SERVER_URL` | How to reach staging |
 |---|---|---|
-| `rc` | `https://api-staging.totalreclaw.xyz` | QA + maintainers preparing a stable rollout. **NEVER point real users here.** |
-| `stable` | `https://api.totalreclaw.xyz` | Real users. Production data, durable, real SLA. |
+| `rc` | `https://api.totalreclaw.xyz` | `export TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` |
+| `stable` | `https://api.totalreclaw.xyz` | same env override (maintainers only) |
 
-Why this matters:
-- Staging has **no SLA**, may be wiped or reset between RC cycles, and cannot
-  serve real-user vaults reliably. Pointing a real user at staging means they
-  can lose their account between QA runs.
+This is the "F flip" (#198, 2026-05-07; plugin 3.3.12-rc.1, Python client
+2.3.12-rc.1). Before it, RC builds defaulted to staging and stable builds got a
+publish-time rewrite to production. That stranded anyone who installed an RC
+with their memories on a relay that has no SLA and may be wiped between QA
+cycles. The rewrite step was removed; the source binds to production for both
+release types.
+
+What this means in practice:
+- **QA and maintainers must set the staging URL themselves** before any client
+  command talks to a relay: `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz`.
+  An RC run without it creates accounts and writes on production.
 - Production has **billed Stripe tiers, real chain anchoring, real backups**.
-  Pointing a QA run at it generates noise, costs money, and pollutes
-  production analytics with throwaway test accounts.
+  Never point QA runs or throwaway test accounts at it.
+- User env (`TOTALRECLAW_SERVER_URL=...`) always wins; only the default is fixed.
 
-**Build-time binding** (shipped in plugin 3.3.3+ / hermes 2.3.3+):
-- Publish workflows bake `defaultServerUrl` into the artifact based on
-  `release-type`. RC artifacts contain the staging URL literal; stable
-  artifacts contain the production URL literal. Pre-publish CI guard fails
-  if a stable artifact contains `api-staging` or an RC artifact contains
-  `api.totalreclaw.xyz`.
-- Runtime sanity check warns loudly if an RC build is somehow pointed at
-  production OR a stable build at staging.
-- `RC mode` agents emit a prominent banner at install confirming the user
-  is on staging-only and should NOT use the install for production data.
-- User env (`TOTALRECLAW_SERVER_URL=...`) overrides always win — only the
-  default changes between RC and stable.
-
-**Pre-3.3.3 caveat:** every artifact had `api-staging.totalreclaw.xyz` baked
-in regardless of `release-type`. Stable users had to set
-`TOTALRECLAW_SERVER_URL` manually to hit production. From 3.3.3 forward the
-default is correct out-of-the-box.
+**Publish-time guards** (each fails the publish, for both release types, if a
+staging URL is bound as a default in the built artifact or the production
+default is missing):
+- OpenClaw plugin: `skill/scripts/check-url-binding.mjs` (publish step + `prepublishOnly`).
+- Python client: the wheel default-URL check in `publish-python-client.yml`.
+- MCP server: `mcp/scripts/check-url-binding.cjs` (publish step + `prepublishOnly`, added for internal#673).
 
 ## Flow
 

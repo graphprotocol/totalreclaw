@@ -350,6 +350,16 @@ jobs:
           console.log('RC version:', p.version);
           "
 
+      # Environment-binding guard (p-diogo/totalreclaw-internal#673). Same
+      # contract as the plugin (skill/scripts/check-url-binding.mjs) and the
+      # Python wheel guard since the F flip (#198): rc AND stable default to
+      # https://api.totalreclaw.xyz, staging is opt-in via
+      # TOTALRECLAW_SERVER_URL. Fails on any staging default literal in dist/
+      # or a canonical default site that lost the production literal.
+      # `prepublishOnly` runs it again at `npm publish`.
+      - name: Stable / RC URL guard (production default for both)
+        run: cd mcp && node scripts/check-url-binding.cjs --release-type=${{ inputs.release-type }}
+
       - name: Guard — refuse to republish an existing version
         if: inputs.dry-run == false
         # #456: an omitted `rc-number` silently defaulted to 1, republished
@@ -396,6 +406,10 @@ jobs:
           fi
           echo "Publishing with dist-tag: $TAG (OIDC trusted publishing)"
           npm publish --access public --tag "$TAG" --provenance
+        env:
+          # Read by `prepublishOnly` -> scripts/check-url-binding.cjs. Not an
+          # auth token: OIDC publish is tokenless (no NODE_AUTH_TOKEN).
+          TOTALRECLAW_RELEASE_TYPE: ${{ inputs.release-type }}
 
       - name: Report version
         run: |
