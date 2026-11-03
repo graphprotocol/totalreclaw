@@ -2076,3 +2076,91 @@ async def find_existing_content_fps(
     except Exception as e:
         logger.warning("Pre-write dedup query failed (fail-open): %s", e)
         return set()
+
+
+# ---------------------------------------------------------------------------
+# PRD-04 DEP-3 — newest facts for the extraction dedup context
+# ---------------------------------------------------------------------------
+
+#: Extra rows ``fetch_recent_facts`` asks for, so digest / stub rows skipped
+#: client-side do not leave the recent section short.
+RECENT_FETCH_HEADROOM = 10
+
+
+def _decode_fact_row(fact: dict, keys: DerivedKeys) -> Optional[dict]:
+    """Decrypt one subgraph ``fact`` row for the dedup context.
+
+    Returns ``{"id", "text", "embedding", "pinned"}``, or ``None`` for stub /
+    tombstone blobs, digest blobs, empty texts and rows that fail to decrypt.
+    ``embedding`` is ``None`` when absent, undecryptable, or not
+    ``get_embedding_dims()`` long (no re-embed here: that needs the model).
+    """
+    fact_id = fact.get("id")
+    blob_hex = fact.get("encryptedBlob", "") or ""
+    if not fact_id or is_stub_blob_hex(blob_hex):
+        return None
+    try:
+        if blob_hex.startswith("0x"):
+            blob_hex = blob_hex[2:]
+        encrypted_b64 = base64.b64encode(bytes.fromhex(blob_hex)).decode("ascii")
+        plaintext = decrypt(encrypted_b64, keys.encryption_key)
+    except Exception as e:
+        logger.debug(
+            "recent-facts fetch: skipping undecryptable fact %s: %s",
+            fact_id, type(e).__name__,
+        )
+        return None
+    if is_digest_blob(plaintext):
+        return None
+    text = read_claim_from_blob(plaintext).get("text") or ""
+    if not text:
+        return None
+    embedding: Optional[list[float]] = None
+    encrypted_emb = fact.get("encryptedEmbedding")
+    if encrypted_emb:
+        try:
+            embedding = decrypt_embedding(encrypted_emb, keys.encryption_key)
+        except Exception:
+            embedding = None
+    if embedding is not None and len(embedding) != get_embedding_dims():
+        embedding = None
+    return {
+        "id": str(fact_id),
+        "text": text,
+        "embedding": embedding,
+        "pinned": bool(_core.is_pinned_claim(plaintext)),
+    }
+
+
+async def fetch_recent_facts(
+    keys: DerivedKeys,
+    owner: str,
+    relay: RelayClient,
+    limit: int = 10,
+) -> list[dict]:
+    """The ``limit`` newest active facts by block time, decrypted (PRD-04 DEP-3).
+
+    One ``BROADENED_SEARCH_QUERY`` read of ``limit + RECENT_FETCH_HEADROOM``
+    rows; digest, stub and undecryptable rows are skipped. Returns
+    ``[{"id", "text", "embedding", "pinned"}]`` newest first. Relay errors
+    propagate (the caller treats the section as best-effort).
+    """
+    if limit <= 0:
+        return []
+    owner = owner.lower() if owner else owner
+    data = await relay.query_subgraph(
+        BROADENED_SEARCH_QUERY,
+        {"owner": owner, "first": limit + RECENT_FETCH_HEADROOM},
+    )
+    rows = (data.get("data") or {}).get("facts") or []
+    results: list[dict] = []
+    for fact in rows:
+        if not fact or not fact.get("isActive", True):
+            continue
+        decoded = _decode_fact_row(fact, keys)
+        if decoded is None:
+            continue
+        results.append(decoded)
+        if len(results) >= limit:
+            break
+    return results

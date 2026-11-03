@@ -611,7 +611,7 @@ class TestStoreTimeDedup:
         mock_recall_result.text = "User prefers dark mode"
         mock_recall_result.embedding = [1.0, 0.0, 0.0]
 
-        async def mock_recall(query, top_k=50):
+        async def mock_recall(query, top_k=50, **kwargs):
             return [mock_recall_result]
 
         async def mock_forget(fact_id):
@@ -651,7 +651,7 @@ class TestStoreTimeDedup:
              patch("totalreclaw.agent.lifecycle.extract_facts_heuristic"), \
              patch("totalreclaw.embedding.get_embedding", return_value=[1.0, 0.0, 0.0]):
 
-            async def llm_extract(messages, mode, existing_memories, llm_config=None):
+            async def llm_extract(messages, mode, existing_memories, llm_config=None, **kwargs):
                 return [add_fact, update_fact]
 
             mock_llm.side_effect = llm_extract
