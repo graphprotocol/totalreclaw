@@ -1958,7 +1958,10 @@ const callToolHandler = createCallToolHandler({
   getMode: () => currentMode,
   handleSupport: (args) =>
     handleSupport({ walletAddress: subgraphState?.smartAccountAddress ?? null }, args),
-  handlePair: (args) => handlePair({}, args as Record<string, unknown> | undefined),
+  handlePair: (args) =>
+    handlePair({}, args as Record<string, unknown> | undefined, {
+      isConfigured: () => currentMode !== 'unconfigured',
+    }),
   common: commonHandlers,
   resolveBundle,
   isQuotaExceededError,
