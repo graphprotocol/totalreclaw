@@ -85,8 +85,8 @@ function PhraseEntryForm({
     <div className="mt-3 rounded-control bg-warm-white p-4 ring-1 ring-hairline">
       <p className="text-sm font-semibold text-ink">{title}</p>
       <p className="mt-1 text-xs text-ink-muted">
-        This browser doesn’t keep your phrase — re-enter it once to seal a fresh backup under this
-        device’s passkey.
+        This browser doesn’t keep your recovery phrase. Enter it once more to make a new backup that
+        this device’s passkey can open.
       </p>
       {error && <p className="mt-2 rounded-control bg-clay-tint px-3 py-2 text-xs text-clay-deep">{error}</p>}
       <textarea
@@ -342,7 +342,7 @@ export function SettingsPage() {
         </Section>
 
         <Section title="Security & recovery">
-          <p>This device is unlocked with a passkey (Face ID / Touch ID / Windows Hello).</p>
+          <p>This device is unlocked with a passkey.</p>
           <p className="mt-2">{phraseStatus}</p>
         </Section>
 

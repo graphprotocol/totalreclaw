@@ -12,7 +12,7 @@ import type { BootstrapIntent } from "./BootstrapPage";
  * front door has no confirm (passkey review §4.4).
  */
 export const CREATE_AFTER_FAILED_RECOVERY_CONFIRM =
-  "Start a new, empty vault instead? Your existing vault isn’t deleted — you can still recover it later with its passkey, backup file, or recovery phrase.";
+  "Start a new, empty vault instead? Your existing vault isn’t deleted. You can still recover it later with its recovery phrase or a backup.";
 
 export function createVaultConfirmMessage(recoveryFailed: boolean): string | null {
   return recoveryFailed ? CREATE_AFTER_FAILED_RECOVERY_CONFIRM : null;

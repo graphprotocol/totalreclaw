@@ -31,8 +31,15 @@ describe("recoveryPhraseStatus (Settings copy matches backup state)", () => {
   });
 
   it("unknown relay state but a file was downloaded still mentions the file", () => {
-    expect(recoveryPhraseStatus({ relayBackups: null, fileBackupAt: "2026-11-01T00:00:00Z" })).toBe(
-      RECOVERY_COPY.file,
-    );
+    const s = recoveryPhraseStatus({ relayBackups: null, fileBackupAt: "2026-11-01T00:00:00Z" });
+    expect(s).toBe(RECOVERY_COPY.file);
+    // The relay was not checked, so the file line must not say we hold nothing.
+    expect(s).not.toMatch(/neither do we/);
+  });
+
+  it("relay copy says who else can open the backup (the passkey alone opens it)", () => {
+    expect(RECOVERY_COPY.relay).toMatch(/only your passkey can open/);
+    expect(RECOVERY_COPY.relay).toMatch(/account that syncs your passkey/);
+    expect(RECOVERY_COPY.relay).not.toMatch(/our servers/);
   });
 });

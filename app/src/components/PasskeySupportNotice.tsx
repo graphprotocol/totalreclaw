@@ -24,7 +24,7 @@ export const UNSUPPORTED_PLATFORM_LINE: Record<PasskeyPlatform, string> = {
 function HermesLink() {
   return (
     <p className="mt-6 text-sm text-ink-muted">
-      You can also use TotalReclaw through Hermes, which doesn’t need a browser passkey.{" "}
+      You can also use TotalReclaw through the Hermes agent, which doesn’t need a browser passkey.{" "}
       <a
         href={HERMES_GUIDE_URL}
         target="_blank"
