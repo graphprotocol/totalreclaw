@@ -154,10 +154,25 @@ jobs:
         # at all: `npm view @totalreclaw/core readme` returned "No README
         # data found", confirmed by unpacking a published tarball — only
         # nodejs/README.md + web/README.md existed, nothing at the
-        # tarball root. Ship the repo's real, hand-maintained README
-        # instead (same file crates.io + PyPI already use via
-        # Cargo.toml's `readme = "README.md"`).
-        run: cp rust/totalreclaw-core/README.md rust/totalreclaw-core/pkg/README.md
+        # tarball root.
+        #
+        # Ship README.npm.md (written for npm/JS readers: entry points,
+        # Node + browser usage, who should install the agent integrations
+        # instead) rather than the crate README.md, which crates.io + PyPI
+        # use via Cargo.toml's `readme = "README.md"` and which is written
+        # for Rust readers.
+        #
+        # Also delete the wasm-pack copies nested under nodejs/ and web/
+        # so the root file is the ONLY README in the tarball. npm sorts
+        # tarball entries by extension then basename, so a nested
+        # nodejs/README.md lands BEFORE the root README.md. The one other
+        # package of ours with a nested README (skill-nanoclaw's
+        # mcp/README.md) also renders no README on npmjs.com despite
+        # shipping a root README.md, while every package with a single
+        # root README renders fine. Keep one README per tarball.
+        run: |
+          cp rust/totalreclaw-core/README.npm.md rust/totalreclaw-core/pkg/README.md
+          rm -f rust/totalreclaw-core/pkg/nodejs/README.md rust/totalreclaw-core/pkg/web/README.md
 
       - name: Apply RC version suffix (rc mode only)
         if: inputs.release-type == 'rc'
