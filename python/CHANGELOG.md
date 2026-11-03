@@ -6,6 +6,17 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **[PRD-04 DEP-4] Sensitive-data filter (block-and-tell).** New `totalreclaw.pii` adapter over core `pii_filter`.
+  - Automatic extraction, the end-of-session Crystal and the built-in memory mirror (`on_memory_write`) store only text the filter allows.
+  - `totalreclaw_remember` refuses secrets and sensitive identifiers, returning `{"stored": false, "blocked": "sensitive", "category", "message", "override": "allow_sensitive"}`. The new `allow_sensitive` parameter stores the item after the user confirms.
+  - Logs never carry the screened text.
+
+  Requires a core release with `pii_filter` (2.7.0). See `docs/guides/sensitive-data-filter.md`.
+
 ## [2.5.3] — 2026-11-02
 
 ### Added
