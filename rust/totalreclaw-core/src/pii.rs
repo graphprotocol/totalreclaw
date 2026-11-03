@@ -147,6 +147,10 @@ impl PiiDecision {
 
 /// User-facing block-and-tell text for `category`. Word-identical across
 /// every client because every client reads it from here.
+///
+/// COPY PENDING APPROVAL: these 8 strings are drafts awaiting Pedro's sign-off
+/// (totalreclaw-internal #549, hard rail 3). Do not promote to a stable
+/// release until #549 is approved; edits land here only.
 pub fn pii_block_message(category: PiiCategory) -> &'static str {
     match category {
         PiiCategory::ApiKey => "Not saved: this looks like it contains an API key. TotalReclaw doesn't store secrets unless you confirm you want it saved.",
