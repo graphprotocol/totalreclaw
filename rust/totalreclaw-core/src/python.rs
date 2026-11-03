@@ -127,6 +127,9 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_get_extraction_system_prompt, m)?)?;
     m.add_function(wrap_pyfunction!(py_get_compaction_system_prompt, m)?)?;
 
+    // Topical dedup context for the extraction prompt (PRD-04 DEP-3).
+    m.add_function(wrap_pyfunction!(py_build_dedup_context, m)?)?;
+
     // Reranker
     m.add_function(wrap_pyfunction!(py_rerank, m)?)?;
     m.add_function(wrap_pyfunction!(py_rerank_with_config, m)?)?;
