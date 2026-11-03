@@ -28,13 +28,32 @@ import {
 import type { TotalReclaw } from '@totalreclaw/client';
 import type { ToolResponse } from './tools/types.js';
 import { TOOL_MANIFEST } from './dispatch.js';
-import { SERVER_INSTRUCTIONS, PROMPT_DEFINITIONS, getPromptMessages } from './prompts.js';
+import {
+  SERVER_INSTRUCTIONS,
+  SERVER_GUIDE,
+  SERVER_GUIDE_URI,
+  PROMPT_DEFINITIONS,
+  getPromptMessages,
+} from './prompts.js';
 import {
   memoryContextResource,
   readMemoryContext,
   invalidateMemoryContextCache,
 } from './resources/index.js';
 import { setOnRememberCallback } from './tools/remember.js';
+
+/**
+ * Static usage guide. Holds the detail that does not fit the
+ * SERVER_INSTRUCTIONS length budget. Readable in every mode.
+ */
+export const guideResource = {
+  uri: SERVER_GUIDE_URI,
+  name: 'TotalReclaw usage guide',
+  description:
+    'How to use TotalReclaw memory: recall and remember rules, recovery-phrase safety, ' +
+    'setup, quota, imports, memory edits and debriefs.',
+  mimeType: 'text/markdown',
+};
 
 /** Dependencies the server wiring needs from the entry point. */
 export interface ServerSetupDeps {
@@ -87,11 +106,17 @@ export function createTotalReclawServer(deps: ServerSetupDeps): Server {
 
   // ── Resources ──────────────────────────────────────────────────────────
   server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-    resources: [memoryContextResource],
+    resources: [memoryContextResource, guideResource],
   }));
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const { uri } = request.params;
+
+    if (uri === guideResource.uri) {
+      return {
+        contents: [{ uri: guideResource.uri, mimeType: 'text/markdown', text: SERVER_GUIDE }],
+      };
+    }
 
     if (uri === memoryContextResource.uri) {
       // The managed service does not support resource reads yet.
