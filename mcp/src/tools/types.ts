@@ -34,4 +34,10 @@ export interface ToolContext {
 export interface ToolResponse {
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
+  /**
+   * Structured copy of the result for hosts that render it (MCP
+   * `structuredContent`). Tools that set it also keep the serialized JSON in
+   * `content[0]` for hosts that don't.
+   */
+  structuredContent?: Record<string, unknown>;
 }
