@@ -365,6 +365,8 @@ jobs:
         run: cd tests/parity && npx tsx userop-batch-parity.test.ts
       - name: Session-key EIP-712 grant digest parity (TS/viem side, cred-9, #584)
         run: cd tests/parity && npx tsx session-key-grant-roundtrip.ts
+      - name: PII filter decision parity (TS/WASM side, PRD-04 DEP-4)
+        run: cd tests/parity && npx tsx pii/pii-parity.test.ts
       - name: Outer protobuf fields 9/11 absent — MCP + WASM calldata parity (PRD-04 F8 / DEP-6)
         run: cd tests/parity && npx tsx outer-protobuf-parity.test.ts
 

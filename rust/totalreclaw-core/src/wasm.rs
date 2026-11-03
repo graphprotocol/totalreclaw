@@ -44,6 +44,7 @@ mod bind_store;
 mod bind_search;
 mod bind_kg;
 mod bind_recall;
+mod bind_pii;
 
 pub(crate) use bind_lsh::*;
 #[cfg(test)]
@@ -68,6 +69,8 @@ pub(crate) use bind_search::*;
 pub(crate) use bind_kg::*;
 #[cfg(test)]
 pub(crate) use bind_recall::*;
+#[cfg(test)]
+pub(crate) use bind_pii::*;
 
 // ---------------------------------------------------------------------------
 // Internal helpers
