@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **Recall downloads much less data on large vaults.** Blind-index queries in `src/subgraph/search.ts` now return fact ids only. Each unique fact's payload is then fetched once, in batches of 100, with at most 6 subgraph queries in flight (the trapdoor batches used to fire all at once). Same candidates in the same order, so ranking is unchanged. On a mocked 1,000-fact vault, a recall dropped from about 6.5 MB to 3.1 MB. Port of the Python change (public #703); internal #666.
+
 ### Fixed
 - **On-chain writes no longer carry plaintext provenance tags (PRD-04 F8, DEP-6).** The outer protobuf encoder wrote field 9 (`source`, e.g. `mcp_remember`, `mcp_forget`, `mcp_pin`) and field 11 (`agent_id`, `mcp-server`) as plaintext calldata on every managed-service write. Affected writes were remember, store-time supersede tombstones, forget, debrief, pin/unpin and retype/set-scope, in both phrase and bundle mode. Core and the Python client dropped both fields from the wire in v3. The MCP encoder, now `src/subgraph/protobuf.ts` and re-exported from `src/subgraph/store.ts`, matches them byte-for-byte. Nothing else in the payload changes. The subgraph never indexed these fields, so recall, export and the SPA are unaffected. Facts written by earlier versions keep the tags on-chain, because on-chain data cannot be changed; the tags are fixed write-path labels and never contain memory content. Pinned by the cross-language fixture `tests/parity/fixtures/outer-protobuf-v1.json`: the Rust, Python, WASM and MCP legs ABI-decode the calldata and assert both fields are absent. Staging E2E harness: `tests/e2e-batch/e2e-dep6-mcp-outer-fields.ts`.
 

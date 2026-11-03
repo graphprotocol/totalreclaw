@@ -1,5 +1,11 @@
 # Changelog — totalreclaw-memory (ZeroClaw)
 
+## Unreleased
+
+### Changed
+
+- **`search::search_candidates` downloads much less data and runs batches concurrently.** Blind-index queries now return fact ids only, up to 6 at a time (they ran one by one). Each unique fact's payload is then fetched once, in batches of 100. The candidate set is the same as before, and results now come back in first-hit order instead of `HashMap` order. Adds a direct `futures-util` dependency, already in the tree through `reqwest`. Port of the Python change (public #703); internal #666.
+
 ## 2.0.1 — 2026-04-19
 
 Patch release: tracks `totalreclaw-core` bump to 2.1.0. No behavioural
