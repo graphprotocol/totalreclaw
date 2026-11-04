@@ -972,6 +972,17 @@ class AgentState:
         self._billing_cache = data
         self._billing_cache_time = time.time()
 
+    def invalidate_billing_cache(self) -> None:
+        """Drop the cached billing data so the next session start re-fetches it.
+
+        Called when a write is refused for quota (relay 403), so the stale
+        usage numbers don't suppress the quota warning until the TTL expires.
+        Server-tuned settings already applied via ``update_from_billing`` stay
+        in effect until the next fetch replaces them.
+        """
+        self._billing_cache = None
+        self._billing_cache_time = 0.0
+
     # Extraction config
     def get_extraction_interval(self) -> int:
         """Return the extraction interval in turns."""
@@ -989,10 +1000,10 @@ class AgentState:
         """Return the recall top_k limit.
 
         Precedence (highest first):
-          1. Billing-cache value (``features.recall_top_k``) — set by
-             ``update_from_billing`` unless overridden by env var.
-          2. ``TOTALRECLAW_RECALL_TOP_K`` env var — applied at init by
+          1. ``TOTALRECLAW_RECALL_TOP_K`` env var — applied at init by
              ``_apply_env_overrides`` and protected from server override.
+          2. Billing-cache value (``features.recall_top_k``) — applied by
+             ``update_from_billing`` at session start.
           3. ``DEFAULT_RECALL_TOP_K`` (16) — compile-time default.
         """
         return self._recall_top_k

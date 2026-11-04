@@ -6,6 +6,12 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Server-tuned settings now reach Hermes.** `AgentState.set_billing_cache` had no production caller, so `on_session_start` always found an empty billing cache and `update_from_billing` never ran. The relay's `recall_top_k`, `extraction_interval`, `max_facts_per_extraction` and `max_candidate_pool`, the >80% write-quota warning and the update-available notice never applied. The eager account register now caches the `client.status()` response it already fetched, so the first session of a process makes no extra request. Once that copy is older than the 2-hour TTL, `on_session_start` makes one refresh capped at 5 seconds. A slow or failing relay never blocks or breaks a session: on failure or timeout the current settings stay (the built-in defaults on a fresh process) and the next session tries again. No refresh is attempted in a session whose eager register just failed. Env overrides (`TOTALRECLAW_RECALL_TOP_K`, `TOTALRECLAW_EXTRACT_INTERVAL`, `TOTALRECLAW_MAX_FACTS_PER_EXTRACTION`, `CANDIDATE_POOL_MAX_FREE` / `_PRO`) still beat the server. A write refused for quota (relay 403) now drops the cached billing data, so the next session re-fetches it and shows the quota warning instead of waiting out the TTL. Visible effect with today's relay values: recall searches a candidate pool of 2,000 instead of 250 (both environments), staging recall returns 8 facts instead of 16 (staging sets `RECALL_TOP_K=8`), free users see the quota warning above 200 of 250 writes, and users on an older stable see the update notice at most once a day. Tests: `tests/test_hermes_billing_cache_fill.py`.
+
 ## [2.5.3] — 2026-11-02
 
 ### Added
