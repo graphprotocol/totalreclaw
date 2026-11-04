@@ -26,6 +26,10 @@ DEFAULT_MAX_FACTS = 15
 DEFAULT_MIN_IMPORTANCE = 6
 DEFAULT_RECALL_TOP_K = 16
 DEFAULT_MAX_CANDIDATE_POOL = 250
+# Upper bound on a relay-served candidate pool. The relay serves 2000, which
+# Hermes has never used; the cap keeps today's 250 until a large-vault
+# measurement (internal tracker #696). Env overrides are not capped.
+MAX_SERVER_CANDIDATE_POOL = 250
 BILLING_CACHE_TTL = 7200  # 2 hours
 STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity threshold for near-duplicate detection
 
@@ -1016,7 +1020,7 @@ class AgentState:
              ``CANDIDATE_POOL_MAX_FREE`` (free/unknown), resolved at call
              time so the tier from the live billing cache is respected.
           2. Billing-cache value (``features.max_candidate_pool``) — set by
-             ``update_from_billing``.
+             ``update_from_billing``, capped at ``MAX_SERVER_CANDIDATE_POOL``.
           3. ``DEFAULT_MAX_CANDIDATE_POOL`` (250) — compile-time default.
         """
         tier = (self.get_cached_billing() or {}).get("tier")
@@ -1067,7 +1071,7 @@ class AgentState:
             try:
                 val = int(server_pool)
                 if val > 0:
-                    self._max_candidate_pool_server = val
+                    self._max_candidate_pool_server = min(val, MAX_SERVER_CANDIDATE_POOL)
             except (ValueError, TypeError):
                 pass
 

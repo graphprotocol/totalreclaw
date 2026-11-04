@@ -159,7 +159,8 @@ def test_session_start_fills_cache_and_applies_server_settings(home):
     assert state.get_recall_top_k() == 12
     assert state.get_extraction_interval() == 5
     assert state.get_max_facts_per_extraction() == 20
-    assert state.get_max_candidate_pool() == 2000
+    # Relay serves 2000; Hermes caps it at 250 until measured (#696).
+    assert state.get_max_candidate_pool() == 250
 
 
 def test_second_session_within_ttl_makes_no_extra_request(home):
