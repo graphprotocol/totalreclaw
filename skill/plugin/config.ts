@@ -306,6 +306,12 @@ export const CONFIG = {
   maxFactsPerExtraction: process.env.TOTALRECLAW_MAX_FACTS_PER_EXTRACTION
     ? parseInt(process.env.TOTALRECLAW_MAX_FACTS_PER_EXTRACTION, 10)
     : undefined,
+  // Override for how many facts a recall returns (memory_search default +
+  // auto-recall). `undefined` when unset so getRecallTopK() falls through to
+  // the billing cache's `features.recall_top_k`, then DEFAULT_RECALL_TOP_K (16).
+  recallTopK: process.env.TOTALRECLAW_RECALL_TOP_K
+    ? parseInt(process.env.TOTALRECLAW_RECALL_TOP_K, 10)
+    : undefined,
   relevanceThreshold: parseFloat(process.env.TOTALRECLAW_RELEVANCE_THRESHOLD ?? '0.3'),
   semanticSkipThreshold: parseFloat(process.env.TOTALRECLAW_SEMANTIC_SKIP_THRESHOLD ?? '0.85'),
   cacheTtlMs: parseInt(process.env.TOTALRECLAW_CACHE_TTL_MS ?? String(5 * 60 * 1000), 10),

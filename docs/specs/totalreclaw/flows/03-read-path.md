@@ -68,9 +68,9 @@ sequenceDiagram
         alt 0 candidates (vague query / small vault)
             Note over Plugin: primary search whiffed -><br/>broadened fallback (Diagram 2)
         else candidates found
-            Plugin->>Core: decrypt_and_rerank(<br/>facts, query, queryEmb,<br/>encKey, topK=8)
+            Plugin->>Core: decrypt_and_rerank(<br/>facts, query, queryEmb,<br/>encKey, topK=16)
             Note right of Core: for each fact:<br/>  hex -> base64 -> XChaCha20 decrypt<br/>  extract text from envelope<br/>  decrypt embedding<br/>rerank via BM25 + cosine + RRF
-            Core-->>Plugin: Top-8 RankedResult[]
+            Core-->>Plugin: Top-16 RankedResult[]
             Plugin->>Cache: update(queryEmb, results)
             Plugin-->>Agent: prependContext<br/>"## Relevant Memories\n..."
         end
@@ -134,9 +134,9 @@ sequenceDiagram
     Subgraph-->>Relay: recent active facts
     Relay-->>Plugin: candidates
 
-    Plugin->>Core: decrypt_and_rerank(<br/>facts, query, queryEmb, encKey, topK=8)
+    Plugin->>Core: decrypt_and_rerank(<br/>facts, query, queryEmb, encKey, topK=16)
     Note right of Core: same BM25 + cosine + RRF<br/>as the primary path
-    Core-->>Plugin: Top-8 RankedResult[]
+    Core-->>Plugin: Top-16 RankedResult[]
 
     Plugin-->>Plugin: merge with any primary results<br/>(dedupe by fact ID)
     Plugin-->>Plugin: inject top-8 into context

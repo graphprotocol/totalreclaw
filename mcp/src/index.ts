@@ -187,6 +187,7 @@ export { getSessionId };
 
 // ── Client identification ──────────────────────────────────────────────────
 import { setClientId, getClientId } from './client-id.js';
+import { getRecallTopK, setServerRecallTopK } from './recall-top-k.js';
 let clientIdentifierResolved = false;
 
 /**
@@ -295,6 +296,7 @@ function proactiveBillingFetch(state: SubgraphState): void {
           max_candidate_pool: features?.max_candidate_pool as number | undefined,
           checked_at: Date.now(),
         };
+        setServerRecallTopK(features?.recall_top_k);
       }
     })
     .catch(() => { /* best-effort */ })
@@ -1416,8 +1418,9 @@ async function handleRecallSubgraph(
     };
   }
 
-  let k = (input?.k as number) ?? 8;
-  if (k < 1) k = 8;
+  const defaultK = getRecallTopK();
+  let k = (input?.k as number) ?? defaultK;
+  if (k < 1) k = defaultK;
   if (k > 50) k = 50;
 
   try {
@@ -1909,6 +1912,7 @@ async function statusHandler(args: unknown): Promise<ToolResponse> {
         max_candidate_pool: raw.features.max_candidate_pool,
         checked_at: Date.now(),
       };
+      setServerRecallTopK(raw.features.recall_top_k);
     }
   } catch {
     // Best-effort cache — don't fail the status call.

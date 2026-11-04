@@ -70,7 +70,7 @@ Search and retrieve relevant memories from long-term storage.
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | query | string | Yes | Natural language query to search memories |
-| k | integer | No | Number of results to return. Default: 8, Max: 20 |
+| k | integer | No | Number of results to return. Default: 16, Max: 20 |
 
 ---
 

@@ -417,6 +417,42 @@ function resetCache(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Recall top-k: env > relay features.recall_top_k > 16
+// ---------------------------------------------------------------------------
+
+{
+  const { resolveRecallTopK, DEFAULT_RECALL_TOP_K } = await import('./billing-cache.js');
+  const base: BillingCache = { tier: 'free', free_writes_used: 0, free_writes_limit: 250, checked_at: Date.now() };
+  assert(DEFAULT_RECALL_TOP_K === 16, 'recall top-k: default is 16');
+  assert(resolveRecallTopK(undefined, null) === 16, 'recall top-k: no env, no cache -> 16');
+  assert(resolveRecallTopK(undefined, base) === 16, 'recall top-k: cache without the feature -> 16');
+  assert(
+    resolveRecallTopK(undefined, { ...base, features: { recall_top_k: 8 } }) === 8,
+    'recall top-k: relay value beats the default',
+  );
+  assert(
+    resolveRecallTopK(5, { ...base, features: { recall_top_k: 8 } }) === 5,
+    'recall top-k: env beats the relay value',
+  );
+  assert(
+    resolveRecallTopK(Number.NaN, { ...base, features: { recall_top_k: 0 } }) === 16,
+    'recall top-k: NaN env + zero relay value -> 16',
+  );
+  assert(
+    resolveRecallTopK(-2, { ...base, features: { recall_top_k: 2.5 } }) === 16,
+    'recall top-k: negative env + non-integer relay value -> 16',
+  );
+
+  // Round-trip through the on-disk cache: the relay value survives write/read.
+  resetCache();
+  writeBillingCache({ ...base, features: { recall_top_k: 12 } });
+  assert(
+    resolveRecallTopK(undefined, readBillingCache()) === 12,
+    'recall top-k: relay value read back from the on-disk cache',
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Cleanup + summary
 // ---------------------------------------------------------------------------
 

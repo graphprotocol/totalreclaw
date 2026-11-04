@@ -170,6 +170,7 @@ import { buildRelayHeaders } from './billing/relay-headers.js';
 import {
   readBillingCache,
   writeBillingCache,
+  resolveRecallTopK,
   BILLING_CACHE_PATH,
   type BillingCache,
 } from './billing/billing-cache.js';
@@ -423,6 +424,16 @@ function getMaxFactsPerExtraction(): number {
     return CONFIG.maxFactsPerExtraction;
   }
   return MAX_FACTS_PER_EXTRACTION;
+}
+
+/**
+ * Get how many facts a recall returns when the caller passes no limit
+ * (memory_search without maxResults, and the before_agent_start auto-recall).
+ * env `TOTALRECLAW_RECALL_TOP_K` > relay `features.recall_top_k` > 16 — see
+ * `resolveRecallTopK`. An explicit caller limit always wins over this.
+ */
+function getRecallTopK(): number {
+  return resolveRecallTopK(CONFIG.recallTopK, readBillingCache());
 }
 
 /**
@@ -2067,7 +2078,7 @@ function buildRecallDeps(logger: OpenClawPluginApi['logger']): TrNativeMemoryDep
     // we cannot run recall — return [].
     if (isSubgraphMode() && !subgraphOwner) return [];
 
-    const k = Math.min(opts?.maxResults ?? 8, 20);
+    const k = Math.min(opts?.maxResults ?? getRecallTopK(), 20);
 
     // 1. Generate word trapdoors (blind indices for the query).
     const wordTrapdoors = generateBlindIndices(query);
@@ -3914,7 +3925,7 @@ const plugin = {
               evt.prompt,
               queryEmbedding ?? [],
               rerankerCandidates,
-              8,
+              Math.min(getRecallTopK(), 20),
               INTENT_WEIGHTS[hookQueryIntent],
               /* applySourceWeights (Retrieval v2 Tier 1) */ false,
             );
@@ -4043,7 +4054,7 @@ const plugin = {
             evt.prompt,
             queryEmbedding ?? [],
             rerankerCandidates,
-            8,
+            Math.min(getRecallTopK(), 20),
             INTENT_WEIGHTS[srvHookIntent],
             /* applySourceWeights (Retrieval v2 Tier 1) */ false,
             );

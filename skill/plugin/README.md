@@ -201,7 +201,7 @@ Add to your OpenClaw configuration file:
         "serverUrl": "http://your-server:8080",
         "autoExtractEveryTurns": 3,
         "minImportanceForAutoStore": 6,
-        "maxMemoriesInContext": 8,
+        "maxMemoriesInContext": 16,
         "forgetThreshold": 0.3
       }
     }
