@@ -175,10 +175,23 @@ class TestPluginState:
         assert state.get_max_candidate_pool() == 250
 
     def test_candidate_pool_billing_override(self):
-        """Billing cache max_candidate_pool overrides default."""
+        """A billing pool below the cap overrides the default."""
         state = _make_state()
-        state.update_from_billing({"features": {"max_candidate_pool": 800}})
-        assert state.get_max_candidate_pool() == 800
+        state.update_from_billing({"features": {"max_candidate_pool": 100}})
+        assert state.get_max_candidate_pool() == 100
+
+    def test_candidate_pool_billing_capped(self):
+        """A billing pool above MAX_SERVER_CANDIDATE_POOL is capped (#696)."""
+        state = _make_state()
+        state.update_from_billing({"features": {"max_candidate_pool": 2000}})
+        assert state.get_max_candidate_pool() == 250
+
+    def test_candidate_pool_env_not_capped(self):
+        """The env override can exceed the server cap."""
+        state = _make_state()
+        state.update_from_billing({"features": {"max_candidate_pool": 2000}})
+        with patch.dict(os.environ, {"CANDIDATE_POOL_MAX_FREE": "1000"}):
+            assert state.get_max_candidate_pool() == 1000
 
     def test_candidate_pool_env_free_override(self):
         """CANDIDATE_POOL_MAX_FREE applies when tier is free/unknown.
