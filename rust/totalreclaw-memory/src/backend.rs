@@ -194,7 +194,7 @@ fn category_from_source(source: &str) -> MemoryCategory {
 }
 
 /// Auto-recall top_k constant (after reranking). Matches all other clients.
-const AUTO_RECALL_TOP_K: usize = 8;
+const AUTO_RECALL_TOP_K: usize = 16;
 
 // ---------------------------------------------------------------------------
 // ZeroClaw-compatible types
@@ -655,10 +655,10 @@ impl TotalReclawMemory {
         Ok(results)
     }
 
-    /// Auto-recall: search with the spec-mandated top_k=8.
+    /// Auto-recall: search with the spec-mandated top_k=16.
     ///
     /// Per the client-consistency spec, auto-recall at session start
-    /// uses the raw user message as query and returns top 8 after reranking.
+    /// uses the raw user message as query and returns top 16 after reranking.
     pub async fn auto_recall(&self, query: &str) -> Result<Vec<MemoryEntry>> {
         self.recall(query, AUTO_RECALL_TOP_K, None).await
     }

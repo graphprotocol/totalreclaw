@@ -23,7 +23,7 @@
 | Parameter | Value | Notes |
 |-----------|-------|-------|
 | Trigger | First turn of each session | Hook: `before_agent_start` / `pre_llm_call` |
-| top_k | 8 | After reranking |
+| top_k | 16 (default) | After reranking. Server-driven via `billing.features.recall_top_k`; env override `TOTALRECLAW_RECALL_TOP_K`; an explicit caller `k` always wins (public #365) |
 | Query | Raw user message | No preprocessing |
 
 ### Billing

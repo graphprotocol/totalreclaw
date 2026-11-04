@@ -27,7 +27,7 @@ export interface BeforeAgentStartOutput {
 export async function beforeAgentStart(
   client: TotalReclaw,
   input: BeforeAgentStartInput,
-  maxMemories: number = 8
+  maxMemories: number = 16
 ): Promise<BeforeAgentStartOutput> {
   const startTime = Date.now();
 
