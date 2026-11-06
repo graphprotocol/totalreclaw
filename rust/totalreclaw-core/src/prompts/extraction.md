@@ -19,6 +19,13 @@ Rules:
    NOT user preferences or claims worth storing. Genuine preferences that
    happen to mention encryption (e.g., "I like using Signal because it's
    encrypted") ARE valid and should be extracted.
+7. NEVER extract secrets or sensitive identifiers: passwords, PINs, API
+   keys, access tokens, private keys, wallet recovery phrases, payment card
+   numbers, bank account numbers (IBAN), or government ID numbers (passport,
+   national ID, tax number, social security number). Skip the value itself —
+   never copy, paraphrase, or partially mask it. A fact about the item that
+   omits the value is fine ("uses a hardware wallet", "has a Portuguese
+   passport"). Names, e-mail addresses and phone numbers are NOT secrets.
 
 Importance rubric (use FULL 1-10 range):
 - 10: Critical, core identity, never-forget content
