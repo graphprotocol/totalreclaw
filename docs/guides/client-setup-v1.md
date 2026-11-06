@@ -97,7 +97,7 @@ The IronClaw agent config references the MCP server via the same JSON shape. See
 
 Ask the agent: *"What TotalReclaw tools do you have?"* — you should see 18 tools including `totalreclaw_pin`, `totalreclaw_retype`, `totalreclaw_set_scope`.
 
-**Full guide:** [claude-code-setup.md](./claude-code-setup.md)
+**Full guides:** [claude-desktop-setup.md](./claude-desktop-setup.md) (Claude Desktop) · [claude-code-setup.md](./claude-code-setup.md) (Claude Code, Cursor, Windsurf)
 
 ---
 

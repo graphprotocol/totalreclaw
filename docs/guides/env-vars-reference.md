@@ -262,5 +262,6 @@ See [client-consistency spec](../specs/totalreclaw/client-consistency.md) for th
 - [v1 migration guide](./v1-migration.md)
 - [Client setup guide](./client-setup-v1.md)
 - [OpenClaw setup](./openclaw-setup.md)
-- [Claude Desktop setup](./claude-code-setup.md)
+- [Claude Desktop setup](./claude-desktop-setup.md)
+- [Claude Code / Cursor / Windsurf setup](./claude-code-setup.md)
 - [Hermes setup](./hermes-setup.md)
