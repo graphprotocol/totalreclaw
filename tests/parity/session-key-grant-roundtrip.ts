@@ -14,13 +14,13 @@
  *   4. The session signer's signature over the mock user-op hash recovers
  *      to the session EOA.
  *   5. The ABI-encoded `(PermissionGrant, bytes)` install blob (what
- *      `SessionKeyModule.validateSessionKeyUserOp` decodes on the lazy-install
+ *      `TotalReclawAccount._validateSessionKeySignature` decodes on the lazy-install
  *      path) is byte-equal to `abi_encoded_install_sig`, AND round-trip
  *      decodes back to the original fields.
  *
  * The Python sibling (cred-8, in flight at #333) and the Foundry sibling
- * (extension in `contracts/test/SessionKeyModule.t.sol` shipped in this
- * PR) load the same fixture and assert the same invariants. All three
+ * (the `test_parity_fixture_*` tests in
+ * `contracts/account/test/TotalReclawAccount.t.sol`) load the same fixture and assert the same invariants. All three
  * passing is the cross-language guarantee.
  *
  * Run:
@@ -45,7 +45,7 @@ import { privateKeyToAccount, sign } from 'viem/accounts';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ---------------------------------------------------------------------------
-// EIP-712 typehashes — must match SessionKeyModule.sol byte-for-byte.
+// EIP-712 typehashes — must match TotalReclawAccount.sol byte-for-byte.
 // Duplicated from the generator on purpose: a copy-paste divergence would
 // surface here as a digest mismatch rather than a silent regen drift.
 // ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ interface Fixture {
 }
 
 // ---------------------------------------------------------------------------
-// Mirrors SessionKeyModule._grantDigest. Non-standard `bytes4[]` encoding —
+// Mirrors TotalReclawAccount._grantDigest. Non-standard `bytes4[]` encoding —
 // see fixtures/generate-session-key-grant-v1.ts header for rationale.
 // ---------------------------------------------------------------------------
 

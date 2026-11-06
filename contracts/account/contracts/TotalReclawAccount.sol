@@ -115,11 +115,11 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
  * corrected here: `onlyOwner` genuinely accepts the owner EOA directly OR
  * a self-call, and this doc says so plainly.
  *
- * `SessionKeyModule.sol` and `ISessionKeyModule.sol` are left untouched
- * on disk -- they are dead code (never deployed, per the account-model
- * memo §6) but still compile and their own test suite
- * (`test/SessionKeyModule.t.sol`) still exercises them; deleting them is
- * out of scope for this change.
+ * `SessionKeyModule.sol` and `ISessionKeyModule.sol` (never deployed, per
+ * the account-model memo §6) have since been removed from the tree; the
+ * references to them in this file describe where code was ported from and
+ * can be followed in git history. Their parity-fixture and gas-budget tests
+ * now live in `test/TotalReclawAccount.t.sol`.
  * ============================================================
  */
 contract TotalReclawAccount is SimpleAccount {

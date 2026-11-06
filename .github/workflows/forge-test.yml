@@ -3,9 +3,8 @@ name: Forge Test (Solidity contracts)
 # Coordinator-created gate per Pedro's 2026-05-28 12:49Z requirement on #278:
 # "ensure we add a forge-test.yml workflow before cred-6 hits stable promote."
 #
-# Runs `forge build` + `forge test` against contracts/ on every PR + push to
-# main. Gates SessionKeyModule + cred-6/cred-7 work. Hardhat side (TS tests)
-# stays on the existing CI; this workflow is Foundry-only.
+# Runs `forge build` + `forge test` against contracts/ (EventfulDataEdge) and
+# contracts/account/ (TotalReclawAccount) on every PR + push to main.
 
 on:
   push:
@@ -62,12 +61,11 @@ jobs:
       - name: Run unit tests
         run: forge test -vvv
 
-      # Cred-6 spec §6.1 mandates a `forge snapshot` gas budget on the
-      # executeBatch per-inner-call validator (< 5K gas per inner). Since
-      # #650 the baseline `.gas-snapshot` is COMMITTED, so `--diff` output
-      # in PR logs is meaningful — but enforcement (failing on drift) stays
-      # deferred until the cred-6 baseline lands with the paused Phase 3
-      # work. Regenerate locally with `cd contracts && forge snapshot`.
+      # Diagnostic only: the baseline `.gas-snapshot` is committed, so the
+      # `--diff` output in PR logs is meaningful, but drift does not fail the
+      # job. (The cred-6 < 5K-gas-per-inner budget is enforced as an assertion
+      # in contracts/account/test/TotalReclawAccount.t.sol.) Regenerate locally
+      # with `cd contracts && forge snapshot`.
       - name: Snapshot gas (diagnostic vs committed baseline)
         run: forge snapshot --check --diff || true
         continue-on-error: true
