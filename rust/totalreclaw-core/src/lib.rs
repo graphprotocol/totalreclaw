@@ -12,6 +12,7 @@
 //! - [`blind`] — Blind index generation (SHA-256 token hashing + Porter stemming)
 //! - [`stemmer`] — Porter 1 stemmer (hand-rolled, NOT Snowball/Porter 2)
 //! - [`fingerprint`] — Content fingerprint (HMAC-SHA256 with NFC normalization)
+//! - [`forget_guard`] — Write-time check that keeps auto-extraction from re-creating a fact the user forgot (internal#605)
 //! - [`protobuf`] — Minimal protobuf encoder for fact payloads
 //! - [`reranker`] — BM25 + Cosine + RRF fusion reranker
 //! - [`debrief`] — Session debrief response parser
@@ -43,6 +44,7 @@ pub mod digest;
 pub mod crypto;
 pub mod debrief;
 pub mod fingerprint;
+pub mod forget_guard;
 pub mod hotcache;
 pub mod kg_ffi;
 pub mod lsh;
