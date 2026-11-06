@@ -620,6 +620,12 @@ class TestStoreTimeDedup:
         mock_client.recall = mock_recall
         mock_client.forget = mock_forget
 
+        # PRD-04 DEP-5: the pin guard reads the UPDATE target's pin state.
+        async def mock_get_fact_pin_status(fact_id):
+            return False
+
+        mock_client.get_fact_pin_status = mock_get_fact_pin_status
+
         state.add_message("user", "I like dark mode")
         state.add_message("assistant", "OK")
 

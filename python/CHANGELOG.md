@@ -6,6 +6,18 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **[PRD-04 F1 / DEP-5] Pinned facts are protected from auto-extraction.** An auto-extraction UPDATE or DELETE whose target is pinned is now dropped (`agent/pin_guard.py`). When the pin state cannot be read, DELETE is dropped and UPDATE is stored as a plain ADD, so nothing is tombstoned. The contradiction resolver now receives entity refs and pin state, so it actually runs, and a new fact that contradicts a pinned fact is not stored (core `SkipNew { reason: existing_pinned }`). Other resolver outcomes stay log-only until DEP-12. Log lines carry the category only, never fact text or ids.
+- **SKILL.md** no longer claims pinned facts surface in every recall. They rank higher when they match the query.
+
+### Added
+
+- **Recall pin boost.** Recall ranks a pinned fact as if it were 1.5× more relevant (BM25 and cosine), through core `rerank_with_config(..., pin_boost=)` (`operations.PIN_BOOST_DEFAULT`). It moves up past facts that match the query almost as well; it does not put unrelated pins on top. The option is feature-detected: a `totalreclaw-core` wheel without it keeps the old ranking. Core applies no boost when the query has no embedding (Hermes auto-recall until DEP-8).
+- `TotalReclaw.get_fact_pin_status(fact_id)`.
+
 ## [2.5.3] — 2026-11-02
 
 ### Added

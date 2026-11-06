@@ -367,6 +367,9 @@ async fn decrypt_and_prepare_candidates(
             embedding: emb,
             timestamp: fact.timestamp.clone().unwrap_or_default(),
             source: envelope.v1_source,
+            // PRD-04 DEP-5: ZeroClaw does not wire the recall pin boost yet
+            // (Known Gap in CLAUDE.md).
+            pinned: false,
         });
     }
     rerank_candidates

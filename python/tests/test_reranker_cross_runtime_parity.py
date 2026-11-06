@@ -106,3 +106,11 @@ def test_score_changes_when_source_weights_toggle() -> None:
     sum_on = sum(r.rrf_score for r in sw_on)
     sum_off = sum(r.rrf_score for r in sw_off)
     assert sum_on != sum_off, "Source weighting toggle had no effect"
+
+
+def test_top_k_unchanged_when_pin_boost_on_and_nothing_pinned() -> None:
+    """PRD-04 DEP-5: turning the pin boost on must not move this parity
+    fixture (nothing in it is pinned). Mirrored in
+    mcp/tests/reranker-cross-runtime-parity.test.ts."""
+    results = rerank(QUERY, QUERY_EMBEDDING, FIXTURE, top_k=8, apply_source_weights=True, pin_boost=1.5)
+    assert [r.id for r in results] == EXPECTED_TOP8
