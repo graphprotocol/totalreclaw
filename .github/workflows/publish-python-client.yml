@@ -8,9 +8,9 @@ on:
         required: false
         type: choice
         options:
-          - stable
           - rc
-        default: stable
+          - stable
+        default: rc
       rc-number:
         description: 'RC increment (1, 2, 3...) — only used when release-type=rc'
         required: false
