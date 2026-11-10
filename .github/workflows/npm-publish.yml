@@ -10,8 +10,10 @@ name: Publish npm packages
 # (the PR that introduced this comment) for full write-up.
 #
 # `release-type` input was added 2026-04-20 for the RC (release-candidate)
-# publish flow — see docs/guides/release-process.md. `stable` keeps the
-# default `latest` dist-tag + version-as-in-package.json. `rc` appends
+# publish flow — see docs/guides/release-process.md. Since 2026-11-10 the
+# input defaults to `rc`, so a dispatch that omits it can't ship a stable
+# by accident; a stable needs `-f release-type=stable`. `stable` keeps the
+# `latest` dist-tag + version-as-in-package.json. `rc` appends
 # `-rc.<N>` to the version, publishes to the `rc` dist-tag, and does NOT
 # touch the checked-in package.json (version bump is in-workflow only).
 
@@ -34,9 +36,9 @@ on:
         required: false
         type: choice
         options:
-          - stable
           - rc
-        default: stable
+          - stable
+        default: rc
       rc-number:
         description: 'RC increment (1, 2, 3...) — only used when release-type=rc'
         required: false

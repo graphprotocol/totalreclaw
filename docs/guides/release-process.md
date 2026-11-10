@@ -353,9 +353,10 @@ If a stable release ships and is later discovered to be broken:
 
 ## Manual escape hatches
 
-- **Skip RC for urgent hotfixes.** `release-type=stable` is still the
-  default. For a true hotfix (e.g. security CVE), you can dispatch
-  `release-type=stable` directly with a tested patch. Mark it as a
+- **Skip RC for urgent hotfixes.** Every `publish-*.yml` defaults to
+  `release-type=rc` (since 2026-11-10, #706), so a stable always needs
+  `-f release-type=stable` spelled out. For a true hotfix (e.g. security
+  CVE), you can dispatch `release-type=stable` directly with a tested patch. Mark it as a
   hotfix in the announcement so the next feature wave doesn't skip the
   QA gate.
 - **Re-running the stable dispatch is idempotent.** Each `publish-*.yml`
