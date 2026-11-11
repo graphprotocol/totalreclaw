@@ -1559,6 +1559,7 @@ async function handleRecallSubgraph(
     const subgraphCore = require('@totalreclaw/core') as typeof import('@totalreclaw/core');
     const memories = reranked.map((r) => ({
       fact_id: r.id,
+      memory_id: r.id,
       fact_text: r.text,
       type: categoryMap.get(r.id) ?? 'fact',
       source: sourceMap.get(r.id),

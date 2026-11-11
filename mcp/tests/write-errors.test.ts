@@ -289,3 +289,12 @@ describe('phrase-rail wording: point users to totalreclaw_pair, never to env/con
     }
   });
 });
+
+describe('C8: ids documented as "from a prior recall result" exist in recall results', () => {
+  const fs = require('node:fs') as typeof import('node:fs');
+  const path = require('node:path');
+  test('managed recall results carry memory_id alongside fact_id', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.ts'), 'utf8');
+    expect(src).toMatch(/fact_id: r\.id,\s*memory_id: r\.id,/);
+  });
+});
