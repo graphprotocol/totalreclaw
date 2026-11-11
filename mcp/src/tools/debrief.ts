@@ -11,7 +11,7 @@
 
 import { TotalReclaw, FactMetadata } from '@totalreclaw/client';
 import type { ToolContext } from './types.js';
-import { rethrowIfQuota, shortErrorMessage } from './write-errors.js';
+import { rethrowIfQuota, shortErrorMessage, logWriteError } from './write-errors.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -283,7 +283,7 @@ export async function handleDebrief(
       rethrowIfQuota(error);
       const message = shortErrorMessage(error);
       results.push({ success: false, fact_id: '' });
-      console.error(`Failed to store debrief item: ${message}`);
+      logWriteError('Failed to store debrief item', error);
     }
   }
 

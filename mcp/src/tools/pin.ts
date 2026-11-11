@@ -27,7 +27,7 @@ import type {
 import { LEGACY_TYPE_TO_V1 } from '../v1-types.js';
 import type { SubgraphSearchFact } from '../subgraph/search.js';
 import { encodeFactProtobuf } from '../subgraph/store.js';
-import { rethrowIfQuota, shortErrorMessage } from './write-errors.js';
+import { rethrowIfQuota, shortErrorMessage, logWriteError } from './write-errors.js';
 
 // Lazy-load WASM core (same pattern as claims-helper.ts)
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -823,6 +823,7 @@ export async function executePinOperation(
     };
   } catch (err) {
     rethrowIfQuota(err);
+    logWriteError('Pin batch submission failed', err);
     return {
       success: false,
       fact_id: factId,

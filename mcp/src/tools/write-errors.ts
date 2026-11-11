@@ -55,3 +55,36 @@ export function shortErrorMessage(error: unknown): string {
   const s = String(error ?? '').split('\n')[0]?.trim();
   return s ? (s.length > 300 ? `${s.slice(0, 300)}...` : s) : 'Unknown error';
 }
+
+/**
+ * Full error text for operators (stderr only, never the tool response):
+ * message, viem `details`, and the cause chain, so codes like AA25 survive the
+ * one-line message the model sees. Callers must not pass phrase or key
+ * material; calldata hex and signatures in viem dumps are acceptable here.
+ */
+export function describeErrorFull(error: unknown): string {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  let cur: unknown = error;
+  for (let depth = 0; cur && depth < 5 && !seen.has(cur); depth++) {
+    seen.add(cur);
+    if (cur instanceof Error) {
+      parts.push(cur.message);
+      const details = (cur as { details?: unknown }).details;
+      if (typeof details === 'string' && details && !cur.message.includes(details)) {
+        parts.push(`details: ${details}`);
+      }
+      cur = (cur as { cause?: unknown }).cause;
+      if (cur) parts.push('caused by:');
+    } else {
+      parts.push(String(cur));
+      break;
+    }
+  }
+  return parts.join('\n') || 'Unknown error';
+}
+
+/** Log the full error to stderr, tagged with the operation. */
+export function logWriteError(context: string, error: unknown): void {
+  console.error(`${context}: ${describeErrorFull(error)}`);
+}

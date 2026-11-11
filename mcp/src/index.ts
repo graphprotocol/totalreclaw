@@ -23,8 +23,9 @@ import {
 } from './tools/index.js';
 import { getLastBillingResponse } from './tools/status.js';
 import type { ToolContext, ToolResponse } from './tools/types.js';
-import { isQuotaExceededError, rethrowIfQuota, shortErrorMessage } from './tools/write-errors.js';
+import { isQuotaExceededError, rethrowIfQuota, shortErrorMessage, logWriteError } from './tools/write-errors.js';
 import { pickMemoryId } from './tools/helpers.js';
+import { classifyForgetTarget, forgetNotFoundResponse } from './tools/forget.js';
 import {
   findNearDuplicate,
   shouldSupersede,
@@ -1205,7 +1206,7 @@ async function handleRememberSubgraph(
       for (const meta of pendingFactMeta) {
         results.push({ success: false, fact_id: meta.factId, tx_hash: undefined, error: message });
       }
-      console.error(`Batch submission failed: ${message}`);
+      logWriteError('Batch submission failed', error);
     }
   }
 
@@ -1307,7 +1308,7 @@ async function handleDebriefSubgraph(
     } catch (error) {
       rethrowIfQuota(error);
       const message = shortErrorMessage(error);
-      console.error(`Crystal debrief failed: ${message}`);
+      logWriteError('Crystal debrief failed', error);
       return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: message }) }] };
     }
   }
@@ -1388,7 +1389,7 @@ async function handleDebriefSubgraph(
       for (const meta of pendingFactMeta) {
         results.push({ success: false, fact_id: meta.factId, error: batchError });
       }
-      console.error(`Debrief batch submission failed: ${batchError}`);
+      logWriteError('Debrief batch submission failed', error);
     }
   }
 
@@ -1633,6 +1634,18 @@ async function handleForgetSubgraph(
   }
 
   try {
+    // Existence check first: never tombstone (or report deleted_count: 1 for)
+    // an id that isn't an active fact of this owner.
+    const lookup = await classifyForgetTarget(
+      () => fetchFactById(
+        state.smartAccountAddress,
+        factId,
+        state.serverUrl,
+        Buffer.from(state.authKey).toString('hex'),
+      ),
+    );
+    if (lookup !== 'exists') return forgetNotFoundResponse(factId, lookup);
+
     // Build a tombstone payload: same fact ID with isActive=false
     // The protobuf encoder always sets isActive=true, so we build a minimal
     // tombstone payload manually. For now, we re-encode the fact with
@@ -1687,6 +1700,7 @@ async function handleForgetSubgraph(
     };
   } catch (error) {
     rethrowIfQuota(error);
+    logWriteError('Forget failed', error);
     const message = shortErrorMessage(error);
     return {
       content: [{

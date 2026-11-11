@@ -22,7 +22,7 @@ import {
   type MemoryVolatility,
 } from '../v1-types.js';
 import { buildV1ClaimBlob } from '../claims-helper.js';
-import { rethrowIfQuota, shortErrorMessage } from './write-errors.js';
+import { rethrowIfQuota, shortErrorMessage, logWriteError } from './write-errors.js';
 
 // ── Tool definition ──────────────────────────────────────────────────────────
 
@@ -429,6 +429,7 @@ export async function executeMetadataOp<T>(
     };
   } catch (err) {
     rethrowIfQuota(err);
+    logWriteError('Metadata batch submission failed', err);
     return {
       success: false,
       memory_id: memoryId,

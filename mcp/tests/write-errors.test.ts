@@ -298,3 +298,65 @@ describe('C8: ids documented as "from a prior recall result" exist in recall res
     expect(src).toMatch(/fact_id: r\.id,\s*memory_id: r\.id,/);
   });
 });
+
+describe('full error goes to stderr, one line to the model (review finding 1)', () => {
+  const { describeErrorFull, logWriteError } = require('../src/tools/write-errors');
+  test('describeErrorFull keeps details and cause (e.g. AA25)', () => {
+    const inner = new Error('inner cause AA25 invalid account nonce');
+    const outer = viemError('"AA25 invalid account nonce"');
+    (outer as Error & { cause?: unknown }).cause = inner;
+    const full = describeErrorFull(outer);
+    expect(full).toContain('AA25');
+    expect(full).toContain('callData');
+    expect(full).toContain('inner cause');
+  });
+  test('logWriteError writes the full text to stderr; tool message stays one line', () => {
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const e = viemError('"AA25 invalid account nonce"');
+    logWriteError('Batch submission failed', e);
+    expect(spy.mock.calls[0][0]).toContain('AA25');
+    expect(shortErrorMessage(e)).not.toContain('AA25');
+    spy.mockRestore();
+  });
+});
+
+describe('forget checks existence first (review finding 2)', () => {
+  const { classifyForgetTarget, forgetNotFoundResponse } = require('../src/tools/forget');
+  test('missing id => missing, inactive => inactive, active => exists', async () => {
+    expect(await classifyForgetTarget(async () => null)).toBe('missing');
+    expect(await classifyForgetTarget(async () => ({ isActive: false }))).toBe('inactive');
+    expect(await classifyForgetTarget(async () => ({ isActive: true }))).toBe('exists');
+  });
+  test('lookup errors propagate (nothing is written)', async () => {
+    await expect(classifyForgetTarget(async () => { throw new Error('relay down'); })).rejects.toThrow('relay down');
+  });
+  test('not-found response has deleted_count 0 and no tx_hash', () => {
+    const body = JSON.parse(forgetNotFoundResponse('abc', 'missing').content[0].text);
+    expect(body.deleted_count).toBe(0);
+    expect(body.fact_ids).toEqual([]);
+    expect(body.not_found).toBe(true);
+    expect(body.tx_hash).toBeUndefined();
+    expect(body.error).toMatch(/not found/);
+  });
+  test('managed forget runs the check before the tombstone is built (source order)', () => {
+    const fs = require('node:fs'); const path = require('node:path');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.ts'), 'utf8');
+    const f = src.slice(src.indexOf('async function handleForgetSubgraph'));
+    expect(f.indexOf('classifyForgetTarget')).toBeGreaterThan(0);
+    expect(f.indexOf('classifyForgetTarget')).toBeLessThan(f.indexOf('encodeFactProtobuf(tombstonePayload)'));
+  });
+});
+
+describe('README leads with pairing (review finding 3)', () => {
+  test('pairing precedes the legacy env-var note', () => {
+    const fs = require('node:fs'); const path = require('node:path');
+    const md = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
+    const pair = md.indexOf('totalreclaw_pair');
+    const legacy = md.indexOf('Legacy: manual setup');
+    const env = md.indexOf('TOTALRECLAW_RECOVERY_PHRASE');
+    expect(pair).toBeGreaterThan(0);
+    expect(pair).toBeLessThan(legacy);
+    expect(legacy).toBeLessThan(env);
+    expect(md).toMatch(/plain text in a config file/);
+  });
+});
