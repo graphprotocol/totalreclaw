@@ -27,6 +27,7 @@ jobs:
     outputs:
       client: ${{ steps.filter.outputs.client }}
       mcp: ${{ steps.filter.outputs.mcp }}
+      mcpb: ${{ steps.filter.outputs.mcpb }}
       app: ${{ steps.filter.outputs.app }}
       plugin: ${{ steps.filter.outputs.plugin }}
       pair-crypto: ${{ steps.filter.outputs.pair-crypto }}
@@ -42,6 +43,10 @@ jobs:
               - 'client/**'
             mcp:
               - 'mcp/**'
+            mcpb:
+              - 'mcp/**'
+              - 'plugins/**'
+              - '.claude-plugin/**'
             app:
               - 'app/**'
             plugin:
@@ -262,6 +267,35 @@ jobs:
           node-version: '22'
       - name: Install, build, and test
         run: cd mcp && rm -f package-lock.json && npm install --legacy-peer-deps && npm run build && npm test
+
+  mcpb-bundle:
+    # One-click install packaging: build the .mcpb bundle (one platform) from the
+    # freshly built mcp/dist, run `mcpb validate` (inside the build script), assemble
+    # the Claude plugin around it, and check the plugin JSON files parse. Builds
+    # only; nothing is published.
+    name: MCPB bundle + Claude plugin
+    needs: changes
+    if: ${{ needs.changes.outputs.mcpb == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Build mcp/dist
+        run: cd mcp && rm -f package-lock.json && npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund && npm run build
+      - name: Build .mcpb (darwin-arm64) and validate
+        run: node mcp/scripts/build-mcpb.mjs --from-dir mcp --platform darwin-arm64 --out "$RUNNER_TEMP/mcpb"
+      - name: Assemble the plugin
+        run: node mcp/scripts/build-plugin.mjs --bundle "$RUNNER_TEMP"/mcpb/totalreclaw-*-darwin-arm64.mcpb --out "$RUNNER_TEMP/plugin"
+      - name: Plugin and marketplace JSON parse
+        run: |
+          for f in .claude-plugin/marketplace.json plugins/totalreclaw/.claude-plugin/plugin.json plugins/totalreclaw/.mcp.json "$RUNNER_TEMP/plugin/totalreclaw/.claude-plugin/plugin.json"; do
+            node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$f" && echo "ok $f"
+          done
 
   pair-crypto-node-matrix:
     # Pairing crypto (X25519 private-key construction) must work on every

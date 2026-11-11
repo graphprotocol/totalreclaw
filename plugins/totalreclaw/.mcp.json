@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "totalreclaw": {
+      "command": "npx",
+      "args": ["-y", "@totalreclaw/mcp-server@3.5.2"]
+    }
+  }
+}
