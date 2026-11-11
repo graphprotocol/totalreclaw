@@ -19,16 +19,38 @@
  * On failure: one line `build-plugin: <reason>` on stderr and a non-zero exit.
  */
 import {
-  cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync,
+  cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_SRC = resolve(HERE, '..', '..', 'plugins', 'totalreclaw');
 
+const MARKER = '.totalreclaw-build';
+
 function fail(msg) { throw new Error(msg); }
+
+function contains(a, b) { return b === a || b.startsWith(a.endsWith(sep) ? a : a + sep); }
+
+/**
+ * Validate the output dir before any recursive delete. Refuses when it
+ * overlaps the plugin source, or when it exists and is neither empty nor
+ * carries the marker this script wrote on a previous build.
+ */
+function checkDest(dest) {
+  if (contains(PLUGIN_SRC, dest) || contains(dest, PLUGIN_SRC)) {
+    fail(`refusing: output ${dest} overlaps the plugin source ${PLUGIN_SRC}`);
+  }
+  if (!existsSync(dest)) return;
+  const st = lstatSync(dest);
+  if (!st.isDirectory()) fail(`refusing: ${dest} exists and is not a directory`);
+  if (readdirSync(dest).length === 0) return;
+  if (!existsSync(join(dest, MARKER))) {
+    fail(`refusing: ${dest} exists, is not empty and was not created by build-plugin (no ${MARKER} marker)`);
+  }
+}
 
 function parseArgs(argv) {
   const o = { entry: 'mcpb' };
@@ -46,6 +68,7 @@ function parseArgs(argv) {
   if (!o.out) fail('--out <dir> is required');
   if (!['mcpb', 'npx'].includes(o.entry)) fail('--entry must be mcpb or npx');
   if (o.entry === 'mcpb' && !o.bundle) fail('--bundle <path.mcpb> is required');
+  if (o.entry === 'npx' && !o.bundle) fail('--bundle is required (its manifest supplies the version to pin)');
   return o;
 }
 
@@ -98,9 +121,12 @@ function main() {
   }
 
   const dest = join(resolve(opts.out), 'totalreclaw');
-  rmSync(dest, { recursive: true, force: true });
+  checkDest(dest);
+  // Safe: dest is outside the plugin source and is empty or marked as our own previous output.
+  if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
   mkdirSync(dirname(dest), { recursive: true });
   cpSync(PLUGIN_SRC, dest, { recursive: true });
+  writeFileSync(join(dest, MARKER), 'written by mcp/scripts/build-plugin.mjs; safe to replace\n');
 
   const pjPath = join(dest, '.claude-plugin', 'plugin.json');
   const pj = JSON.parse(readFileSync(pjPath, 'utf8'));
@@ -108,7 +134,13 @@ function main() {
   if (opts.entry === 'mcpb') {
     writeFileSync(join(dest, 'totalreclaw.mcpb'), bundleBuf);
     pj.mcpServers = './totalreclaw.mcpb';
-    rmSync(join(dest, '.mcp.json'), { force: true });
+    rmSync(join(dest, '.mcp.json'), { force: true }); // single file we just copied
+  } else if (version) {
+    // npx entry: pin to the bundle's version
+    const mcpPath = join(dest, '.mcp.json');
+    const mcp = JSON.parse(readFileSync(mcpPath, 'utf8'));
+    mcp.mcpServers.totalreclaw.args = ['-y', `@totalreclaw/mcp-server@${version}`];
+    writeFileSync(mcpPath, JSON.stringify(mcp, null, 2) + '\n');
   }
   writeFileSync(pjPath, JSON.stringify(pj, null, 2) + '\n');
 

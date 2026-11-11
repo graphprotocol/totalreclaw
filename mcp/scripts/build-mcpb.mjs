@@ -22,7 +22,7 @@ import {
   readFileSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +34,14 @@ const IS_WIN = process.platform === 'win32';
 
 function log(msg) { process.stderr.write(`[build-mcpb] ${msg}\n`); }
 function fail(msg) { throw new Error(msg); }
+
+/** Recursive delete, only for a path strictly inside `root` (a dir this script created). */
+function rmInside(root, target) {
+  const r = resolve(root);
+  const t = resolve(target);
+  if (t === r || !t.startsWith(r + sep)) fail(`refusing to delete ${t}: not inside ${r}`);
+  rmSync(t, { recursive: true, force: true });
+}
 
 function parseArgs(argv) {
   const o = { platform: 'host' };
@@ -139,7 +147,7 @@ function pruneNative(server, plat) {
   const nm = join(server, 'node_modules');
   // onnxruntime-web is bundled inline into transformers' node build and never
   // required at runtime in Node; it is ~140 MB of wasm.
-  rmSync(join(nm, 'onnxruntime-web'), { recursive: true, force: true });
+  rmInside(server, join(nm, 'onnxruntime-web'));
   const bin = join(nm, 'onnxruntime-node', 'bin');
   if (!existsSync(bin)) {
     log('WARNING: onnxruntime-node/bin not found; skipping native prune');
@@ -150,9 +158,9 @@ function pruneNative(server, plat) {
     const napiDir = join(bin, napi);
     for (const os of readdirSync(napiDir)) {
       const osDir = join(napiDir, os);
-      if (os !== plat.os) { rmSync(osDir, { recursive: true, force: true }); continue; }
+      if (os !== plat.os) { rmInside(server, osDir); continue; }
       for (const cpu of readdirSync(osDir)) {
-        if (cpu !== plat.cpu) rmSync(join(osDir, cpu), { recursive: true, force: true });
+        if (cpu !== plat.cpu) rmInside(server, join(osDir, cpu));
       }
     }
   }
@@ -184,7 +192,7 @@ function listTools(server) {
       done = true;
       clearTimeout(timer);
       child.kill();
-      rmSync(fakeHome, { recursive: true, force: true });
+      rmInside(tmpdir(), fakeHome); // mkdtemp dir created above
       err ? rejectP(err) : resolveP(tools);
     };
     const timer = setTimeout(() => finish(new Error(`tools/list timed out. stderr: ${stderr.slice(-300)}`)), 60000);
@@ -271,7 +279,7 @@ async function main() {
     const sha256 = await sha256File(bundle);
     process.stdout.write(JSON.stringify({ bundle, version, platform: plat.label, bytes, sha256 }) + '\n');
   } finally {
-    rmSync(work, { recursive: true, force: true });
+    rmInside(tmpdir(), work); // mkdtemp dir created above
   }
 }
 

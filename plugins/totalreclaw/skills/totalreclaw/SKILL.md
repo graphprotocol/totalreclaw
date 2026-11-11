@@ -34,7 +34,7 @@ If a tool says the account is not set up, or `totalreclaw_status` shows it is no
 
 1. Call `totalreclaw_pair` with `{"mode": "generate"}` for a new account, or `{"mode": "import"}` to restore an existing one.
 2. It returns a link and a PIN. Tell the user: open the link in their browser, enter the PIN, and generate or paste their recovery phrase there. Ask them to reply "done" when it is sealed.
-3. Wait for "done", then call `totalreclaw_status` to confirm.
+3. When the page says "You're all set", tell the user to fully quit and reopen this app (Claude Desktop, or start a new Claude Code session; closing the window is not enough). The server reads the account only at startup, so the memory tools start working after that restart and return `not_configured` until then. Do not call `totalreclaw_pair` again while waiting; the link lasts about 10 minutes.
 
 ## Recovery phrase: hard rules
 
