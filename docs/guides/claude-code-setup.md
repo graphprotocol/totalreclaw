@@ -149,7 +149,7 @@ claude mcp add -s user totalreclaw -- npx -y @totalreclaw/mcp-server
 
 Restart the host. Verify by asking *"Do you have access to TotalReclaw memory tools?"*.
 
-> **Pin a specific version** with `args: ["-y", "@totalreclaw/mcp-server@latest"]` (stable — recommended) or `@totalreclaw/mcp-server@<specific-rc>` (e.g. `3.5.2-rc.1`) to test a particular RC. Prefer `@latest` in production: the `rc` dist-tag (`@totalreclaw/mcp-server@rc`) tracks the newest release-candidate line and can lag `latest`, so `@rc` is not necessarily newer than stable. Check what each tag resolves to: `npm view @totalreclaw/mcp-server dist-tags`.
+> **Pin a specific version** with `args: ["-y", "@totalreclaw/mcp-server@latest"]` (stable — recommended) or `@totalreclaw/mcp-server@<specific-rc>` (e.g. `3.5.3-rc.1`) to test a particular RC. Prefer `@latest` in production: the `rc` dist-tag (`@totalreclaw/mcp-server@rc`) tracks the newest release-candidate line and can lag `latest`, so `@rc` is not necessarily newer than stable. Check what each tag resolves to: `npm view @totalreclaw/mcp-server dist-tags`.
 
 ---
 
