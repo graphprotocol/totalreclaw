@@ -124,3 +124,58 @@ export async function handleForget(
     };
   }
 }
+
+/**
+ * Managed-mode pre-check for forget. `exists` = an active fact owned by the
+ * caller; `missing` = no such fact; `inactive` = already forgotten. A lookup
+ * error propagates (the caller reports it and writes nothing).
+ */
+export async function classifyForgetTarget(
+  lookup: () => Promise<{ isActive?: boolean } | null | undefined>,
+): Promise<'exists' | 'missing' | 'inactive'> {
+  const fact = await lookup();
+  if (!fact) return 'missing';
+  if (fact.isActive === false) return 'inactive';
+  return 'exists';
+}
+
+/** Not-found result: deleted_count 0, no tombstone written. */
+export function forgetNotFoundResponse(
+  factId: string,
+  why: 'missing' | 'inactive',
+): { content: Array<{ type: string; text: string }> } {
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        deleted_count: 0,
+        fact_ids: [],
+        not_found: true,
+        error:
+          why === 'inactive'
+            ? `Memory ${factId} was already forgotten; nothing was changed.`
+            : `Memory ${factId} not found; nothing was deleted. Use an id from a totalreclaw_recall result. If it was saved in the last few seconds, wait about 20 seconds and retry (indexing lag).`,
+        mode: 'subgraph',
+      }),
+    }],
+  };
+}
+
+/** The existence check itself failed: nothing was deleted, no tombstone was written. */
+export function forgetLookupFailedResponse(): {
+  content: Array<{ type: string; text: string }>;
+  isError: true;
+} {
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        deleted_count: 0,
+        fact_ids: [],
+        error: "Couldn't check whether that memory exists right now; nothing was deleted. Try again.",
+        mode: 'subgraph',
+      }),
+    }],
+    isError: true,
+  };
+}

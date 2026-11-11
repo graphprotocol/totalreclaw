@@ -21,15 +21,13 @@ import {
 } from './retype.js';
 
 const SET_SCOPE_DESCRIPTION =
-  'Re-tag memory under different life-domain scope (work|personal|health|family|creative|finance|misc|unspecified).\n' +
+  'Re-file a memory under a scope (work|personal|health|family|creative|finance|misc|unspecified).\n' +
   '\nINVOKE WHEN USER SAYS:\n' +
-  '- "actually that\'s work context, not personal"\n' +
-  '- "file that under health" / "move to finance"\n' +
-  '- "wrong scope — about my kids, not work"\n' +
-  '\nDOES: builds v1 claim with new scope, links via superseded_by, tombstones original. Idempotent.\n' +
-  '\nWHEN NOT TO USE:\n' +
-  '- memory wrong → totalreclaw_forget + totalreclaw_remember\n' +
-  '- type wrong (not scope) → totalreclaw_retype';
+  '- "file that under work/health" / "categorize as finance"\n' +
+  '- "put that in my work/personal memories"\n' +
+  '- "that\'s a work thing" / "that\'s for personal, not work"\n' +
+  '\nDOES: new claim with the scope, superseded_by link, original tombstoned. Idempotent. Needs memory_id from recall.\n' +
+  '\nWHEN NOT TO USE: memory wrong → forget + remember; type wrong → retype';
 
 export const setScopeToolDefinition = {
   name: 'totalreclaw_set_scope',
