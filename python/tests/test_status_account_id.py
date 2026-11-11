@@ -22,7 +22,7 @@ async def test_status_includes_account_id_and_addresses():
     state = PluginState()
     client = MagicMock()
     client.status = AsyncMock(return_value=MagicMock(
-        tier="pro", free_writes_used=3, free_writes_limit=1500,
+        tier="pro", free_writes_used=3, free_writes_limit=3000,
         expires_at="2027-06-10",
     ))
     client.resolved_wallet_address = "0xa1db0bdbacf82b65dbd464f25b07432fd2f9c47e"
