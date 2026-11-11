@@ -58,7 +58,7 @@ contract TotalReclawAccountTest is Test {
     // ============================================================
 
     /// @dev Pinned-address test, mirroring `DataEdgeStagingCreate2.t.sol
-    ///      :69` -- NOT `SessionKeyModule.t.sol:86`'s tautological
+    ///      :69` -- NOT the removed `SessionKeyModule.t.sol`'s tautological
     ///      version. `test_create2_address_unchanged_after_module_install`
     ///      recomputes `keccak256(0xff || factory || salt || initCodeHash)`
     ///      under different `vm.chainId` values and asserts the two
@@ -73,7 +73,7 @@ contract TotalReclawAccountTest is Test {
     ///
     ///      NOTE: this salt is a placeholder for THIS TEST ONLY, chosen to
     ///      follow the existing `totalreclaw.<ContractName>.v1` naming
-    ///      convention (`DeploySessionKeyModule.SESSION_KEY_MODULE_SALT_V1`).
+    ///      convention (as used by the removed `DeploySessionKeyModule.s.sol`).
     ///      It does not commit to an actual deployment salt -- that is
     ///      decided by `2026-08-02-phase3-contract-deployment-plan.md`
     ///      (out of scope for P3-1/P3-2/P3-4). If a different salt is
@@ -483,7 +483,7 @@ contract TotalReclawAccountTest is Test {
 
     // ============================================================
     // executeBatch scope invariant (cred-6) -- the six tests ported from
-    // `SessionKeyModule.t.sol:424-591`, adapted to call `validateUserOp`
+    // the removed `SessionKeyModule.t.sol`, adapted to call `validateUserOp`
     // (pranked as the EntryPoint) against a real deployed proxy instead
     // of a MockSmartAccount trampoline into the standalone module.
     // ============================================================
@@ -605,9 +605,126 @@ contract TotalReclawAccountTest is Test {
         assertEq(vd, 1, "empty executeBatch must SIG_VALIDATION_FAILED");
     }
 
+    /// @dev Gas-budget assertion (cred-6 acceptance criteria, moved here from
+    ///      the removed `SessionKeyModule.t.sol`): per-inner-call validator
+    ///      overhead must be under 5K gas. The delta between a 2-inner and a
+    ///      6-inner batch, divided by 4, is the per-inner cost.
+    function test_session_key_batch_per_inner_gas_under_5k_budget() public {
+        _installGrant(1);
+
+        bytes32 h2 = keccak256("batch-gas-2");
+        bytes32 h6 = keccak256("batch-gas-6");
+        PackedUserOperation memory op2 =
+            _makePackedOp(_inScopeBatchCallData(2), _signWithKey(signerPriv, h2));
+        PackedUserOperation memory op6 =
+            _makePackedOp(_inScopeBatchCallData(6), _signWithKey(signerPriv, h6));
+
+        vm.prank(ENTRY_POINT);
+        uint256 g0 = gasleft();
+        uint256 vd2 = account.validateUserOp(op2, h2, 0);
+        uint256 gas2 = g0 - gasleft();
+        assertEq(vd2, 0, "2-inner in-scope batch must succeed");
+
+        vm.prank(ENTRY_POINT);
+        uint256 g1 = gasleft();
+        uint256 vd6 = account.validateUserOp(op6, h6, 0);
+        uint256 gas6 = g1 - gasleft();
+        assertEq(vd6, 0, "6-inner in-scope batch must succeed");
+
+        uint256 perInner = (gas6 - gas2) / 4;
+        emit log_named_uint("per-inner validator gas", perInner);
+        assertLt(perInner, 5000, "per-inner-call overhead must be under 5K gas");
+    }
+
+    // ============================================================
+    // cred-9 cross-language parity fixture -- moved here from the removed
+    // `SessionKeyModule.t.sol`. Loads `tests/parity/fixtures/session-key-grant-v1.json`
+    // and asserts the account's EIP-712 grant digest + ecrecover'd master
+    // EOA match the values the TS and Python grant builders commit to.
+    // Uses the production `grantDigest` (not a test-side mirror), so this
+    // locks the wire format the account actually validates.
+    // ============================================================
+
+    string internal constant PARITY_FIXTURE = "../../tests/parity/fixtures/session-key-grant-v1.json";
+
+    function test_parity_fixture_matches_grant_digest_and_recovers_master() public view {
+        string memory json = vm.readFile(PARITY_FIXTURE);
+
+        TotalReclawAccount.PermissionGrant memory g;
+        g.version = uint8(vm.parseJsonUint(json, ".grant.version"));
+        g.account = vm.parseJsonAddress(json, ".grant.account");
+        g.signer = vm.parseJsonAddress(json, ".grant.signer");
+        g.target = vm.parseJsonAddress(json, ".grant.scope.target");
+        // valueMax / nonce / issuedAt are JSON strings (uint256-safe across languages).
+        g.valueMax = vm.parseUint(vm.parseJsonString(json, ".grant.scope.valueMax"));
+        g.nonce = vm.parseUint(vm.parseJsonString(json, ".grant.nonce"));
+        g.issuedAt = vm.parseUint(vm.parseJsonString(json, ".grant.issuedAt"));
+        g.chainId = vm.parseJsonUint(json, ".domain.chainId");
+        g.verifyingContract = vm.parseJsonAddress(json, ".domain.verifyingContract");
+        g.masterSignature = vm.parseJsonBytes(json, ".ecdsa_signature");
+
+        // bytes4[] -- no native parseJsonBytes4Array; read each as bytes + cast.
+        g.selectors = new bytes4[](2);
+        g.selectors[0] = bytes4(vm.parseJsonBytes(json, ".grant.scope.selectors[0]"));
+        g.selectors[1] = bytes4(vm.parseJsonBytes(json, ".grant.scope.selectors[1]"));
+        assertEq(g.selectors[0], EXECUTE_SEL, "fixture selectors[0] is execute");
+        assertEq(g.selectors[1], EXECUTE_BATCH_SEL, "fixture selectors[1] is executeBatch");
+
+        bytes32 expectedDigest = vm.parseJsonBytes32(json, ".eip712_hash");
+        address expectedMaster = vm.parseJsonAddress(json, ".accounts.master_address");
+
+        // 1. The account's grantDigest matches the fixture.
+        assertEq(account.grantDigest(g), expectedDigest, "grantDigest matches fixture.eip712_hash");
+
+        // 2. ecrecover on fixture sig + digest recovers the master EOA -- the
+        //    primitive the lazy-install path uses to authorise a grant.
+        (bytes32 r, bytes32 s, uint8 v) = _splitSig65(g.masterSignature);
+        assertEq(ecrecover(expectedDigest, v, r, s), expectedMaster, "ecrecover yields fixture master EOA");
+    }
+
+    function test_parity_fixture_install_blob_decodes_to_same_grant() public view {
+        string memory json = vm.readFile(PARITY_FIXTURE);
+
+        // The fixture's install blob must decode through the account's own
+        // `_decodeInstallSig`: `(PermissionGrant, bytes)`.
+        (TotalReclawAccount.PermissionGrant memory g, bytes memory sessionSig) =
+            account._decodeInstallSig(vm.parseJsonBytes(json, ".abi_encoded_install_sig"));
+
+        assertEq(uint256(g.version), vm.parseJsonUint(json, ".grant.version"));
+        assertEq(g.account, vm.parseJsonAddress(json, ".grant.account"));
+        assertEq(g.signer, vm.parseJsonAddress(json, ".grant.signer"));
+        assertEq(g.target, vm.parseJsonAddress(json, ".grant.scope.target"));
+        assertEq(g.chainId, vm.parseJsonUint(json, ".domain.chainId"));
+        assertEq(g.verifyingContract, vm.parseJsonAddress(json, ".domain.verifyingContract"));
+        assertEq(g.selectors.length, 2);
+        assertEq(g.selectors[0], EXECUTE_SEL);
+        assertEq(g.selectors[1], EXECUTE_BATCH_SEL);
+        assertEq(g.masterSignature.length, 65);
+
+        // The trailing session-side sig must recover to the fixture's session
+        // EOA over the raw (un-prefixed) userOpHash, as the steady-state path does.
+        bytes32 mockUserOpHash = vm.parseJsonBytes32(json, ".session.mock_user_op_hash");
+        (bytes32 r, bytes32 s, uint8 v) = _splitSig65(sessionSig);
+        assertEq(
+            ecrecover(mockUserOpHash, v, r, s),
+            vm.parseJsonAddress(json, ".accounts.session_address"),
+            "trailing session sig recovers to session EOA"
+        );
+    }
+
     // ============================================================
     // Helpers.
     // ============================================================
+
+    function _splitSig65(bytes memory sig) internal pure returns (bytes32 r, bytes32 s, uint8 v) {
+        require(sig.length == 65, "sig length");
+        // solhint-disable-next-line no-inline-assembly
+        assembly {
+            r := mload(add(sig, 0x20))
+            s := mload(add(sig, 0x40))
+            v := byte(0, mload(add(sig, 0x60)))
+        }
+    }
 
     function _twoSelectors() internal pure returns (bytes4[] memory s) {
         s = new bytes4[](2);

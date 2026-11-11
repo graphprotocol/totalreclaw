@@ -43,6 +43,9 @@ optimizer = true
 optimizer_runs = 200
 via_ir = false
 extra_output = ["storageLayout"]
+# cred-9 parity tests read the shared grant fixture at
+# `tests/parity/fixtures/session-key-grant-v1.json` (two levels up).
+fs_permissions = [{ access = "read", path = "../../tests/parity/fixtures/" }]
 
 [fmt]
 line_length = 100
