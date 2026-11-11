@@ -121,20 +121,17 @@ INVOKE WHEN USER SAYS:
 - "forget what I said about X" / "delete that fact"
 - "that's wrong/outdated — remove it"
 - "I don't want you remembering X"
-- "erase that password I pasted"
 WHEN NOT TO USE:
 - CORRECTING → totalreclaw_remember (dedup auto)
-- changing mind ("I prefer tea now") → remember new pref
-- no explicit request — never forget proactively
-DOES: fact_id → tombstone. query → recall ≤50, tombstone all.
-PARAMS: fact_id (pref), query (max 50), scope (hint).`;
+- never forget proactively
+DOES: memory_id → tombstone. query → recall ≤50, tombstone all (self-hosted only; managed service needs an id).
+PARAMS: memory_id = the fact_id from a recall result (fact_id also accepted), query, scope.`;
 
-export const EXPORT_TOOL_DESCRIPTION = `Export decrypted vault — one-click backup.
+export const EXPORT_TOOL_DESCRIPTION = `Export decrypted vault — one-click backup. Self-hosted only (refused on the managed service).
 INVOKE WHEN USER SAYS:
 - "show everything you know about me" / "what do you have on me?"
 - "export / back up / download my memories"
 - "take my memory elsewhere" / "portable copy"
-- "audit what's stored" / "what's in my vault?"
 WHEN NOT TO USE:
 - one thing → totalreclaw_recall
 - cleanup → totalreclaw_consolidate/forget
@@ -163,24 +160,24 @@ WHEN NOT TO USE:
 - user already Pro (check totalreclaw_status)
 - unrelated — don't volunteer upgrades`;
 
-export const IMPORT_FROM_TOOL_DESCRIPTION = `Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, JSON/CSV.
+export const IMPORT_FROM_TOOL_DESCRIPTION = `Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, JSON/CSV. Self-hosted only (managed service refuses it, even dry_run).
 INVOKE WHEN USER SAYS:
 - "migrate memory from [Mem0/ChatGPT/Claude]"
 - "import my ChatGPT memories" / "here's my Mem0 export"
-- "I pasted my Claude memory — store it"
+- "I pasted my Claude memory"
 WHEN NOT TO USE: TotalReclaw backup → totalreclaw_import. Single fact → totalreclaw_remember.
-DOES: adapter parses+stores (unless dry_run). Fingerprint dedup. Convo sources return chunks for host LLM.
-ALWAYS dry_run=true first → preview → confirm.`;
+DOES: adapter parses+stores (unless dry_run). Fingerprint dedup.
+ALWAYS dry_run=true first.`;
 
-export const IMPORT_TOOL_DESCRIPTION = `Restore from totalreclaw_export backup (JSON/Markdown).
+export const IMPORT_TOOL_DESCRIPTION = `Restore from totalreclaw_export backup (JSON/Markdown). Self-hosted only (managed service refuses it).
 INVOKE WHEN USER SAYS:
 - "restore memories from this backup" / "import this JSON"
 - "I exported from another TotalReclaw account"
-- "here's the Markdown export — put it back"
+- "put the export back"
 WHEN NOT TO USE:
 - Mem0/ChatGPT/Claude → totalreclaw_import_from
 - single fact → totalreclaw_remember
-DOES: parse JSON/Markdown (auto), store via totalreclaw_remember + fingerprint dedup.
+DOES: parse JSON/Markdown (auto), store + fingerprint dedup.
 PARAMS: content (req), format, merge_strategy, validate_only.`;
 
 export const SUPPORT_TOOL_DESCRIPTION = `Support contact, docs, troubleshooting.

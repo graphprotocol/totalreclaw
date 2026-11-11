@@ -24,6 +24,7 @@ import {
 import { getLastBillingResponse } from './tools/status.js';
 import type { ToolContext, ToolResponse } from './tools/types.js';
 import { isQuotaExceededError, rethrowIfQuota, shortErrorMessage } from './tools/write-errors.js';
+import { pickMemoryId } from './tools/helpers.js';
 import {
   findNearDuplicate,
   shouldSupersede,
@@ -1615,16 +1616,16 @@ async function handleForgetSubgraph(
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = args as Record<string, unknown>;
-  const factId = input?.fact_id as string;
+  const factId = pickMemoryId(input);
 
-  if (!factId || typeof factId !== 'string') {
+  if (!factId) {
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
           deleted_count: 0,
           fact_ids: [],
-          error: 'fact_id is required for forget (query-based forget is not supported with the managed service)',
+          error: 'memory_id (or its alias fact_id, from a recall result) is required for forget; query-based forget is not supported with the managed service',
         }),
       }],
     };
@@ -1940,9 +1941,8 @@ const commonHandlers: HandlerBundle = {
 
 // ── Managed-service (subgraph) tool bundle ───────────────────────────────────
 // Tools with no managed-service equivalent return an explicit "use self-hosted
-// mode" envelope; `totalreclaw_import_batch` is intentionally absent so it
-// falls through to the standard unknown-tool error, matching pre-refactor
-// behaviour.
+// mode" envelope (including `totalreclaw_import_batch`, so every listed tool
+// is callable and tells the host plainly why it refuses).
 
 function unsupportedInSubgraph(message: string): ToolResponse {
   return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }], isError: true };
@@ -1964,6 +1964,8 @@ function subgraphBundle(state: SubgraphState): HandlerBundle {
       unsupportedInSubgraph('Import is not yet supported with the managed service. Use self-hosted mode for import.'),
     totalreclaw_import_from: async () =>
       unsupportedInSubgraph('Import from external sources is not yet supported with the managed service. Use self-hosted mode for import.'),
+    totalreclaw_import_batch: async () =>
+      unsupportedInSubgraph('Batch import is not yet supported with the managed service. Use self-hosted mode for import.'),
     totalreclaw_consolidate: async () =>
       unsupportedInSubgraph('Consolidation is not supported with the managed service. On-chain facts require tombstone-based dedup which is handled automatically at store time.'),
   };

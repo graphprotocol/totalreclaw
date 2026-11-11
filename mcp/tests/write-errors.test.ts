@@ -167,3 +167,66 @@ describe('set_scope triggers (#712)', () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/file that under X[\s\S]*totalreclaw_set_scope/);
   });
 });
+
+describe('#702 contract gaps', () => {
+  const fs = require('node:fs') as typeof import('node:fs');
+  const path = require('node:path') as typeof import('node:path');
+  const { debriefToolDefinition } = require('../src/tools/debrief');
+  const { forgetToolDefinition } = require('../src/tools/forget');
+  const { exportToolDefinition } = require('../src/tools/export');
+  const { importToolDefinition } = require('../src/tools/import');
+  const { importFromToolDefinition } = require('../src/tools/import-from');
+  const { importBatchToolDefinition } = require('../src/tools/import-batch');
+  const { consolidateToolDefinition } = require('../src/tools/consolidate');
+  const { SERVER_VERSION } = require('../src/server-setup');
+  const { TOOL_MANIFEST } = require('../src/dispatch');
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+
+  test('serverInfo.version is the package version', () => {
+    expect(SERVER_VERSION).toBe(pkg.version);
+  });
+
+  test('debrief schema is flat: no top-level oneOf/anyOf/allOf, optional crystal + facts', () => {
+    const schema = debriefToolDefinition.inputSchema as Record<string, unknown>;
+    expect(schema.oneOf).toBeUndefined();
+    expect(schema.anyOf).toBeUndefined();
+    expect(schema.allOf).toBeUndefined();
+    expect(Object.keys(schema.properties as object).sort()).toEqual(['crystal', 'facts']);
+    expect(schema.required).toBeUndefined();
+  });
+
+  test('every manifest tool schema is a top-level object without combinators', () => {
+    for (const t of TOOL_MANIFEST as Array<{ name: string; inputSchema: Record<string, unknown> }>) {
+      expect(t.inputSchema.type).toBe('object');
+      expect(t.inputSchema.oneOf).toBeUndefined();
+      expect(t.inputSchema.anyOf).toBeUndefined();
+    }
+  });
+
+  test.each([
+    ['export', exportToolDefinition],
+    ['import', importToolDefinition],
+    ['import_from', importFromToolDefinition],
+    ['import_batch', importBatchToolDefinition],
+    ['consolidate', consolidateToolDefinition],
+  ])('%s says it is self-hosted only', (_n: string, def: { description: string }) => {
+    expect(def.description).toMatch(/self-hosted only/i);
+    expect(def.description.length).toBeLessThanOrEqual(500);
+  });
+
+  test('forget description names memory_id, the recall fact_id and the managed-mode limit', () => {
+    const d: string = forgetToolDefinition.description;
+    expect(d).toMatch(/memory_id/);
+    expect(d).toMatch(/fact_id from a recall result/);
+    expect(d).toMatch(/managed service needs an id/);
+    expect(d.length).toBeLessThanOrEqual(500);
+  });
+
+  test('managed bundle registers import_batch and forget accepts memory_id (source contract)', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.ts'), 'utf8');
+    const sub = src.slice(src.indexOf('function subgraphBundle'), src.indexOf('function httpBundle'));
+    expect(sub).toContain('totalreclaw_import_batch');
+    const fg = src.slice(src.indexOf('async function handleForgetSubgraph'));
+    expect(fg.slice(0, 600)).toContain('pickMemoryId(input)');
+  });
+});

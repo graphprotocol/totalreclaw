@@ -164,50 +164,40 @@ export const debriefToolDefinition = {
     '- casual chat / Q&A — adds noise\n' +
     '- no prior totalreclaw_remember — no context\n' +
     '- unsure → skip; debriefs rare\n' +
-    '\nProvide a Crystal object. narrative is embedded; all other fields go in metadata.',
+    '\nPARAMS: crystal {narrative (req), ...} preferred, or legacy facts[]; one of the two is required.',
   inputSchema: {
     type: 'object',
-    oneOf: [
-      {
-        description: 'Crystal-shaped debrief (preferred, am-1)',
+    // Flat schema (no top-level oneOf/anyOf: several hosts reject it). Provide
+    // `crystal` (preferred) OR `facts`; the handler validates which is present.
+    properties: {
+      crystal: {
+        type: 'object',
+        description: 'Preferred. Structured Crystal session summary (narrative required).',
         properties: {
-          crystal: {
-            type: 'object',
-            description: 'Structured Crystal session summary',
-            properties: {
-              narrative: { type: 'string', description: '1-2 sentence session summary (will be embedded)' },
-              key_outcomes: { type: 'array', items: { type: 'string' }, description: 'Decisions made, bugs fixed, conclusions reached' },
-              files_affected: { type: 'array', items: { type: 'string' }, description: 'File paths worked on (coding sessions)' },
-              open_threads: { type: 'array', items: { type: 'string' }, description: 'Unfinished items needing follow-up' },
-              lessons: { type: 'array', items: { type: 'string' }, description: 'Patterns, gotchas, insights worth remembering' },
-              importance: { type: 'number', description: 'Importance 1-10 (default 8)' },
-              session_id: { type: 'string', description: 'Optional session identifier' },
-            },
-            required: ['narrative'],
-          },
+          narrative: { type: 'string', description: '1-2 sentence session summary (will be embedded)' },
+          key_outcomes: { type: 'array', items: { type: 'string' }, description: 'Decisions made, bugs fixed, conclusions reached' },
+          files_affected: { type: 'array', items: { type: 'string' }, description: 'File paths worked on (coding sessions)' },
+          open_threads: { type: 'array', items: { type: 'string' }, description: 'Unfinished items needing follow-up' },
+          lessons: { type: 'array', items: { type: 'string' }, description: 'Patterns, gotchas, insights worth remembering' },
+          importance: { type: 'number', description: 'Importance 1-10 (default 8)' },
+          session_id: { type: 'string', description: 'Optional session identifier' },
         },
-        required: ['crystal'],
+        required: ['narrative'],
       },
-      {
-        description: 'Legacy free-form debrief items (backward compat)',
-        properties: {
-          facts: {
-            type: 'array',
-            description: 'Array of debrief items to store',
-            items: {
-              type: 'object',
-              properties: {
-                text: { type: 'string', description: 'The debrief summary text (1-3 sentences)' },
-                type: { type: 'string', enum: ['summary', 'context'], description: 'summary=conclusion/outcome, context=broader project context' },
-                importance: { type: 'number', description: 'Importance 1-10 (typically 7-8 for debriefs)' },
-              },
-              required: ['text'],
-            },
+      facts: {
+        type: 'array',
+        description: 'Legacy (backward compat). Free-form debrief items; used only when `crystal` is absent.',
+        items: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: 'The debrief summary text (1-3 sentences)' },
+            type: { type: 'string', enum: ['summary', 'context'], description: 'summary=conclusion/outcome, context=broader project context' },
+            importance: { type: 'number', description: 'Importance 1-10 (typically 7-8 for debriefs)' },
           },
+          required: ['text'],
         },
-        required: ['facts'],
       },
-    ],
+    },
   },
   annotations: {
     readOnlyHint: false,
