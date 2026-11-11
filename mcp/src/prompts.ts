@@ -74,6 +74,8 @@ wiping the vault. Use these when the user says something like:
 - "that was actually a directive, not a preference" → totalreclaw_retype
 - "that was work context" / "file that under personal" → totalreclaw_set_scope
 
+Scopes (work, personal, health, family, creative, finance, misc, unspecified) are how memories are filed: whenever the user says "file that under X", "put that in my work memories", "categorize as X" or "that's a work thing", call totalreclaw_set_scope on the memory just recalled or stored.
+
 All three operate by supersession: they create a new claim with the override and link it
 back to the original via superseded_by. The original stays in the vault as a tombstone so
 history is inspectable. All three are idempotent (no-op if the target already matches).

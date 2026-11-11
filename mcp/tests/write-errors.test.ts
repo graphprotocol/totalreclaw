@@ -150,3 +150,20 @@ describe('quota and tier copy (Stripe is the source of truth: Free 250, Pro 3,00
     expect(out).toBe('');
   });
 });
+
+describe('set_scope triggers (#712)', () => {
+  const { setScopeToolDefinition } = require('../src/tools/set-scope');
+  const { SERVER_INSTRUCTIONS } = require('../src/prompts');
+  test.each(['file that under', 'put that in my work/personal memories', 'categorize as', "that\\'s a work thing".replace('\\', '')])(
+    'description carries trigger %s',
+    (phrase: string) => {
+      expect(setScopeToolDefinition.description).toContain(phrase);
+    },
+  );
+  test('description stays within 500 chars', () => {
+    expect(setScopeToolDefinition.description.length).toBeLessThanOrEqual(500);
+  });
+  test('server instructions tell the agent to use set_scope for filing', () => {
+    expect(SERVER_INSTRUCTIONS).toMatch(/file that under X[\s\S]*totalreclaw_set_scope/);
+  });
+});
