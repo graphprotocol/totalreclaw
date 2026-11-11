@@ -126,6 +126,23 @@ const FORBIDDEN_PATTERNS: PhrasePattern[] = [
     allowedContext:
       /credentials\.mnemonic|SavedCredentials|cli\/setup|writeFileSync|readFileSync|state\.mnemonic|subgraphState\.mnemonic|overrides\.mnemonic|\.mnemonic\s*=\s*undefined/i,
   },
+  // #670: partial-phrase leaks. `totalreclaw_account` returned
+  // `recovery_phrase_hint: "<first> ... <last>"`, built from
+  // `subgraphState.mnemonic.split(/\s+/)`. Two words in model context shrink
+  // the brute-force space. No allowedContext: there is no legitimate use of
+  // these shapes in shipped MCP code.
+  {
+    name: 'phrase-hint key or identifier',
+    regex: /\b(recovery_phrase|mnemonic|phrase)_hint\b|\b(mnemonic|recoveryPhrase)Hint\b/,
+  },
+  {
+    name: 'split-then-index of a phrase',
+    regex: /\b(mnemonic|phrase)\??\.split\([^)]*\)\s*(\[|\.slice\(|\.at\()/,
+  },
+  {
+    name: 'split of in-memory state.mnemonic',
+    regex: /[Ss]tate\??\.mnemonic\??\.split\(/,
+  },
 ];
 
 // ---------------------------------------------------------------------------

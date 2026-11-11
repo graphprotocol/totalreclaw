@@ -20,6 +20,15 @@
   ],
   "author": "TotalReclaw Team",
   "license": "MIT",
+  "homepage": "https://totalreclaw.xyz",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/graphprotocol/totalreclaw.git",
+    "directory": "skill-nanoclaw"
+  },
+  "bugs": {
+    "url": "https://github.com/graphprotocol/totalreclaw/issues"
+  },
   "dependencies": {
     "@totalreclaw/client": "^1.2.0",
     "@totalreclaw/core": "^2.5.3"
@@ -44,6 +53,7 @@
   "files": [
     "dist",
     "mcp",
+    "!mcp/README.md",
     "manifest.yaml",
     "SKILL.md"
   ],

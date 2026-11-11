@@ -30,15 +30,14 @@ const SECONDS_PER_BATCH = 45;
 export const importBatchToolDefinition = {
   name: 'totalreclaw_import_batch',
   description:
-    'Internal polling for LARGE imports (Gemini/ChatGPT/Claude 50+ convos). Slice per call.\n' +
+    'Internal polling for LARGE imports (Gemini/ChatGPT/Claude 50+ convos). Self-hosted only (refused on the managed service). Slice per call.\n' +
     '\nINVOKE WHEN:\n' +
     '- totalreclaw_import_from returned total_chunks > 50\n' +
     '- large Takeout/conversations.json times out\n' +
-    '\nPOLLING: offset=0, batch_size def 25, offset+=batch_size until is_complete. Extract + totalreclaw_remember. Dedup safe.\n' +
+    '\nPOLLING: offset=0, batch_size 25, offset+=batch_size until is_complete. Extract + remember.\n' +
     '\nWHEN NOT TO USE:\n' +
     '- <50 convos → totalreclaw_import_from\n' +
     '- pre-structured (Mem0) → totalreclaw_import_from\n' +
-    '- single block → totalreclaw_import_from\n' +
     '- don\'t expose tool name',
   inputSchema: {
     type: 'object',

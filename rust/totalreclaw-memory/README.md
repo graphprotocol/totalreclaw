@@ -62,9 +62,9 @@ All encryption, fingerprinting, LSH, reranking, and v1 taxonomy validation is ha
 
 | Variable | Description | Default |
 |---|---|---|
-| `TOTALRECLAW_RECOVERY_PHRASE` | 12-word recovery phrase | Required |
-| `TOTALRECLAW_SERVER_URL` | Relay URL | `https://api.totalreclaw.xyz` |
-| `TOTALRECLAW_SELF_HOSTED` | Use self-hosted server | `false` |
+| `TOTALRECLAW_SERVER_URL` | Relay URL. When set, it overrides `TotalReclawConfig::relay_url`, which ZeroClaw fills from `relay_url` under `[memory.totalreclaw]` in `~/.zeroclaw/config.toml`. | `https://api.totalreclaw.xyz` |
+
+The crate does not read the recovery phrase from the environment: the host passes it in `TotalReclawConfig::mnemonic`.
 
 See the [env vars reference](../../docs/guides/env-vars-reference.md) for the canonical list (5 user-facing vars after the v1 cleanup).
 

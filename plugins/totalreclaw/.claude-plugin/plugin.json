@@ -1,0 +1,14 @@
+{
+  "name": "totalreclaw",
+  "displayName": "TotalReclaw",
+  "version": "3.5.2",
+  "description": "End-to-end encrypted memory for Claude. A skill that teaches Claude when to recall and store, plus the TotalReclaw memory server.",
+  "author": {
+    "name": "TotalReclaw Team",
+    "url": "https://totalreclaw.xyz"
+  },
+  "homepage": "https://totalreclaw.xyz",
+  "repository": "https://github.com/graphprotocol/totalreclaw",
+  "license": "MIT",
+  "keywords": ["memory", "e2ee", "encryption", "privacy", "agent-memory", "mcp"]
+}

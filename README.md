@@ -123,7 +123,7 @@ View and curate your memories at [app.totalreclaw.xyz](https://app.totalreclaw.x
 
 ## Pricing
 
-**Free**: 250 memories/month, permanently stored on Gnosis mainnet, end-to-end encrypted — no credit card required. **Pro**: 1,500 memories/month, plus LLM-guided dedup and custom extraction intervals. [See pricing →](https://totalreclaw.xyz/pricing)
+**Free**: 250 memories/month, permanently stored on Gnosis mainnet, end-to-end encrypted — no credit card required. **Pro**: 3,000 memories/month, plus LLM-guided dedup and custom extraction intervals. [See pricing →](https://totalreclaw.xyz/pricing)
 
 ## Self-Hosting
 

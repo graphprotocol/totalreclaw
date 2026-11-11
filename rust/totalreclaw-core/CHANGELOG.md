@@ -5,6 +5,12 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **[PRD-04 DEP-3] `dedup_context` — topical dedup context for extraction prompts.** New module `dedup_context`. `build_dedup_context(topical, pinned, recent, cap) -> String` renders the "Existing memories" block a client appends to the extraction user prompt. The header is byte-identical to the block Hermes and the OpenClaw plugin built inline. There is one `[ID: <fact id>] <text>` line per memory: pinned first, then topical, then recent. Duplicate fact ids keep the first occurrence. Ids and texts are collapsed to one line: every line-break character (the `str.splitlines` set, including U+2028, U+2029 and NEL) becomes one space, so a stored fact cannot inject a line. At most `cap` lines are kept (`DEFAULT_DEDUP_CONTEXT_CAP` = 30), and the result is `""` when nothing survives. The input element is `DedupContextItem { id, text }`, where `id` is the on-chain fact id the LLM echoes back as `existingFactId`. The v0 `Claim` was not used because it carries no id. The bindings go through the JSON wrapper `build_dedup_context_json`: WASM `buildDedupContext(topicalJson, pinnedJson, recentJson, cap?)` and PyO3 `build_dedup_context(topical_json, pinned_json, recent_json, cap=30)`. `cap` defaults to 30 in both. WASM throws on a negative, fractional, `NaN` or infinite `cap`; PyO3 raises `OverflowError` on a negative one. Malformed JSON or a non-array section raises (`JsError` / `ValueError`), `null` is an empty section, and extra fields are ignored. The cross-language fixture `tests/parity/fixtures/dedup-context-v1.json` (16 cases, written by `generate-dedup-context-v1.py` from an independent Python reference) is checked by the Rust tests, `tests/parity/dedup-context-parity.test.ts` (WASM) and `python/tests/test_dedup_context_parity.py` (PyO3).
+
 ## [2.6.1] - 2026-11-02
 
 Packaging-only release for the PyPI wheel. No source, API or output changes:

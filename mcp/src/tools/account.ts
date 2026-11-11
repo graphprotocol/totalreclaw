@@ -1,8 +1,15 @@
 /**
  * TotalReclaw MCP - Account Details Tool
  *
- * Shows account information: billing status, fact count, features,
- * and a recovery phrase hint (first + last word only).
+ * Shows account information: billing status, fact count, features, and
+ * which credential kind this host holds.
+ *
+ * PHRASE SAFETY (#670): this tool's output lands in the LLM context. It MUST
+ * NOT carry anything derived from the recovery phrase: no word, prefix,
+ * length, checksum, hash or index. It used to return a
+ * `recovery_phrase_hint` of the first and last words; that field is gone.
+ * `accountContextFromState` takes the managed-service state but never reads
+ * the phrase; the credential status is a constant picked by kind.
  */
 
 import type { ToolContext } from './types.js';
@@ -23,6 +30,56 @@ export const accountToolDefinition = {
   },
 };
 
+/**
+ * Minimal view of index.ts's `SubgraphState` that the account tool needs.
+ * Deliberately has no `mnemonic` field: nothing here may read the phrase.
+ */
+export interface AccountStateView {
+  credentialKind: 'mnemonic' | 'bundle';
+  smartAccountAddress: string;
+  authKey: Uint8Array;
+}
+
+/**
+ * Constant, non-derived credential description for a credential kind. The
+ * same string is returned for every phrase.
+ */
+export function credentialStatus(kind: AccountStateView['credentialKind']): string {
+  return kind === 'bundle'
+    ? 'derived-bundle-v1 credential (no recovery phrase on this host)'
+    : 'recovery phrase (stored locally, never shown)';
+}
+
+/** Response when no managed-service state exists (self-hosted / unconfigured). */
+export function accountUnavailableResponse(): { content: Array<{ type: string; text: string }>; isError: true } {
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        error: 'Account details require managed service mode (subgraph). Self-hosted mode does not track billing.',
+      }),
+    }],
+    isError: true,
+  };
+}
+
+/**
+ * Build the account tool's ToolContext from managed-service state. Reads
+ * only the credential KIND, never the phrase itself (#670).
+ */
+export function accountContextFromState(
+  state: AccountStateView,
+  opts: { serverUrl: string; getFactCount: () => Promise<number> },
+): ToolContext {
+  return {
+    serverUrl: opts.serverUrl,
+    authKeyHex: Buffer.from(state.authKey).toString('hex'),
+    walletAddress: state.smartAccountAddress,
+    credentialStatus: credentialStatus(state.credentialKind),
+    getFactCount: opts.getFactCount,
+  };
+}
+
 interface BillingStatusResponse {
   tier: string;
   free_writes_used: number;
@@ -35,7 +92,7 @@ interface BillingStatusResponse {
  * Handle a totalreclaw_account tool call.
  *
  * Fetches billing status and fact count, then returns a comprehensive
- * account overview including a recovery phrase hint. The `account` tool takes
+ * account overview plus a constant credential status. The `account` tool takes
  * no user args — everything it needs is dependency-injected via {@link
  * ToolContext}.
  */
@@ -46,13 +103,9 @@ export async function handleAccount(
   const serverUrl = ctx.serverUrl ?? '';
   const authKeyHex = ctx.authKeyHex ?? '';
   const walletAddress = ctx.walletAddress ?? '';
-  // Option E Phase 2 / #581 (P2-13): on a bundle-configured server
-  // (`derived-bundle-v1`, no mnemonic anywhere in the process), `index.ts`'s
-  // `accountHandler` passes a descriptive placeholder here instead of a
-  // `first … last` phrase hint — there is no phrase to hint at. This tool
-  // just forwards whatever it's given; it has no credential-kind awareness
-  // of its own.
-  const mnemonicHint = ctx.mnemonicHint ?? '';
+  // Constant per credential kind (see credentialStatus()). Never derived
+  // from the phrase (#670).
+  const credentialStatus = ctx.credentialStatus ?? '';
   const getFactCount = ctx.getFactCount ?? (async () => null as unknown as number);
 
   // Fetch billing status and fact count in parallel
@@ -90,7 +143,7 @@ export async function handleAccount(
         remaining_writes: remaining,
         total_facts_stored: factCount,
         features: billing.features ?? {},
-        recovery_phrase_hint: mnemonicHint,
+        credential: credentialStatus,
       }),
     }],
   };
