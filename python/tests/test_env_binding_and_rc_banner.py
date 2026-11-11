@@ -23,6 +23,11 @@ For the Python client this is implemented as:
    emits a one-shot session-start banner so the user is never surprised
    to find their data in staging.
 
+Since the F flip (2.3.12-rc.1) both release types default to production,
+the publish-time rewrite is gone, and the banner fires whenever the
+effective relay URL points at staging (the OpenClaw plugin's condition).
+Sections 1 and 2 pin the production default; section 3 pins the banner.
+
 These tests pin all three behaviors. Skipping any of them risks repeating
 the QA regression that prompted PR #165 — every artifact silently
 defaulting to staging across both stable + RC for weeks.
@@ -226,19 +231,35 @@ def test_default_relay_url_env_override_wins(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Section 3 — RC/staging session-start banner
+# Section 3 — staging-mode session-start banner
 # ---------------------------------------------------------------------------
+#
+# Condition (same as the OpenClaw plugin's banner in skill/plugin/index.ts):
+# the banner fires whenever the EFFECTIVE relay URL points at staging. Before
+# #706 it fired only when the built-in default was staging AND the env var was
+# unset, which the F flip made impossible.
+
+_STAGING = "https://api-staging.totalreclaw.xyz"
+_PRODUCTION_HOST = "api.totalreclaw.xyz"
 
 
 @pytest.fixture
-def fresh_state():
+def fresh_state(monkeypatch):
     """Build a vanilla ``AgentState`` with the eager-configure path
     short-circuited so banner tests don't depend on credentials/relay
     network calls. The banner check fires BEFORE the configured-only
     return in ``on_session_start`` — that's the whole point of running
     it for unconfigured fresh installs.
+
+    ``_maybe_reconfigure_from_disk`` is stubbed so a developer machine
+    with a real ``~/.totalreclaw/credentials.json`` can't turn this into
+    a configured session that registers with a relay. These tests stay
+    offline.
     """
     from totalreclaw.agent.state import AgentState
+    from totalreclaw.hermes import hooks
+
+    monkeypatch.setattr(hooks, "_maybe_reconfigure_from_disk", lambda state: False)
 
     s = AgentState.__new__(AgentState)  # bypass __init__
     s._client = None
@@ -257,87 +278,102 @@ def fresh_state():
     return s
 
 
-def _patch_default_url(monkeypatch, value: str) -> None:
-    """Force ``_HARDCODED_DEFAULT_URL`` so tests can simulate RC vs
-    stable wheels without actually rebuilding. The hooks module captures
-    the constant at import time, so we patch BOTH locations."""
+def _assert_banner(warning) -> None:
+    assert warning is not None, (
+        "Effective relay URL is staging but on_session_start did not queue "
+        "the staging banner. Users would store data on staging unwarned."
+    )
+    assert "staging mode" in warning
+    assert "api-staging.totalreclaw.xyz" in warning
+    assert "no SLA" in warning
+    assert "TOTALRECLAW_SERVER_URL" in warning
+    # The Hermes QA harness flags any mention of the production host in
+    # agent logs as a production contact, and every QA run pins staging.
+    assert _PRODUCTION_HOST not in warning
+
+
+def test_banner_emitted_when_env_points_at_staging(monkeypatch, fresh_state):
+    """The common case: QA (or a maintainer) pinned staging via the env var.
+
+    This is exactly the case the pre-#706 condition suppressed, so the
+    banner never fired after the F flip.
+    """
+    monkeypatch.setenv("TOTALRECLAW_SERVER_URL", _STAGING)
+
+    from totalreclaw.hermes import hooks
+
+    hooks.on_session_start(fresh_state, session_id="s1")
+
+    _assert_banner(fresh_state.get_quota_warning())
+    assert getattr(fresh_state, "_totalreclaw_staging_banner_shown", False) is True
+
+
+def test_banner_emitted_when_built_in_default_is_staging(monkeypatch, fresh_state):
+    """Defensive case: a wheel wrongly bound to staging, no env var set."""
     from totalreclaw import relay
     from totalreclaw.hermes import hooks
 
-    monkeypatch.setattr(relay, "_HARDCODED_DEFAULT_URL", value)
-    monkeypatch.setattr(hooks, "_HARDCODED_DEFAULT_URL", value)
-
-
-def test_banner_emitted_when_rc_default_is_staging_and_env_unset(
-    monkeypatch, fresh_state
-):
-    """RC wheel + no env override -> banner queued on session start.
-
-    The banner uses the existing ``set_quota_warning`` channel so the
-    next ``pre_llm_call`` injects it as ``context``. We assert (a) the
-    quota warning is now set, (b) the message contains the canonical
-    warning string, and (c) the latch attribute was set to gate
-    subsequent sessions.
-    """
     monkeypatch.delenv("TOTALRECLAW_SERVER_URL", raising=False)
-    _patch_default_url(monkeypatch, "https://api-staging.totalreclaw.xyz")
+    monkeypatch.setattr(relay, "_HARDCODED_DEFAULT_URL", _STAGING)
+
+    hooks.on_session_start(fresh_state, session_id="s1")
+
+    _assert_banner(fresh_state.get_quota_warning())
+
+
+def test_banner_follows_state_server_url(monkeypatch, fresh_state):
+    """The banner checks the URL the client actually uses: an explicit
+    ``server_url`` on the state wins over the env var, as in
+    ``AgentState.configure`` / ``configure_from_bundle``."""
+    monkeypatch.setenv("TOTALRECLAW_SERVER_URL", "https://relay.example.invalid")
+    fresh_state._server_url = _STAGING
 
     from totalreclaw.hermes import hooks
 
     hooks.on_session_start(fresh_state, session_id="s1")
 
-    warning = fresh_state.get_quota_warning()
-    assert warning is not None, (
-        "RC wheel default points at staging and no env override is set, "
-        "but on_session_start did not queue the RC/staging banner. Users "
-        "would silently store data in staging without warning."
-    )
-    assert "RC/staging" in warning
-    assert "api-staging.totalreclaw.xyz" in warning
-    assert "no SLA" in warning
-    assert "pip install totalreclaw" in warning
-    assert getattr(fresh_state, "_totalreclaw_rc_banner_shown", False) is True
+    _assert_banner(fresh_state.get_quota_warning())
 
 
-def test_banner_not_emitted_when_default_is_production(
-    monkeypatch, fresh_state
-):
-    """Stable wheel (production default) -> banner stays silent.
-
-    Real users on stable builds must NEVER see this warning — it would
-    look like a setup bug from their side. Asserting the negative path
-    keeps the banner from leaking into stable installs if the bake-in
-    goes wrong.
-    """
+def test_banner_not_emitted_on_production_default(monkeypatch, fresh_state):
+    """Production default (every stable and RC wheel since the F flip) ->
+    banner stays silent. Real users must never see it."""
     monkeypatch.delenv("TOTALRECLAW_SERVER_URL", raising=False)
-    _patch_default_url(monkeypatch, "https://api.totalreclaw.xyz")
 
     from totalreclaw.hermes import hooks
 
     hooks.on_session_start(fresh_state, session_id="s1")
 
     assert fresh_state.get_quota_warning() is None
-    assert getattr(fresh_state, "_totalreclaw_rc_banner_shown", False) is False
+    assert getattr(fresh_state, "_totalreclaw_staging_banner_shown", False) is False
 
 
-def test_banner_not_emitted_when_env_override_set(monkeypatch, fresh_state):
-    """RC wheel + env override -> banner stays silent.
-
-    A maintainer who explicitly pinned ``TOTALRECLAW_SERVER_URL`` to
-    staging (or anywhere else) has already opted in knowingly. Spamming
-    the banner on top of an explicit override is noise, not signal.
-    """
-    monkeypatch.setenv(
-        "TOTALRECLAW_SERVER_URL", "https://api-staging.totalreclaw.xyz"
-    )
-    _patch_default_url(monkeypatch, "https://api-staging.totalreclaw.xyz")
+def test_banner_not_emitted_for_custom_non_staging_url(monkeypatch, fresh_state):
+    """A self-hosted or other non-staging relay is not staging: no banner."""
+    monkeypatch.setenv("TOTALRECLAW_SERVER_URL", "https://relay.example.invalid")
 
     from totalreclaw.hermes import hooks
 
     hooks.on_session_start(fresh_state, session_id="s1")
 
     assert fresh_state.get_quota_warning() is None
-    assert getattr(fresh_state, "_totalreclaw_rc_banner_shown", False) is False
+    assert getattr(fresh_state, "_totalreclaw_staging_banner_shown", False) is False
+
+
+def test_banner_log_never_names_production_host(monkeypatch, fresh_state, caplog):
+    """The operator log line names the staging URL only (see the note above
+    ``hooks._STAGING_BANNER``)."""
+    monkeypatch.setenv("TOTALRECLAW_SERVER_URL", _STAGING)
+
+    from totalreclaw.hermes import hooks
+
+    with caplog.at_level(logging.INFO, logger=hooks.logger.name):
+        hooks.on_session_start(fresh_state, session_id="s1")
+
+    banner_logs = [r.getMessage() for r in caplog.records if "staging banner" in r.getMessage()]
+    assert banner_logs, "expected one 'staging banner queued' log line"
+    assert all(_PRODUCTION_HOST not in m for m in banner_logs)
+    assert any("api-staging.totalreclaw.xyz" in m for m in banner_logs)
 
 
 def test_banner_one_shot_per_state_instance(monkeypatch, fresh_state):
@@ -350,8 +386,7 @@ def test_banner_one_shot_per_state_instance(monkeypatch, fresh_state):
     warnings to the user. Latch lives on the state instance for the
     life of the process.
     """
-    monkeypatch.delenv("TOTALRECLAW_SERVER_URL", raising=False)
-    _patch_default_url(monkeypatch, "https://api-staging.totalreclaw.xyz")
+    monkeypatch.setenv("TOTALRECLAW_SERVER_URL", _STAGING)
 
     from totalreclaw.hermes import hooks
 
@@ -367,6 +402,6 @@ def test_banner_one_shot_per_state_instance(monkeypatch, fresh_state):
     second_warning = fresh_state.get_quota_warning()
     assert second_warning is None, (
         "Banner re-emitted on the second on_session_start call. The "
-        "_totalreclaw_rc_banner_shown latch must keep this one-shot "
+        "_totalreclaw_staging_banner_shown latch must keep this one-shot "
         "across same-process sessions."
     )

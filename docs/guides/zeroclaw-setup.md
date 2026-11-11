@@ -33,7 +33,10 @@ backend = "totalreclaw"
 [memory.totalreclaw]
 recovery_phrase_path = "~/.totalreclaw/credentials.json"
 embedding_config_path = "~/.totalreclaw/embedding-config.json"
+# relay_url = "https://api.totalreclaw.xyz"   # optional; this is the default
 ```
+
+`relay_url` is optional and defaults to the production relay. The `TOTALRECLAW_SERVER_URL` environment variable, when set, overrides it. QA and test runs pin the staging relay that way: `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz`.
 
 ## 3. First Run — Setup Wizard
 

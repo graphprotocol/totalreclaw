@@ -23,9 +23,10 @@ real-user QA on staging.
 > exactly like the plugin before it; no publish workflow ever created the RC
 > git tag its tag-backfill step depended on; PyPI/crates.io "promote" were
 > always no-op placeholders). The file now fails fast with a pointer instead
-> of silently misleading. **The single procedure for every package, RC or
-> stable, is dispatching the relevant `publish-*.yml` with `-f
-> release-type=stable`** — see "Standard flow" below.
+> of silently misleading. **The single procedure for every package is
+> dispatching the relevant `publish-*.yml`: `-f release-type=rc` for an RC,
+> then `-f release-type=stable` for the stable** — see "Standard flow"
+> below.
 
 This guide is for maintainers. Users install stable artifacts via the
 integration-specific setup guides (`openclaw-setup.md`, `hermes-setup.md`,
@@ -156,10 +157,17 @@ differ. Ship with the table below in front of you.
 
 ## Standard flow (Wave 1 / Phase 1)
 
-1. **Land the PR.** Merge to `main`. The version bump in `package.json` /
-   `pyproject.toml` / `Cargo.toml` SHOULD already be the intended stable
-   version — don't pre-suffix with `-rc.N`. The workflow adds the suffix at
-   run time.
+1. **Land the PR, with the version already set.** Merge to `main`. The
+   checked-in version in `package.json` / `pyproject.toml` / `Cargo.toml`
+   must already be the clean stable string you intend to ship (e.g.
+   `2.6.1`), and that version must not be published yet. Bump it in this
+   PR, before the first RC, never between the RC and the stable.
+
+   Don't commit an `-rc.N` / `rcN` suffix. In `rc` mode each workflow
+   strips an existing RC suffix and appends `-rc.<N>` (npm, crates.io) or
+   `rc<N>` (PyPI) inside the run, and never commits it. In `stable` mode it
+   publishes the checked-in string unchanged, so a committed suffix would
+   ship as the stable (on npm, under the `latest` dist-tag).
 
 2. **Dispatch the relevant publish workflow** via the GitHub Actions UI or
    `gh workflow run`:
@@ -189,6 +197,10 @@ differ. Ship with the table below in front of you.
 
    ```
 
+   Pass the next free `rc-number` (it defaults to `1`). npm and PyPI fail
+   the run if that RC version already exists; crates.io treats it as
+   already published, so the run goes green and publishes nothing.
+
 3. **Wait for green builds.** The workflows do not touch the stable
    `latest` channel in `rc` mode, so even if a build is flaky, the stable
    surface is untouched.
@@ -200,15 +212,16 @@ differ. Ship with the table below in front of you.
 5. **On GO verdict: dispatch the SAME `publish-*.yml` workflow again, with
    `release-type=stable`.** There is no separate "promote" workflow
    (`promote-rc.yml` was retired 2026-08-16, issue #625 — see the note at
-   the top of this guide). This is a fresh publish of the same source tree
-   at the clean stable version string, not a repack of the RC artifact —
-   true for npm, PyPI, AND crates.io alike, since none of the three
-   registries has a retag mechanism.
+   the top of this guide). This is a fresh build of `main` at the
+   checked-in version string, not a repack of the RC artifact — true for
+   npm, PyPI, AND crates.io alike, since none of the three registries has a
+   retag mechanism.
 
-   First, bump the checked-in version (`package.json` / `pyproject.toml` /
-   `Cargo.toml`) to the clean stable string via a normal PR to `main` (drop
-   any `-rc.N` suffix — the RC suffix only ever existed in-workflow, never
-   committed). Then dispatch:
+   No version-bump PR comes first: the checked-in version is already the
+   stable string (step 1). Because the stable is a fresh build, it is the
+   build QA tested only if the package's directory on `main` has no commits
+   since the RC was published. Check that; if there are any, publish a new
+   RC and QA it instead. Then dispatch:
 
    ```bash
    # npm (core, client, mcp-server, nanoclaw, plugin, all)
@@ -230,11 +243,19 @@ differ. Ship with the table below in front of you.
      -f release-type=stable
    ```
 
-   Each workflow's own "Guard — refuse to republish an existing version"
-   step (npm) / "already uploaded" tolerance (crates) makes this idempotent
-   to re-run — the same property `promote-rc.yml` used to advertise, now
-   provided directly by the publish workflows instead of a second layer on
-   top of them.
+   Dispatching a stable at a version that is already published is **not**
+   a harmless no-op everywhere:
+
+   - **npm**: each job's "Guard — refuse to republish an existing version"
+     step fails the job (exit 1) before it publishes anything.
+   - **PyPI**: `publish-python-client.yml` fails at its same-version guard;
+     `publish-pypi.yml` fails at upload, because PyPI refuses a file that
+     already exists.
+   - **crates.io**: the publish step treats "already uploaded" as success,
+     so the run goes green and publishes nothing.
+
+   So after a partial failure, re-dispatch only what did not publish (for
+   npm, `-f package=<name>` rather than `all`).
 
    This has been the OpenClaw plugin's ONLY npm path since 2026-07-13 (npm
    allows exactly one Trusted Publisher per package, and the plugin's is
@@ -345,12 +366,13 @@ exact same `publish-*.yml` job graph as the RC dispatch did, just with
 `release-type=stable`. So a stable-publish failure is a normal
 `publish-*.yml` failure. Check:
 
-1. Did the version-bump PR (dropping the `-rc.N` suffix) actually merge to
-   `main` before you dispatched? The workflow builds from the checked-in
-   version, not from the RC's in-workflow-mutated one.
-2. Each package's own "Guard — refuse to republish an existing version"
-   step (npm) fails loud if that exact version is already on the registry
-   — bump the version rather than re-dispatch with the same one.
+1. Is the checked-in version on `main` the clean stable string, with no
+   `-rc.N` / `rcN` suffix? A stable build publishes it unchanged; it never
+   reuses the RC's in-workflow version.
+2. Is that version already on the registry? npm (the "Guard — refuse to
+   republish an existing version" step) and PyPI (the client's same-version
+   guard, or the upload itself for `totalreclaw-core`) fail on it. Bump the
+   version, which means a new RC, rather than re-dispatch the same one.
 3. npm specifically: confirm which auth path the package actually uses.
    `@totalreclaw/core`, `@totalreclaw/mcp-server`, and
    `@totalreclaw/totalreclaw` (the plugin) publish via OIDC Trusted
@@ -377,11 +399,10 @@ If a stable release ships and is later discovered to be broken:
   CVE), you can dispatch `release-type=stable` directly with a tested patch. Mark it as a
   hotfix in the announcement so the next feature wave doesn't skip the
   QA gate.
-- **Re-running the stable dispatch is idempotent.** Each `publish-*.yml`
-  job's own guard treats an already-published version as a tolerated
-  no-op (npm: explicit "already published" catch; crates: "already
-  uploaded" grep on `cargo publish`'s output) rather than a hard failure —
-  so re-dispatching `release-type=stable` after a partial failure is safe.
+- **Re-running a stable dispatch is not idempotent on npm or PyPI.** Their
+  guards fail the job when the version already exists (see "Standard
+  flow" step 5); only crates.io treats it as a green no-op. After a
+  partial failure, re-dispatch just the packages that did not publish.
 
 ## Policy reference
 

@@ -523,15 +523,19 @@ let firstRunAfterInit = true;
 let firstRunWelcomeShown = false;
 
 /**
- * 3.3.3-rc.1 — RC-mode staging-only banner (PR #165 implementation).
+ * Staging-mode banner (added in 3.3.3-rc.1 for PR #165; condition changed by
+ * the 3.3.12-rc.1 F flip).
  *
- * Fires ONCE per gateway process when:
- *   - the bundled-default `serverUrl` resolves to `api-staging.totalreclaw.xyz`
- *     (RC artifact, not stable), AND
- *   - the user has NOT overridden via `TOTALRECLAW_SERVER_URL=...` env.
+ * Fires ONCE per gateway process whenever the effective `serverUrl`
+ * (`CONFIG.serverUrl`: `TOTALRECLAW_SERVER_URL`, else the production default)
+ * points at `api-staging.totalreclaw.xyz`, for RC and stable builds alike.
+ * Since the F flip every build defaults to production, so in practice this
+ * means the user set `TOTALRECLAW_SERVER_URL` to staging (or an artifact was
+ * wrongly bound to staging). Setting the env var does NOT suppress the
+ * banner; any non-staging URL (production, self-hosted) does.
  *
- * Goal: a fresh QA tester can't accidentally use an RC build for real data
- * without seeing a clear "RC = staging, no SLA, may be wiped" warning.
+ * Goal: nobody uses the staging relay for real data without seeing a clear
+ * "staging, no SLA, may be wiped" warning.
  * One-shot at the first `before_agent_start` whose `prependContext` actually
  * lands on the LLM (3.3.4-rc.1 — see fix below). A fresh gateway restart
  * re-fires it once.
@@ -546,7 +550,7 @@ let firstRunWelcomeShown = false;
 let stagingBannerShown = false;
 
 /**
- * 3.3.4-rc.1 — operator-facing "this is an RC build" log fires once per
+ * 3.3.4-rc.1 — operator-facing "staging mode active" log fires once per
  * gateway process, independent of whether the user-facing banner has
  * been delivered yet. Without this split, the warn-log was tied to the
  * same flag as the user-facing banner and got dropped together when
@@ -3541,10 +3545,11 @@ const plugin = {
             return undefined;
           }
 
-          // 3.3.3-rc.1 — RC-staging banner (PR #165 implementation).
-          // Build a one-shot prefix when the bundled default points at staging
-          // AND the user hasn't overridden via env. This prefix is prepended
-          // to whichever context block the rest of the hook produces.
+          // Staging-mode banner (3.3.3-rc.1, PR #165; condition per the
+          // 3.3.12-rc.1 F flip). Build a one-shot prefix whenever the
+          // effective serverUrl points at staging, whether it came from the
+          // env var or a mis-bound default. This prefix is prepended to
+          // whichever context block the rest of the hook produces.
           //
           // 3.3.4-rc.1 — fix: previously `stagingBannerShown` was set to
           // `true` AS SOON AS the block was built. If the rest of the hook
@@ -3609,7 +3614,7 @@ const plugin = {
            * string AND atomically marks the banner as delivered, so
            * subsequent hook calls in the same gateway-process lifetime
            * skip re-emission. Returns '' (empty) when no banner is due
-           * (stable build, user override, or already delivered).
+           * (the URL is not staging, or the banner was already delivered).
            *
            * Use this at every prependContext callsite that takes the
            * banner; do NOT inline `stagingBannerBlock` on its own — the
