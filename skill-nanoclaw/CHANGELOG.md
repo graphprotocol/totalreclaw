@@ -1,5 +1,9 @@
 # Changelog — @totalreclaw/skill-nanoclaw
 
+## Unreleased
+
+- Pro tier copy is 3,000 memories/month, not 1,500 (Stripe is the source of truth; Free stays 250/month). Text only.
+
 ## 3.1.1-rc.1 — 2026-04-20
 
 ### First-run onboarding UX parity

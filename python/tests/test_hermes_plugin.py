@@ -417,6 +417,10 @@ class TestHooks:
         from totalreclaw.hermes.hooks import on_session_start
         state = _make_state()
         state._client = MagicMock()
+        # conftest pins TOTALRECLAW_SERVER_URL to staging, which queues the
+        # staging banner on the same channel; that banner has its own tests
+        # (test_env_binding_and_rc_banner.py). Mark it shown to isolate quota.
+        state._totalreclaw_staging_banner_shown = True
         billing = {"free_writes_used": 200, "free_writes_limit": 500, "features": {}}
         state.set_billing_cache(billing)
         on_session_start(state, session_id="test")

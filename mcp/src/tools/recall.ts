@@ -20,6 +20,8 @@ export interface RecallInput {
 export interface RecallOutput {
   memories: Array<{
     fact_id: string;
+    /** Same value as fact_id; the name the write tools document (memory_id). */
+    memory_id: string;
     fact_text: string;
     score: number;
     importance: number;
@@ -133,6 +135,7 @@ export async function handleRecall(
       const createdAtUnix = BigInt(Math.floor(r.fact.createdAt.getTime() / 1000));
       return {
         fact_id: r.fact.id,
+        memory_id: r.fact.id,
         fact_text: r.fact.text,
         type: category,
         source,

@@ -23,6 +23,7 @@
 //! - [`consolidation`] — Store-time near-duplicate detection + supersede logic
 //! - [`smart_import`] — Smart import profiling (prompt construction + response parsing)
 //! - [`memory_types`] — Memory Taxonomy v1 string-level constants + runtime guard
+//! - [`pii`] — PII / credential filter: allow | block | flag for candidate memories (PRD-04 DEP-4)
 //! - [`pin_intent`] — Natural-language pin/unpin intent classifier (kg-2 / F1 Pin UX 2.2.8)
 //! - [`prompts`] — Canonical extraction + compaction system prompts (2.2.0)
 //! - [`confirm`] — Read-after-write primitive for on-chain mutation tools (2.2.x)
@@ -50,6 +51,7 @@ pub mod hotcache;
 pub mod kg_ffi;
 pub mod lsh;
 pub mod memory_types;
+pub mod pii;
 pub mod pin_intent;
 pub mod prompts;
 pub mod protobuf;

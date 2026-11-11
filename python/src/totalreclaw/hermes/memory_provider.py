@@ -764,6 +764,20 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         exact_previous = bool(meta.get("previous_content"))
         previous = str(meta.get("previous_content") or meta.get("old_text") or "").strip()
 
+        # PRD-04 DEP-4: this mirror is an automatic write (Hermes' built-in
+        # memory tool / background review, not an explicit TotalReclaw
+        # remember), so it follows the auto-extraction rule — only ``allow``
+        # text is mirrored; block and flag are dropped (category-only log).
+        if action != "remove" and text:
+            from totalreclaw.pii import auto_storable
+
+            if not auto_storable(text):
+                logger.info(
+                    "TotalReclaw on_memory_write mirror skipped: sensitive content (action=%s)",
+                    action,
+                )
+                return
+
         if action == "add":
             if not text:
                 return

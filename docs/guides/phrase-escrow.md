@@ -25,11 +25,11 @@ When you create a vault, after writing down and confirming your phrase, you're a
 
 > **Back up your recovery phrase?**
 
-- **Back up my phrase** — stores an encrypted copy with TotalReclaw. On a new device, tap "Recover with passkey" and, if your passkey synced, you're back in with one biometric prompt — no typing.
+- **Back up my phrase** — stores an encrypted copy with TotalReclaw. On a new device, tap "Recover with passkey" and, if your passkey synced, you're back in with one biometric prompt — no typing. TotalReclaw can't read the copy, but the passkey alone opens it: anyone who gets into the account that syncs your passkey (Apple, Google or your password manager), along with its PIN or device passcode, could recover your phrase. Our servers are not a second lock.
 - **Download an encrypted file instead** — no TotalReclaw storage at all. You get a `totalreclaw-backup-YYYY-MM-DD.json` file, opens only with the same passkey. **Where you save it matters** — see the caveat below.
 - **Not now** — proceeds with no backup. Enable one later from **Settings → Passkeys & backup**.
 
-You can also enable escrow for a passkey that already exists, or download a fresh file at any time, from Settings — you'll be asked to re-enter your phrase once (it isn't stored anywhere after setup), then it's sealed under one passkey assertion.
+You can also enable escrow for a passkey that already exists, or download a fresh file at any time, from Settings — you'll be asked to re-enter your phrase once (the browser doesn't keep it after setup), then it's sealed under one passkey assertion.
 
 ## The file caveat
 
@@ -39,12 +39,12 @@ Downloading a new file never disables an older one — every file you've ever do
 
 ## Recovering a vault
 
-On a new or wiped device, `app.totalreclaw.xyz` offers:
+On a new or wiped device, `app.totalreclaw.xyz` opens on **Create a vault** and **I already have one**. Pick **I already have one** to see the recovery choices:
 
 - **Recover with passkey** — one biometric prompt, no typing, if this passkey has a backup with TotalReclaw.
 - **Open a backup file** — pick your downloaded file, one biometric prompt.
 - **Use recovery phrase** — type your 12 words; this device enrols its own fresh passkey.
-- **Create a new vault** — starts a separate, empty vault (confirmed first — your old vault isn't touched, just not what you're looking at).
+- **Create a new vault instead** — starts a separate, empty vault. If a recovery attempt just failed, you're asked to confirm first. Your old vault isn't touched, just not what you're looking at.
 
 If a passkey doesn't match any backup, or a file was sealed by a different passkey, you'll see a clear message and be offered phrase entry — never a dead end.
 

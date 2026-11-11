@@ -80,6 +80,14 @@ export interface WriteConfigInput {
   walletAddress: string;
   chainId: number;
   dataEdgeAddress?: string;
+  /**
+   * #689: false while no billing lookup has succeeded. A write built from an
+   * unresolved state would fall through to the PRODUCTION default DataEdge,
+   * so `buildSubgraphOverrides` refuses (throws `DataEdgeUnresolvedError`)
+   * unless `TOTALRECLAW_DATA_EDGE_ADDRESS` is set. Omitted = resolved (legacy
+   * callers and tests).
+   */
+  chainResolved?: boolean;
 }
 
 /**
@@ -95,6 +103,10 @@ export interface WriteConfigInput {
 export function buildSubgraphOverrides(
   input: WriteConfigInput,
 ): Partial<SubgraphStoreConfig> {
+  // #689 defence in depth: callers must run ensureWriteChainResolved first.
+  if (input.chainResolved === false && !process.env.TOTALRECLAW_DATA_EDGE_ADDRESS) {
+    throw new DataEdgeUnresolvedError(input.relayUrl);
+  }
   const overrides: Partial<SubgraphStoreConfig> = {
     relayUrl: input.relayUrl,
     authKeyHex: input.authKeyHex,
@@ -271,4 +283,126 @@ export function assertDataEdgeResolvable(opts: AssertDataEdgeResolvableOptions):
       'TOTALRECLAW_DATA_EDGE_ADDRESS override is set. Retry once the relay is reachable, or set ' +
       'TOTALRECLAW_DATA_EDGE_ADDRESS explicitly for this environment.',
   );
+}
+
+// ---------------------------------------------------------------------------
+// Retry + lazy resolution (#689, internal p-diogo/totalreclaw-internal#689).
+//
+// Before #689, mnemonic mode made ONE 5 s billing call at startup and, on a
+// timeout, fell back to `DEFAULT_DATA_EDGE_ADDRESS` (the PRODUCTION
+// contract) for the whole process. A staging-configured server on a cold
+// relay therefore wrote to production and then recalled nothing from the
+// staging subgraph. Now:
+//
+//   1. Startup retries the billing call with backoff (a cold relay can take
+//      longer than one short timeout).
+//   2. If it still fails, the state stays UNRESOLVED. No write is sent.
+//   3. The first write re-runs the lookup (with retries). Success fills in
+//      chain + DataEdge for the rest of the process; failure fails THAT
+//      write with `DataEdgeUnresolvedError` — never a guess.
+//
+// An explicit `TOTALRECLAW_DATA_EDGE_ADDRESS` still wins and counts as
+// resolved. A successful lookup behaves exactly as before.
+// ---------------------------------------------------------------------------
+
+export interface BillingRetryOptions {
+  /** Total attempts, including the first. */
+  attempts: number;
+  /** Per-attempt timeout. */
+  timeoutMs: number;
+  /** Delay before attempt i+1 (index i). The last value repeats if short. */
+  backoffMs: number[];
+  /** Injectable for tests. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Startup: bounded so a dead relay doesn't stall the MCP host for long (~2 x 8 s + 1 s). */
+export const STARTUP_BILLING_RETRY: BillingRetryOptions = { attempts: 2, timeoutMs: 8000, backoffMs: [1000] };
+/** First write while unresolved: a little more patience, the user is waiting on a write anyway. */
+export const WRITE_BILLING_RETRY: BillingRetryOptions = { attempts: 3, timeoutMs: 10000, backoffMs: [1000, 3000] };
+
+const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * `fetchChainConfig` with retries. Returns the first successful result, or
+ * the last failure (`billingResolved: false`) after `attempts` tries.
+ * `onBillingUnavailable` fires once per failed attempt with an
+ * `(attempt i/n)` suffix.
+ */
+export async function fetchChainConfigWithRetry(
+  opts: FetchChainConfigOptions,
+  retry: BillingRetryOptions,
+): Promise<FetchedChainConfig> {
+  const sleep = retry.sleep ?? defaultSleep;
+  const attempts = Math.max(1, retry.attempts);
+  let last: FetchedChainConfig = { chainId: opts.fallbackChainId, dataEdgeAddress: undefined, billingResolved: false };
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) {
+      const delay = retry.backoffMs[Math.min(i - 1, retry.backoffMs.length - 1)] ?? 0;
+      if (delay > 0) await sleep(delay);
+    }
+    last = await fetchChainConfig({
+      ...opts,
+      timeoutMs: retry.timeoutMs,
+      onBillingUnavailable: (reason) => opts.onBillingUnavailable?.(`${reason} (attempt ${i + 1}/${attempts})`),
+    });
+    if (last.billingResolved) return last;
+  }
+  return last;
+}
+
+/** The chain fields of a managed-service state that writes depend on. */
+export interface WriteChainState {
+  chainId: number;
+  dataEdgeAddress?: string;
+  /**
+   * True once a billing lookup succeeded (or an env DataEdge override is
+   * set). While false, no write may be sent: `ensureWriteChainResolved`
+   * must succeed first.
+   */
+  chainResolved: boolean;
+}
+
+/** Thrown when a write is attempted with no confirmed DataEdge for this relay. */
+export class DataEdgeUnresolvedError extends Error {
+  constructor(serverUrl: string) {
+    super(
+      'TotalReclaw could not confirm which DataEdge contract belongs to the relay at ' +
+        `${serverUrl.replace(/\/+$/, '')} (the billing lookup failed after retries), so this write ` +
+        'was NOT sent. Nothing was stored. Retry in a minute once the relay is reachable, or set ' +
+        'TOTALRECLAW_DATA_EDGE_ADDRESS explicitly for this environment.',
+    );
+    this.name = 'DataEdgeUnresolvedError';
+  }
+}
+
+const inflight = new WeakMap<WriteChainState, Promise<void>>();
+
+/**
+ * Make sure `state` has a confirmed chain + DataEdge before a write. No-op
+ * when already resolved or when `envDataEdgeOverride` is set. Otherwise
+ * runs `refetch` (one in-flight lookup per state, shared by concurrent
+ * writes); on success updates `state` in place, on failure throws
+ * `DataEdgeUnresolvedError`. Never falls back to the production default.
+ */
+export async function ensureWriteChainResolved(
+  state: WriteChainState,
+  refetch: () => Promise<FetchedChainConfig>,
+  envDataEdgeOverride: string | undefined,
+  serverUrl: string,
+): Promise<void> {
+  if (state.chainResolved || envDataEdgeOverride) return;
+  let p = inflight.get(state);
+  if (!p) {
+    p = (async () => {
+      const r = await refetch();
+      if (!r.billingResolved) throw new DataEdgeUnresolvedError(serverUrl);
+      state.chainId = r.chainId;
+      state.dataEdgeAddress = r.dataEdgeAddress;
+      state.chainResolved = true;
+    })();
+    inflight.set(state, p);
+    p.finally(() => inflight.delete(state)).catch(() => {});
+  }
+  await p;
 }

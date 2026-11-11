@@ -117,6 +117,17 @@ mod tests {
     }
 
     #[test]
+    fn prompts_include_rule_7_sensitive_value_filter() {
+        // PRD-04 DEP-4: prompt-level half of the PII filter (the regex tier
+        // lives in `crate::pii`). Both extraction surfaces carry the rule.
+        for prompt in [EXTRACTION_SYSTEM_PROMPT, COMPACTION_SYSTEM_PROMPT] {
+            assert!(prompt.contains("7. NEVER extract secrets or sensitive identifiers"));
+            assert!(prompt.contains("wallet recovery phrases"));
+            assert!(prompt.contains("Names, e-mail addresses and phone numbers are NOT secrets."));
+        }
+    }
+
+    #[test]
     fn compaction_prompt_admits_importance_5() {
         // Compaction floor is 5 (one below the default 6).
         assert!(

@@ -28,12 +28,25 @@
  *      relay, and writes credentials.json.
  *
  * MCP-process lifecycle note: stdio MCP servers stay alive until the host
- * disconnects, so the background WS-await runs to completion or the relay
- * 5-minute TTL, whichever is first. There is a 60-second hard timeout
- * (matching the plugin) so a slow / abandoned browser flow doesn't hold the
- * process hostage. After completion the user must restart their MCP host
- * (Claude Desktop / Cursor / Claude Code) for the server to re-read
- * credentials.json and switch out of `unconfigured` mode.
+ * disconnects, so the background WS-await runs until the browser uploads or
+ * the relay's pairing session expires (the `expires_at` the relay returns,
+ * 10 minutes on the current relay, plus a short grace). It used to stop
+ * after 60 seconds, which closed the session before a user in generate mode
+ * could write down 12 words and retype 3 of them. Credentials are read once,
+ * at startup (`index.ts` `main()`), so after completion the user must fully
+ * quit and reopen their MCP host (Claude Desktop / Cursor / Claude Code) for
+ * the server to re-read credentials.json and switch out of `unconfigured`
+ * mode.
+ *
+ * Existing-credentials guard: `~/.totalreclaw/credentials.json` is shared
+ * with every TotalReclaw client on the machine (Hermes reads the same file).
+ * Pairing over it would move all of them to a different account, so when the
+ * server is configured or the file exists (even one this server can't read,
+ * such as a Hermes OS-keychain file), the tool refuses with
+ * `already_configured` and opens nothing. The credentials are created with
+ * an exclusive open, so a file that appears while the browser step runs is
+ * never overwritten either. There is no replace path here; a user-confirmed
+ * replace mode (relay PR #72, mirroring Hermes) is #716's to add.
  *
  * Reference implementation: `skill/plugin/index.ts` (totalreclaw_pair tool
  * handler) and `skill/plugin/pair-cli-relay.ts` (CLI runner). The crypto +
@@ -49,6 +62,7 @@ import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
 import type { ToolContext } from './types.js';
+import type { UnusableCredentials } from '../dispatch.js';
 import { PAIR_TOOL_DESCRIPTION } from '../prompts.js';
 import {
   openRemotePairSession,
@@ -66,12 +80,36 @@ const CREDENTIALS_DIR = path.join(os.homedir(), '.totalreclaw');
 const CREDENTIALS_PATH = path.join(CREDENTIALS_DIR, 'credentials.json');
 
 /**
- * Hard timeout for the background WS-await. Matches the plugin
- * (`PAIR_TOOL_HARD_TIMEOUT_MS = 60_000`) — long enough for a slow
- * scan-and-paste, short enough that a stuck browser doesn't hold the
- * MCP process indefinitely.
+ * Lifetime of a relay pairing session: `SESSION_TTL_MS` in totalreclaw-relay
+ * `src/services/pair-sessions.ts` (10 minutes since internal#194; 5 minutes
+ * was too tight for the browser flow). Only used when the relay's `opened`
+ * frame has no usable `expires_at`; normally the wait follows the relay's own
+ * expiry, so a future TTL change on the relay needs no change here.
  */
-const PAIR_TOOL_HARD_TIMEOUT_MS = 60_000;
+export const RELAY_PAIR_SESSION_TTL_MS = 10 * 60_000;
+
+/** Slack after the relay's expiry, so an upload that lands at the deadline is still read. */
+const PAIR_WAIT_GRACE_MS = 15_000;
+
+/** Bounds on the wait, so a skewed clock or a bad `expires_at` can't make it absurd. */
+const PAIR_WAIT_MIN_MS = 60_000;
+const PAIR_WAIT_MAX_MS = 15 * 60_000;
+
+/**
+ * How long the background task keeps the relay WebSocket open waiting for
+ * the browser's upload: until the relay's pairing session expires, plus
+ * {@link PAIR_WAIT_GRACE_MS}. The user has to finish the whole browser step
+ * (PIN, then writing down 12 words and retyping 3 in generate mode) inside
+ * this window. Falls back to {@link RELAY_PAIR_SESSION_TTL_MS} when
+ * `expiresAt` is unparsable or already in the past by the local clock, and
+ * is clamped to [1 min, 15 min]. Exported for tests.
+ */
+export function pairWaitMs(expiresAt: string, now: number = Date.now()): number {
+  const parsed = Date.parse(expiresAt);
+  const untilExpiry =
+    Number.isFinite(parsed) && parsed > now ? parsed - now : RELAY_PAIR_SESSION_TTL_MS;
+  return Math.min(PAIR_WAIT_MAX_MS, Math.max(PAIR_WAIT_MIN_MS, untilExpiry + PAIR_WAIT_GRACE_MS));
+}
 
 const DEFAULT_RELAY_URL_WSS = 'wss://api.totalreclaw.xyz';
 
@@ -145,24 +183,50 @@ function relayBaseToHttps(relayBase: string): string {
     .replace(/\/+$/, '');
 }
 
+/** Thrown when pairing would overwrite a credentials.json that already exists. */
+export class CredentialsExistError extends Error {
+  constructor() {
+    super('credentials.json already exists');
+    this.name = 'CredentialsExistError';
+  }
+}
+
+/**
+ * Create credentials.json at mode 0600 with an exclusive open (`wx`). If a
+ * credentials file appeared after the tool's guard ran (another pairing,
+ * another client), the write fails with `CredentialsExistError` instead of
+ * overwriting it.
+ */
+function writeCredentialsFileExclusive(credentialsPath: string, body: string): void {
+  const dir = path.dirname(credentialsPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  try {
+    fs.writeFileSync(credentialsPath, body, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
+      throw new CredentialsExistError();
+    }
+    throw err;
+  }
+}
+
 /**
  * Write credentials.json with 0600 permissions. Mirrors `cli/setup.ts`
  * `saveCredentials` but accepts a richer payload (`mnemonic`, `salt` hex,
- * `userId`, `serverUrl`).
+ * `userId`, `serverUrl`). Never overwrites an existing file.
  */
-function writePairedCredentials(creds: {
-  userId: string;
-  salt: string;
-  serverUrl: string;
-  mnemonic: string;
-}): void {
-  if (!fs.existsSync(CREDENTIALS_DIR)) {
-    fs.mkdirSync(CREDENTIALS_DIR, { recursive: true, mode: 0o700 });
-  }
-  fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(creds, null, 2) + '\n', {
-    encoding: 'utf-8',
-    mode: 0o600,
-  });
+function writePairedCredentials(
+  creds: {
+    userId: string;
+    salt: string;
+    serverUrl: string;
+    mnemonic: string;
+  },
+  credentialsPath: string,
+): void {
+  writeCredentialsFileExclusive(credentialsPath, JSON.stringify(creds, null, 2) + '\n');
 }
 
 /**
@@ -184,7 +248,7 @@ function writePairedCredentials(creds: {
  * this object needs, since `DerivedBundleV1`'s shape IS the wire shape
  * (see `subgraph/bundle.ts`).
  */
-function writePairedBundleCredentials(bundle: DerivedBundleV1): void {
+function writePairedBundleCredentials(bundle: DerivedBundleV1, credentialsPath: string): void {
   const wire = {
     version: 2 as const,
     schema: 'derived-bundle-v1' as const,
@@ -194,13 +258,7 @@ function writePairedBundleCredentials(bundle: DerivedBundleV1): void {
     provisioned_at: bundle.provisioned_at,
     provisioned_by: bundle.provisioned_by,
   };
-  if (!fs.existsSync(CREDENTIALS_DIR)) {
-    fs.mkdirSync(CREDENTIALS_DIR, { recursive: true, mode: 0o700 });
-  }
-  fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(wire, null, 2) + '\n', {
-    encoding: 'utf-8',
-    mode: 0o600,
-  });
+  writeCredentialsFileExclusive(credentialsPath, JSON.stringify(wire, null, 2) + '\n');
 }
 
 /**
@@ -255,6 +313,8 @@ export async function runPairBackgroundTask(opts: {
   serverUrl: string;
   hardTimeoutMs?: number;
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
+  /** Override the credentials.json path — for tests. */
+  credentialsPath?: string;
 }): Promise<void> {
   const log =
     opts.log ??
@@ -267,9 +327,21 @@ export async function runPairBackgroundTask(opts: {
         console.error(prefix, msg);
       }
     });
-  const hardTimeoutMs = opts.hardTimeoutMs ?? PAIR_TOOL_HARD_TIMEOUT_MS;
+  const hardTimeoutMs = opts.hardTimeoutMs ?? pairWaitMs(opts.session.expiresAt);
   const httpsBase = relayBaseToHttps(opts.relayBaseUrl);
   const tokenTail = opts.session.token.slice(0, 8);
+  const credentialsPath = opts.credentialsPath ?? CREDENTIALS_PATH;
+
+  /** Map a credentials write failure to the nack the relay gets. */
+  const writeFailure = (writeErr: unknown): { state: 'error'; error: string } => {
+    if (writeErr instanceof CredentialsExistError) {
+      log('warn', 'pair: credentials.json appeared during pairing; not overwriting it');
+      return { state: 'error', error: 'already_configured' };
+    }
+    const m = writeErr instanceof Error ? writeErr.message : String(writeErr);
+    log('error', `pair: credentials.json write failed: ${m}`);
+    return { state: 'error', error: 'credentials_write_failed' };
+  };
 
   const phraseUploadPromise = awaitPhraseUpload(opts.session, {
     phraseValidator: (p: string) => validateMnemonic(p, wordlist),
@@ -299,16 +371,17 @@ export async function runPairBackgroundTask(opts: {
         }
 
         try {
-          writePairedCredentials({
-            userId: registeredUserId,
-            salt: saltHex,
-            serverUrl: opts.serverUrl,
-            mnemonic,
-          });
+          writePairedCredentials(
+            {
+              userId: registeredUserId,
+              salt: saltHex,
+              serverUrl: opts.serverUrl,
+              mnemonic,
+            },
+            credentialsPath,
+          );
         } catch (writeErr) {
-          const m = writeErr instanceof Error ? writeErr.message : String(writeErr);
-          log('error', `pair: credentials.json write failed: ${m}`);
-          return { state: 'error', error: 'credentials_write_failed' };
+          return writeFailure(writeErr);
         }
 
         log(
@@ -336,7 +409,11 @@ export async function runPairBackgroundTask(opts: {
         // POST /v1/register. The vault is registered by the provisioning
         // origin (the SPA, which holds the root), which is the only party
         // able to register correctly.
-        writePairedBundleCredentials(bundle);
+        try {
+          writePairedBundleCredentials(bundle, credentialsPath);
+        } catch (writeErr) {
+          return writeFailure(writeErr);
+        }
         log(
           'info',
           `pair: session ${tokenTail}… completed via derived-bundle-v1; ` +
@@ -356,7 +433,7 @@ export async function runPairBackgroundTask(opts: {
   // open but the browser never POSTs (rare; matches plugin's 3.3.4-rc.2 fix).
   const TIMEOUT_SENTINEL = {
     status: 'timed_out' as const,
-    message: `Pair flow timed out (${hardTimeoutMs / 1000}s) — generate a new URL with totalreclaw_pair.`,
+    message: `Pair flow timed out (${Math.round(hardTimeoutMs / 1000)}s) — generate a new URL with totalreclaw_pair.`,
   };
   let hardTimer: ReturnType<typeof setTimeout> | undefined;
   const hardTimeoutPromise = new Promise<typeof TIMEOUT_SENTINEL>((resolve) => {
@@ -398,7 +475,37 @@ export interface HandlePairOptions {
   awaitBackground?: boolean;
   /** Logger override (tests). Default writes to stderr. */
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
+  /**
+   * True when the running server already has a credential (managed or
+   * self-hosted mode). Wired by `index.ts`. The guard also checks
+   * credentials.json on disk, which covers a pairing completed earlier in
+   * this process (the server stays unconfigured until restart) and a file
+   * this server can't read.
+   */
+  isConfigured?: () => boolean;
+  /** Set when startup found a credentials file it can't use. Wired by `index.ts`. */
+  getUnusableCredentials?: () => UnusableCredentials | undefined;
+  /** Override the credentials.json path — for tests. */
+  credentialsPath?: string;
+  /** Override the session opener — for tests. */
+  openSession?: typeof openRemotePairSession;
 }
+
+/** Refusal when the server is already set up. */
+export const ALREADY_CONFIGURED_MESSAGE =
+  'TotalReclaw is already set up on this machine, so there is nothing to pair. Tell the user ' +
+  'their account is already set up. Pairing again would switch this app to a DIFFERENT ' +
+  'account, and every other TotalReclaw client on this machine (such as Hermes) with it, ' +
+  'because they share ~/.totalreclaw/credentials.json. This tool does not do that. Do not ' +
+  'move, rename or delete the credentials file to get around this.';
+
+/** Refusal when a credentials file exists that this server doesn't (yet) use. */
+export const CREDENTIALS_FILE_EXISTS_MESSAGE =
+  'A TotalReclaw credentials file already exists at ~/.totalreclaw/credentials.json. ' +
+  'Pairing would replace that account for every TotalReclaw client on this machine (such as ' +
+  'Hermes), so this tool refuses. If the user just finished pairing, they need to fully quit ' +
+  'and reopen this app so the server loads it. Do not move, rename or delete the credentials ' +
+  'file to get around this.';
 
 /**
  * Handle a totalreclaw_pair tool call. Returns the URL + PIN + expires_at_ms
@@ -410,15 +517,43 @@ export async function handlePair(
   args: Record<string, unknown> | undefined,
   opts: HandlePairOptions = {},
 ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
+  const credentialsPath = opts.credentialsPath ?? CREDENTIALS_PATH;
+
+  // Existing-credentials guard, both modes: a generate pairing always makes
+  // a different account, and an import over a file this server can't read
+  // (e.g. Hermes' keychain storage) can't be checked to be the same account.
+  const configured = opts.isConfigured?.() ?? false;
+  if (configured || fs.existsSync(credentialsPath)) {
+    const unusable = configured ? undefined : opts.getUnusableCredentials?.();
+    const message = configured
+      ? ALREADY_CONFIGURED_MESSAGE
+      : unusable
+        ? `${unusable.message} Do not move, rename or delete the credentials file to get around this.`
+        : CREDENTIALS_FILE_EXISTS_MESSAGE;
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            already_configured: true,
+            ...(unusable ? { reason: unusable.reason } : {}),
+            message,
+          }),
+        },
+      ],
+    };
+  }
+
   const rawMode = args?.mode;
   const mode: 'generate' | 'import' = rawMode === 'import' ? 'import' : 'generate';
 
   const relayBaseUrl = opts.relayBaseUrl ?? resolvePairRelayUrl();
   const serverUrl = opts.serverUrl ?? process.env.TOTALRECLAW_SERVER_URL ?? 'https://api.totalreclaw.xyz';
+  const openSession = opts.openSession ?? openRemotePairSession;
 
   let session: RemotePairSession;
   try {
-    session = await openRemotePairSession({
+    session = await openSession({
       relayBaseUrl,
       mode: mode === 'generate' ? 'generate' : 'import',
     });
@@ -443,7 +578,8 @@ export async function handlePair(
   const parsedExpiresMs = Date.parse(session.expiresAt);
   const expiresAtMs = Number.isFinite(parsedExpiresMs)
     ? parsedExpiresMs
-    : Date.now() + 5 * 60_000;
+    : Date.now() + RELAY_PAIR_SESSION_TTL_MS;
+  const minutesLeft = Math.min(15, Math.max(1, Math.round((expiresAtMs - Date.now()) / 60_000)));
 
   // Schedule the background WS-await. In production we DO NOT await it —
   // the tool returns URL+PIN immediately so the agent can hand the URL to
@@ -454,6 +590,7 @@ export async function handlePair(
     relayBaseUrl,
     serverUrl,
     log: opts.log,
+    credentialsPath,
   });
 
   if (opts.awaitBackground) {
@@ -469,10 +606,7 @@ export async function handlePair(
     });
   }
 
-  const instructions =
-    mode === 'generate'
-      ? `The browser will generate a NEW 12-word recovery phrase and ask the user to write it down + retype 3 words before finalizing.`
-      : `The browser will accept an EXISTING phrase that the user pastes in the browser (never through chat).`;
+  const instructions = pairInstructions(mode, minutesLeft);
 
   return {
     content: [
@@ -484,15 +618,30 @@ export async function handlePair(
           expires_at_ms: expiresAtMs,
           mode,
           relay_base_url: relayBaseUrl,
-          instructions: [
-            `Open the URL above on the user's phone or another browser (copy-paste).`,
-            instructions,
-            `Enter the 6-digit PIN shown above into the browser.`,
-            `The encrypted phrase uploads to this MCP server — it NEVER touches the LLM.`,
-            `After the browser shows "Pairing complete", restart the MCP host (Claude Desktop / Cursor / Claude Code) so the server re-reads ~/.totalreclaw/credentials.json. The session expires in ~5 minutes.`,
-          ],
+          expires_in_minutes: minutesLeft,
+          instructions,
         }),
       },
     ],
   };
+}
+
+/**
+ * The steps the agent relays to the user. Kept in step with what actually
+ * happens: the relay page ends on "You're all set", the link lives as long as
+ * the relay session, and the memory tools only work after the host restarts
+ * (credentials are read once, at startup). Exported for tests.
+ */
+export function pairInstructions(mode: 'generate' | 'import', minutesLeft: number): string[] {
+  const phraseStep =
+    mode === 'generate'
+      ? `The page creates a NEW 12-word recovery phrase. The user writes it down somewhere safe (paper or a password manager) and retypes 3 of the words to confirm. That phrase is the only way to recover their memories.`
+      : `The user enters their EXISTING 12-word recovery phrase on the page, never in this chat.`;
+  return [
+    `Give the user the link and the 6-digit PIN above. They open the link in a browser (on this computer or their phone) and enter the PIN there.`,
+    phraseStep,
+    `The link works for about ${minutesLeft} minutes, so there is time to write the phrase down carefully. If it expires, call totalreclaw_pair again for a new link.`,
+    `The phrase is encrypted in the browser and sent to this MCP server. It never passes through this chat. Never ask the user to paste it here.`,
+    `When the page says "You're all set", ask the user to fully quit and reopen this app (Claude Desktop, Cursor, Claude Code or whichever app runs this server; closing the window is not enough), or to start a new session. The server reads the credentials only at startup, so the memory tools return not_configured until then.`,
+  ];
 }

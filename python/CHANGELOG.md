@@ -14,12 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **[PRD-04 F1 / DEP-5] Pinned facts are protected from auto-extraction.** An auto-extraction UPDATE or DELETE whose target is pinned is now dropped (`agent/pin_guard.py`). When the pin state cannot be read, DELETE is dropped and UPDATE is stored as a plain ADD, so nothing is tombstoned. The contradiction resolver now receives entity refs and pin state, so it actually runs, and a new fact that contradicts a pinned fact is not stored (core `SkipNew { reason: existing_pinned }`). Other resolver outcomes stay log-only until DEP-12. Log lines carry the category only, never fact text or ids.
 - **SKILL.md** no longer claims pinned facts surface in every recall. They rank higher when they match the query.
+- **Pro tier copy is 3,000 memories/month ($3.99/month), not 1,500.** Stripe is the source of truth (Free 250/month, Pro 3,000/month). Updated `SKILL.md`, the session-start quota nudge (the Pro nudge now quotes the relay-returned limit instead of a hard-coded number) and the `totalreclaw_upgrade` tool description. Text only; no behaviour change.
 
 ### Added
 
 - **[PRD-04 DEP-3] Topical dedup context for auto-extraction.** Before each extraction the LLM now sees the 20 facts most related to the conversation (recall on the last 4 messages, with embeddings), the facts written in the last few minutes and the 10 newest facts, rendered by core `build_dedup_context` (pure-Python fallback for older cores). It replaces `recall("recent context", top_k=50)`, which only covered vaults of about 50 facts. Pinned facts are listed first and marked read-only, with a note to ADD new information instead of updating them. An UPDATE without `existingFactId` is treated as an ADD. `TotalReclaw.fetch_recent_facts(limit)`, `embedding.is_model_available_locally()`.
 - **Recall pin boost.** Recall ranks a pinned fact as if it were 1.5× more relevant (BM25 and cosine), through core `rerank_with_config(..., pin_boost=)` (`operations.PIN_BOOST_DEFAULT`). It moves up past facts that match the query almost as well; it does not put unrelated pins on top. The option is feature-detected: a `totalreclaw-core` wheel without it keeps the old ranking. Core applies no boost when the query has no embedding (Hermes auto-recall until DEP-8).
 - `TotalReclaw.get_fact_pin_status(fact_id)`.
+- **[PRD-04 DEP-4] Sensitive-data filter (block-and-tell).** New `totalreclaw.pii` adapter over core `pii_filter`.
+  - Automatic extraction, the end-of-session Crystal and the built-in memory mirror (`on_memory_write`) store only text the filter allows.
+  - `totalreclaw_remember` refuses secrets and sensitive identifiers, returning `{"stored": false, "blocked": "sensitive", "category", "message", "override": "allow_sensitive"}`. The new `allow_sensitive` parameter stores the item after the user confirms.
+  - Logs never carry the screened text.
+
+  Requires a core release with `pii_filter` (2.7.0). See `docs/guides/sensitive-data-filter.md`.
 
 ## [2.5.3] — 2026-11-02
 
