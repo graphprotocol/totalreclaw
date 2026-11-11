@@ -61,6 +61,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/setup-node@v5  # runs scripts/check-url-binding.cjs
+        with:
+          node-version: '22'
+
       - name: Cache cargo registry
         uses: actions/cache@v5
         with:
@@ -106,6 +110,16 @@ jobs:
       - name: Cargo package (dry-run sanity check)
         run: cd rust/totalreclaw-core && cargo package --allow-dirty
 
+      # Environment-binding guard (internal#706). Scans src/ of the .crate
+      # that `cargo package` just built, i.e. what crates.io would receive.
+      # Core binds no relay URL at all, so ANY relay URL fails.
+      - name: Stable / RC URL guard (core binds no relay URL)
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          OUT=$(mktemp -d)
+          tar -xzf "rust/totalreclaw-core/target/package/totalreclaw-core-$VERSION.crate" -C "$OUT"
+          node scripts/check-url-binding.cjs --profile=core-crate --root="$OUT/totalreclaw-core-$VERSION" --release-type=${{ inputs.release-type }}
+
       - name: Publish
         if: inputs.dry-run == false
         env:
@@ -144,6 +158,10 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v5  # runs scripts/check-url-binding.cjs
+        with:
+          node-version: '22'
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -236,6 +254,17 @@ jobs:
 
       - name: Cargo package (dry-run sanity check)
         run: cd rust/totalreclaw-memory && cargo package --allow-dirty
+
+      # Environment-binding guard (internal#706). Scans src/ of the .crate
+      # that `cargo package` just built: no quoted staging URL, and
+      # DEFAULT_RELAY_URL in src/backend.rs still binds production. (The
+      # TOTALRECLAW_SERVER_URL env override is runtime-only and unaffected.)
+      - name: Stable / RC URL guard (production default for both)
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          OUT=$(mktemp -d)
+          tar -xzf "rust/totalreclaw-memory/target/package/totalreclaw-memory-$VERSION.crate" -C "$OUT"
+          node scripts/check-url-binding.cjs --profile=memory-crate --root="$OUT/totalreclaw-memory-$VERSION" --release-type=${{ inputs.release-type }}
 
       - name: Publish
         if: inputs.dry-run == false

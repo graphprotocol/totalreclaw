@@ -58,10 +58,28 @@ What this means in practice:
 
 **Publish-time guards** (each fails the publish, for both release types, if a
 staging URL is bound as a default in the built artifact or the production
-default is missing):
+default is missing). Every published artifact has one:
 - OpenClaw plugin: `skill/scripts/check-url-binding.mjs` (publish step + `prepublishOnly`).
-- Python client: the wheel default-URL check in `publish-python-client.yml`.
 - MCP server: `mcp/scripts/check-url-binding.cjs` (publish step + `prepublishOnly`, added for internal#673).
+- Everything else runs `scripts/check-url-binding.cjs` against the unpacked
+  artifact (internal#706), one profile per artifact:
+  - NanoClaw (`nanoclaw`): the packed npm tarball; both default sites
+    (`dist/billing.js`, `mcp/nanoclaw-agent-runner.ts`) must fall back to
+    production.
+  - Python client (`python-client`): the built wheel; `_HARDCODED_DEFAULT_URL`
+    in `relay.py` and `DEFAULT_RELAY_URL` in `pair/remote_client.py` must
+    bind production.
+  - `totalreclaw-memory` (`memory-crate`): the packaged `.crate`;
+    `DEFAULT_RELAY_URL` in `src/backend.rs` must bind production.
+  - `@totalreclaw/client` (`client`), `@totalreclaw/core` on npm
+    (`core-npm`), the `totalreclaw-core` crate and PyPI sdist
+    (`core-crate`) and wheels (`core-wheel`): these bind no relay URL at
+    all, so any relay URL fails, production included.
+
+  Every profile also rejects any quoted staging URL in shipped code and the
+  staging host inside shipped binaries. Comments, banner copy and the
+  staging-detection checks (a host without a scheme) pass. The guard's own
+  tests (`scripts/check-url-binding.test.cjs`) run in CI.
 
 ## Flow
 

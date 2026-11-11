@@ -192,6 +192,13 @@ jobs:
           console.log('RC version:', p.version);
           "
 
+      # Environment-binding guard (internal#706). Same contract as the plugin,
+      # MCP and Python guards: rc AND stable default to production. Core binds
+      # no relay URL at all (callers pass one), so this fails on ANY relay URL
+      # in the composed package, and on the staging host inside the .wasm.
+      - name: Stable / RC URL guard (core binds no relay URL)
+        run: node scripts/check-url-binding.cjs --profile=core-npm --root=rust/totalreclaw-core/pkg --release-type=${{ inputs.release-type }}
+
       - name: Guard — refuse to republish an existing version
         if: inputs.dry-run == false
         # #456: an omitted `rc-number` silently defaulted to 1, republished
@@ -288,6 +295,17 @@ jobs:
           fs.writeFileSync('./package.json', JSON.stringify(p, null, 2) + '\n');
           console.log('RC version:', p.version);
           "
+
+      # Environment-binding guard (internal#706). Scans the packed tarball,
+      # i.e. exactly the files npm would publish. The client has no default
+      # relay URL (callers pass `serverUrl`), so ANY relay URL fails, staging
+      # or production.
+      - name: Stable / RC URL guard (client binds no relay URL)
+        run: |
+          PACK_DIR=$(mktemp -d)
+          (cd client && npm pack --pack-destination "$PACK_DIR" >/dev/null)
+          tar -xzf "$PACK_DIR"/*.tgz -C "$PACK_DIR"
+          node scripts/check-url-binding.cjs --profile=client --root="$PACK_DIR/package" --release-type=${{ inputs.release-type }}
 
       - name: Guard — refuse to republish an existing version
         if: inputs.dry-run == false
@@ -474,6 +492,17 @@ jobs:
           fs.writeFileSync('./package.json', JSON.stringify(p, null, 2) + '\n');
           console.log('RC version:', p.version);
           "
+
+      # Environment-binding guard (internal#706). Scans the packed tarball,
+      # i.e. exactly the files npm would publish: no quoted staging URL in
+      # dist/ or mcp/, and both default-URL sites (dist/billing.js,
+      # mcp/nanoclaw-agent-runner.ts) still fall back to production.
+      - name: Stable / RC URL guard (production default for both)
+        run: |
+          PACK_DIR=$(mktemp -d)
+          (cd skill-nanoclaw && npm pack --pack-destination "$PACK_DIR" >/dev/null)
+          tar -xzf "$PACK_DIR"/*.tgz -C "$PACK_DIR"
+          node scripts/check-url-binding.cjs --profile=nanoclaw --root="$PACK_DIR/package" --release-type=${{ inputs.release-type }}
 
       - name: Guard — refuse to republish an existing version
         if: inputs.dry-run == false
