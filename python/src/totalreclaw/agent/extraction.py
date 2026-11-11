@@ -260,6 +260,13 @@ def _build_fact(
 
     existing_id = raw.get("existingFactId") or raw.get("existing_fact_id")
 
+    # PRD-04 DEP-3: an UPDATE that does not name the fact it replaces cannot
+    # tombstone anything, and UPDATE skips the store-time duplicate gate.
+    # Treat it as an ADD so it still passes the gate instead of landing as an
+    # unchecked duplicate. (DELETE without an id is already a no-op.)
+    if action == "UPDATE" and not existing_id:
+        action = "ADD"
+
     raw_entities = raw.get("entities")
     entities: Optional[List[ExtractedEntity]] = None
     if isinstance(raw_entities, list):
@@ -741,10 +748,15 @@ def deduplicate_facts_by_embedding(
     if not facts:
         return []
 
-    # Filter existing_memories to those that carry usable embeddings.
+    # Filter existing_memories to those that carry usable embeddings. Pinned
+    # memories are left out: the prompt asks the LLM to ADD new information
+    # about a pinned fact (pins are read-only), and a cosine match cannot tell
+    # a restatement from a changed value. Exact copies of a pin are still
+    # caught by the store-time gate in ``agent.lifecycle``.
     ex_with_emb = [
         m for m in (existing_memories or [])
         if isinstance(m, dict) and m.get("embedding") and len(m["embedding"]) > 0
+        and not m.get("pinned")
     ]
 
     survivors: List[ExtractedFact] = []
@@ -954,6 +966,117 @@ def _filter_instruction_fragment_facts(
 
 
 # ---------------------------------------------------------------------------
+# Dedup context (PRD-04 DEP-3) — the "Existing memories" prompt block
+# ---------------------------------------------------------------------------
+
+#: Messages the turn-mode extraction window keeps (matches the TS extractor).
+#: ``agent.lifecycle`` slices the same window for the topical dedup fetch.
+TURN_MODE_WINDOW_MESSAGES = 6
+
+#: Cap for callers that pass ``existing_memories`` without a prebuilt
+#: ``dedup_context`` (the pre-DEP-3 behaviour: first 50, in the given order).
+LEGACY_EXISTING_MEMORIES_CAP = 50
+
+#: Mirrors core ``dedup_context`` constants; used only by the fallback below.
+DEDUP_CONTEXT_HEADER = (
+    "Existing memories (use these for dedup — classify as "
+    "UPDATE/DELETE/NOOP if they conflict or overlap):"
+)
+DEDUP_CONTEXT_PINNED_TAG = "[pinned, read-only]"
+DEDUP_CONTEXT_PINNED_NOTE = (
+    "Memories marked [pinned, read-only] were pinned by the user. Never UPDATE "
+    "or DELETE them: if a new fact only restates one, use NOOP; if it adds or "
+    "changes information, ADD it as a new fact."
+)
+_LINE_BREAKS_RE = re.compile("[\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+_RUST_WHITESPACE = (
+    "\t\n\x0b\x0c\r \x85\xa0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000"
+)
+
+
+def _dedup_items(memories: Optional[list]) -> list[dict]:
+    items = []
+    for m in memories or []:
+        if isinstance(m, dict):
+            items.append({"id": str(m.get("id") or ""), "text": str(m.get("text") or "")})
+    return items
+
+
+def _single_line(value: str) -> str:
+    pieces = [p.strip(_RUST_WHITESPACE) for p in _LINE_BREAKS_RE.split(value)]
+    return " ".join(p for p in pieces if p)
+
+
+def _py_build_dedup_context(topical, pinned, recent, cap: int) -> str:
+    """Pure-Python port of core ``build_dedup_context`` for installed cores
+    that predate it. Checked against the same parity fixture."""
+    if cap <= 0:
+        return ""
+    seen: set = set()
+    lines: list[str] = []
+    pinned_lines = 0
+    tagged = [(i, True) for i in pinned] + [(i, False) for i in topical] + [(i, False) for i in recent]
+    for item, is_pinned in tagged:
+        item_id = _single_line(item.get("id", ""))
+        text = _single_line(item.get("text", ""))
+        if not item_id or not text or item_id in seen:
+            continue
+        seen.add(item_id)
+        if is_pinned:
+            pinned_lines += 1
+            lines.append(f"[ID: {item_id}] {DEDUP_CONTEXT_PINNED_TAG} {text}")
+        else:
+            lines.append(f"[ID: {item_id}] {text}")
+        if len(lines) >= cap:
+            break
+    if not lines:
+        return ""
+    out = DEDUP_CONTEXT_HEADER + "\n" + "\n".join(lines)
+    if pinned_lines:
+        out += "\n" + DEDUP_CONTEXT_PINNED_NOTE
+    return out
+
+
+def build_dedup_context_block(
+    topical: Optional[list],
+    pinned: Optional[list],
+    recent: Optional[list],
+    cap: int,
+) -> str:
+    """Render the extraction prompt's "Existing memories" block.
+
+    Core ``build_dedup_context`` (PRD-04 DEP-3) when the installed wheel has
+    it, else the identical Python port: pinned first (tagged read-only, with
+    a closing note), then topical, then recent; dedupe by fact id; at most
+    ``cap`` lines; ``""`` when nothing survives.
+    """
+    t, p, r = _dedup_items(topical), _dedup_items(pinned), _dedup_items(recent)
+    core_fn = getattr(totalreclaw_core, "build_dedup_context", None)
+    if core_fn is not None:
+        return core_fn(json.dumps(t), json.dumps(p), json.dumps(r), cap)
+    return _py_build_dedup_context(t, p, r, cap)
+
+
+def _memories_prompt_suffix(
+    existing_memories: Optional[list[dict]],
+    dedup_context: Optional[str],
+) -> str:
+    """Text appended to the extraction user prompt after the conversation.
+
+    A caller-built ``dedup_context`` wins (``""`` included: "the vault
+    returned nothing"). ``None`` keeps the pre-DEP-3 behaviour: the first
+    ``LEGACY_EXISTING_MEMORIES_CAP`` ``existing_memories`` in the given order.
+    """
+    if dedup_context is None:
+        dedup_context = build_dedup_context_block(
+            existing_memories or [], [], [], LEGACY_EXISTING_MEMORIES_CAP
+        )
+    return f"\n\n{dedup_context}" if dedup_context else ""
+
+
+# ---------------------------------------------------------------------------
 # Main extraction entry points
 # ---------------------------------------------------------------------------
 
@@ -963,6 +1086,8 @@ async def extract_facts_llm(
     mode: str = "turn",  # "turn" or "full"
     existing_memories: Optional[list[dict]] = None,
     llm_config: Optional[LLMConfig] = None,
+    *,
+    dedup_context: Optional[str] = None,
 ) -> list[ExtractedFact]:
     """Extract facts using the v1 G-pipeline. Returns [] if no LLM available.
 
@@ -980,6 +1105,10 @@ async def extract_facts_llm(
     existing_memories : list[dict], optional
         Used for LLM-side dedup context AND by the new cosine dedup pass
         (Bug #8). Entries need ``id``, ``text``, and ``embedding``.
+    dedup_context : str, optional
+        Prebuilt "Existing memories" block (``build_dedup_context_block``,
+        PRD-04 DEP-3). When given (``""`` included) it replaces the block
+        built from ``existing_memories``, which still feeds the cosine pass.
     llm_config : LLMConfig, optional
         Pre-resolved LLM config (e.g. from Hermes). Falls back to env-var
         detection via :func:`detect_llm_config` when not provided.
@@ -999,8 +1128,10 @@ async def extract_facts_llm(
         logger.info("extract_facts_llm: no messages to process")
         return []
 
-    # 'turn' mode trims to the last 6 messages (matches TS extractFacts).
-    relevant = messages[-6:] if mode == "turn" else messages
+    # 'turn' mode trims to the last TURN_MODE_WINDOW_MESSAGES (6) messages
+    # (matches TS extractFacts; agent.lifecycle uses the same window for the
+    # topical dedup fetch).
+    relevant = messages[-TURN_MODE_WINDOW_MESSAGES:] if mode == "turn" else messages
     conversation_text = _truncate_messages(relevant)
     if len(conversation_text) < 20:
         logger.info(
@@ -1011,13 +1142,7 @@ async def extract_facts_llm(
         )
         return []
 
-    memories_ctx = ""
-    if existing_memories:
-        mem_lines = [f"[ID: {m['id']}] {m['text']}" for m in existing_memories[:50]]
-        memories_ctx = (
-            "\n\nExisting memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n"
-            + "\n".join(mem_lines)
-        )
+    memories_ctx = _memories_prompt_suffix(existing_memories, dedup_context)
 
     user_prompt = (
         f"Extract important facts from these recent conversation turns:\n\n{conversation_text}{memories_ctx}"
@@ -1117,6 +1242,8 @@ async def extract_facts_compaction(
     messages: list[dict],
     existing_memories: Optional[list[dict]] = None,
     llm_config: Optional[LLMConfig] = None,
+    *,
+    dedup_context: Optional[str] = None,
 ) -> list[ExtractedFact]:
     """Compaction-aware extraction (importance floor 5, not 6).
 
@@ -1143,13 +1270,7 @@ async def extract_facts_compaction(
         )
         return []
 
-    memories_ctx = ""
-    if existing_memories:
-        mem_lines = [f"[ID: {m['id']}] {m['text']}" for m in existing_memories[:50]]
-        memories_ctx = (
-            "\n\nExisting memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n"
-            + "\n".join(mem_lines)
-        )
+    memories_ctx = _memories_prompt_suffix(existing_memories, dedup_context)
 
     user_prompt = (
         f"Extract ALL valuable long-term memories from this conversation before it is compacted and lost:\n\n"

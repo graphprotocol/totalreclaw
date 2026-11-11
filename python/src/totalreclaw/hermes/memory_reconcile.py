@@ -320,7 +320,7 @@ def reconcile(
                     counts["deferred"] += 1
                     continue
             try:
-                stored = _mirror_remember(state, {"text": new})
+                stored = _mirror_remember(state, {"text": new}, exclude_ids=old_ids)
             except Exception as exc:
                 logger.debug("memory reconcile: store failed: %s", exc)
                 stored = False
