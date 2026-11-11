@@ -1819,7 +1819,7 @@ function quotaExceededResponse(): { content: Array<{ type: string; text: string 
       type: 'text',
       text: JSON.stringify({
         error: 'quota_exceeded',
-        message: 'Free tier monthly limit reached (250 memories). Upgrade to Pro for 1,500 memories/month on Gnosis mainnet.',
+        message: 'You have reached your monthly memory limit. The counter resets on the 1st of the month. Upgrade to Pro for a higher monthly limit (Free is 250 writes a month, Pro is 3,000).',
         upgrade_url: 'Use totalreclaw_upgrade tool to get a checkout link',
       }),
     }],

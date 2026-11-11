@@ -142,3 +142,11 @@ describe('dispatch guard turns a rethrown quota error into the quota response', 
     expect(msg).not.toMatch(/0x[0-9a-f]{20,}/i);
   });
 });
+
+describe('quota and tier copy (Stripe is the source of truth: Free 250, Pro 3,000)', () => {
+  test('no source file still says Pro is 1,500', () => {
+    const { execSync } = require('node:child_process') as typeof import('node:child_process');
+    const out = execSync('grep -rnE "1,500|1500" src README.md SKILL.md || true', { cwd: __dirname + '/..' }).toString();
+    expect(out).toBe('');
+  });
+});

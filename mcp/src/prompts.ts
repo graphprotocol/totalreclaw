@@ -48,7 +48,7 @@ Call totalreclaw_recall proactively when:
 - Extract atomic facts: "User prefers dark mode" not "User said they prefer dark mode and also use VS Code"
 
 ### Billing & Quota
-Both tiers store memories permanently on Gnosis mainnet (E2E encrypted). Free tier is capped at 250 memories per month; Pro is capped at 1,500 memories per month. Reads are unlimited on both tiers. Do NOT guess or hardcode pricing or quota numbers — use totalreclaw_status to check exact usage, the current cap, and current pricing. For pricing details, refer users to https://totalreclaw.xyz/pricing
+Both tiers store memories permanently on Gnosis mainnet (E2E encrypted). Each tier has a monthly write limit that resets on the 1st of the month. Reads are unlimited on both tiers. Do NOT guess or hardcode pricing or quota numbers — use totalreclaw_status to check exact usage, the current cap, and current pricing. For pricing details, refer users to https://totalreclaw.xyz/pricing
 
 When a totalreclaw_remember call fails with "quota_exceeded":
 1. Inform the user they've hit a usage limit
@@ -150,7 +150,7 @@ WHEN NOT TO USE:
 - billing history/invoices → dashboard/support
 - wants to upgrade → totalreclaw_upgrade`;
 
-export const UPGRADE_TOOL_DESCRIPTION = `Stripe checkout URL for Pro (1,500 memories/month on Gnosis mainnet, permanent on-chain, LLM-guided dedup).
+export const UPGRADE_TOOL_DESCRIPTION = `Stripe checkout URL for Pro (a higher monthly write limit, permanent on-chain, LLM-guided dedup).
 INVOKE WHEN USER SAYS:
 - "how do I upgrade?" / "I want to go pro"
 - "how much does it cost?" (share pricing from checkout, don't hardcode)
