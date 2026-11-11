@@ -29,6 +29,7 @@ jobs:
       mcp: ${{ steps.filter.outputs.mcp }}
       app: ${{ steps.filter.outputs.app }}
       plugin: ${{ steps.filter.outputs.plugin }}
+      pair-crypto: ${{ steps.filter.outputs.pair-crypto }}
       docs: ${{ steps.filter.outputs.docs }}
       enclave: ${{ steps.filter.outputs.enclave }}
     steps:
@@ -45,6 +46,9 @@ jobs:
               - 'app/**'
             plugin:
               - 'skill/**'
+            pair-crypto:
+              - 'mcp/**'
+              - 'skill/plugin/**'
             docs:
               - '**/*.md'
               - 'skill/plugin/skill.json'
@@ -258,6 +262,36 @@ jobs:
           node-version: '22'
       - name: Install, build, and test
         run: cd mcp && rm -f package-lock.json && npm install --legacy-peer-deps && npm run build && npm test
+
+  pair-crypto-node-matrix:
+    # Pairing crypto (X25519 private-key construction) must work on every
+    # supported Node. Node 26 rejected the empty-`x` JWK that both the MCP
+    # server and the OpenClaw plugin used, which broke every pairing
+    # (totalreclaw-internal#708). Runs only the pair-crypto tests, with
+    # `--ignore-scripts` so onnxruntime-node's binary fetch never runs.
+    name: Pair Crypto (Node ${{ matrix.node }})
+    needs: changes
+    if: ${{ needs.changes.outputs.pair-crypto == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24', '26']
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - name: MCP pair-crypto test
+        run: cd mcp && rm -f package-lock.json && npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund && npx jest tests/pair-crypto.test.ts
+      - name: Plugin pair-crypto tests
+        run: |
+          cd skill/plugin
+          rm -f package-lock.json
+          npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund
+          npx tsx crypto/vault-crypto.test.ts
+          npx tsx pairing/pair-crypto.test.ts
 
   rust-tests:
     name: Rust Core Tests
