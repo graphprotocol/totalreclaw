@@ -55,8 +55,10 @@ def hash_auth_key(auth_key: bytes) -> bytes:
     """
     Hash the auth key for storage.
 
-    The server stores SHA256(auth_key), not the auth_key itself.
-    This prevents replay attacks if database is compromised.
+    The server stores SHA256(auth_key), not the auth_key itself, so a
+    leaked database can't be used to authenticate as its users. It does
+    not prevent replay of a captured auth_key, which is a static bearer
+    token sent on every request.
 
     Args:
         auth_key: The derived auth key (32 bytes)
