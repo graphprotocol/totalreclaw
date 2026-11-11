@@ -6,10 +6,13 @@ export const SERVER_INSTRUCTIONS = `
 You have access to TotalReclaw, a persistent encrypted memory system. You SHOULD use these tools PROACTIVELY -- do not wait for the user to say "remember this" or "recall that."
 
 ## CRITICAL SAFETY: Recovery Phrase
-TotalReclaw uses a 12-word BIP-39 recovery phrase as the user's identity. The recovery phrase MUST NEVER cross your context window. NEVER ask the user to paste their phrase into chat. NEVER echo, print, or summarize a phrase. NEVER invoke a phrase-touching CLI (e.g. "npx @totalreclaw/mcp-server setup", "npx @totalreclaw/mcp-server show-phrase") via a shell tool — its stdout enters your context. If the user pastes a phrase in chat anyway, tell them it is compromised and they need to generate a fresh wallet via the OpenClaw or Hermes browser pair flow.
+TotalReclaw uses a 12-word BIP-39 recovery phrase as the user's identity. The recovery phrase MUST NEVER cross your context window. NEVER ask the user to paste their phrase into chat. NEVER echo, print, or summarize a phrase. NEVER invoke a phrase-touching CLI (e.g. "npx @totalreclaw/mcp-server setup", "npx @totalreclaw/mcp-server show-phrase") via a shell tool — its stdout enters your context. If the user pastes a phrase in chat anyway, tell them it is compromised and they need a fresh account via totalreclaw_pair.
 
 ## Setup Flow
-If any TotalReclaw tool returns a "not_configured" or "tool_removed" error, the user has not yet wired their recovery phrase into the MCP host config. Direct them to the URL-driven install guide at https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md. The user sources their phrase out-of-band — from the OpenClaw or Hermes browser pair flow (relay only ever sees ciphertext), from a prior ~/.totalreclaw/credentials.json cache, or from an offline BIP-39 generator — and pastes it directly into TOTALRECLAW_RECOVERY_PHRASE in the MCP host config (Claude Desktop / Cursor / Windsurf / Claude Code). After they save the config and restart the host, the MCP server picks up the phrase and all TotalReclaw tools become available. There is no in-chat setup tool: the totalreclaw_setup MCP tool was removed in 3.2.1 because returning the phrase through tool output crossed your context, violating phrase-safety.
+If any TotalReclaw tool returns a "not_configured" error, the user has not set up an account yet. Call totalreclaw_pair: it returns a link and a 6-digit PIN. Give both to the user. They open the link in a browser and create a new recovery phrase there, or enter an existing one there; the phrase is encrypted in the browser and never passes through this chat. If the user pastes a phrase in chat anyway, tell them it is compromised. There is no in-chat setup tool: the totalreclaw_setup tool was removed in 3.2.1 because returning the phrase through tool output crossed your context, violating phrase-safety.
+
+## After Pairing
+When the user finishes the totalreclaw_pair page ("You're all set"), ask them to fully quit and reopen this app (or start a new session) before any memory tool is used: credentials are loaded at startup, so until the restart every tool still returns not_configured. Closing the window is not enough.
 
 ## CRITICAL: Automatic Memory Behaviors
 
@@ -48,7 +51,7 @@ Call totalreclaw_recall proactively when:
 - Extract atomic facts: "User prefers dark mode" not "User said they prefer dark mode and also use VS Code"
 
 ### Billing & Quota
-Both tiers store memories permanently on Gnosis mainnet (E2E encrypted). Free tier is capped at 250 memories per month; Pro is capped at 1,500 memories per month. Reads are unlimited on both tiers. Do NOT guess or hardcode pricing or quota numbers — use totalreclaw_status to check exact usage, the current cap, and current pricing. For pricing details, refer users to https://totalreclaw.xyz/pricing
+Both tiers store memories permanently on Gnosis mainnet (E2E encrypted). Each tier has a monthly write limit that resets on the 1st of the month. Reads are unlimited on both tiers. Do NOT guess or hardcode pricing or quota numbers — use totalreclaw_status to check exact usage, the current cap, and current pricing. For pricing details, refer users to https://totalreclaw.xyz/pricing
 
 When a totalreclaw_remember call fails with "quota_exceeded":
 1. Inform the user they've hit a usage limit
@@ -64,7 +67,6 @@ API keys provided by the user are used only for the import and are never stored.
 
 ### Agent-specific tips
 - If your agent supports background routines or scheduled tasks, set up a routine to call totalreclaw_remember after conversations to ensure nothing is missed.
-- If your agent supports a credential vault or secret store, the user's TOTALRECLAW_RECOVERY_PHRASE should be stored there instead of as a plaintext environment variable.
 - TotalReclaw memories are fully portable -- they work across OpenClaw, IronClaw, Claude Desktop, Cursor, NanoClaw, and any MCP-compatible agent.
 
 ### User-controlled memory edits (v1)
@@ -73,6 +75,8 @@ wiping the vault. Use these when the user says something like:
 - "pin that" / "never forget this" → totalreclaw_pin (preserves a fact across auto-resolution)
 - "that was actually a directive, not a preference" → totalreclaw_retype
 - "that was work context" / "file that under personal" → totalreclaw_set_scope
+
+Scopes (work, personal, health, family, creative, finance, misc, unspecified) are how memories are filed: whenever the user says "file that under X", "put that in my work memories", "categorize as X" or "that's a work thing", call totalreclaw_set_scope on the memory just recalled or stored.
 
 All three operate by supersession: they create a new claim with the override and link it
 back to the original via superseded_by. The original stays in the vault as a tombstone so
@@ -119,20 +123,17 @@ INVOKE WHEN USER SAYS:
 - "forget what I said about X" / "delete that fact"
 - "that's wrong/outdated — remove it"
 - "I don't want you remembering X"
-- "erase that password I pasted"
 WHEN NOT TO USE:
 - CORRECTING → totalreclaw_remember (dedup auto)
-- changing mind ("I prefer tea now") → remember new pref
-- no explicit request — never forget proactively
-DOES: fact_id → tombstone. query → recall ≤50, tombstone all.
-PARAMS: fact_id (pref), query (max 50), scope (hint).`;
+- never forget proactively
+DOES: memory_id → tombstone. query → recall ≤50, tombstone all (self-hosted only; managed service needs an id).
+PARAMS: memory_id = the fact_id from a recall result (fact_id also accepted), query, scope.`;
 
-export const EXPORT_TOOL_DESCRIPTION = `Export decrypted vault — one-click backup.
+export const EXPORT_TOOL_DESCRIPTION = `Export decrypted vault — one-click backup. Self-hosted only (refused on the managed service).
 INVOKE WHEN USER SAYS:
 - "show everything you know about me" / "what do you have on me?"
 - "export / back up / download my memories"
 - "take my memory elsewhere" / "portable copy"
-- "audit what's stored" / "what's in my vault?"
 WHEN NOT TO USE:
 - one thing → totalreclaw_recall
 - cleanup → totalreclaw_consolidate/forget
@@ -150,7 +151,7 @@ WHEN NOT TO USE:
 - billing history/invoices → dashboard/support
 - wants to upgrade → totalreclaw_upgrade`;
 
-export const UPGRADE_TOOL_DESCRIPTION = `Stripe checkout URL for Pro (1,500 memories/month on Gnosis mainnet, permanent on-chain, LLM-guided dedup).
+export const UPGRADE_TOOL_DESCRIPTION = `Stripe checkout URL for Pro (a higher monthly write limit, permanent on-chain, LLM-guided dedup).
 INVOKE WHEN USER SAYS:
 - "how do I upgrade?" / "I want to go pro"
 - "how much does it cost?" (share pricing from checkout, don't hardcode)
@@ -161,24 +162,24 @@ WHEN NOT TO USE:
 - user already Pro (check totalreclaw_status)
 - unrelated — don't volunteer upgrades`;
 
-export const IMPORT_FROM_TOOL_DESCRIPTION = `Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, JSON/CSV.
+export const IMPORT_FROM_TOOL_DESCRIPTION = `Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, JSON/CSV. Self-hosted only (managed service refuses it, even dry_run).
 INVOKE WHEN USER SAYS:
 - "migrate memory from [Mem0/ChatGPT/Claude]"
 - "import my ChatGPT memories" / "here's my Mem0 export"
-- "I pasted my Claude memory — store it"
+- "I pasted my Claude memory"
 WHEN NOT TO USE: TotalReclaw backup → totalreclaw_import. Single fact → totalreclaw_remember.
-DOES: adapter parses+stores (unless dry_run). Fingerprint dedup. Convo sources return chunks for host LLM.
-ALWAYS dry_run=true first → preview → confirm.`;
+DOES: adapter parses+stores (unless dry_run). Fingerprint dedup.
+ALWAYS dry_run=true first.`;
 
-export const IMPORT_TOOL_DESCRIPTION = `Restore from totalreclaw_export backup (JSON/Markdown).
+export const IMPORT_TOOL_DESCRIPTION = `Restore from totalreclaw_export backup (JSON/Markdown). Self-hosted only (managed service refuses it).
 INVOKE WHEN USER SAYS:
 - "restore memories from this backup" / "import this JSON"
 - "I exported from another TotalReclaw account"
-- "here's the Markdown export — put it back"
+- "put the export back"
 WHEN NOT TO USE:
 - Mem0/ChatGPT/Claude → totalreclaw_import_from
 - single fact → totalreclaw_remember
-DOES: parse JSON/Markdown (auto), store via totalreclaw_remember + fingerprint dedup.
+DOES: parse JSON/Markdown (auto), store + fingerprint dedup.
 PARAMS: content (req), format, merge_strategy, validate_only.`;
 
 export const SUPPORT_TOOL_DESCRIPTION = `Support contact, docs, troubleshooting.
@@ -191,24 +192,23 @@ INVOKE WHEN USER SAYS:
 DOES: static bundle (pre-filled email, docs URL, issues URL, troubleshooting table). Works unconfigured.
 WHEN NOT TO USE: billing info → totalreclaw_status. Skip unrelated questions.`;
 
-export const ACCOUNT_TOOL_DESCRIPTION = `Account overview: wallet, tier, usage, memories, features, safe recovery hint.
+export const ACCOUNT_TOOL_DESCRIPTION = `Account overview: wallet, tier, usage, memories, features, credential kind.
 INVOKE WHEN USER SAYS:
 - "show my account" / "what's my profile?"
 - "how many memories?" / "my wallet?"
-- "right recovery phrase? hint"
 - "summary of my setup"
-DOES: billing+fact count parallel. Returns wallet, tier, writes_used/limit, total_facts, features, FIRST+LAST recovery words (never full).
+DOES: billing+fact count parallel. Returns wallet, tier, writes_used/limit, total_facts, features, credential kind. Never any part of the recovery phrase.
 WHEN NOT TO USE:
 - only billing → totalreclaw_status (lighter)
-- FULL recovery phrase → NEVER; password manager.`;
+- recovery phrase (any word) → NEVER available; user checks own backup.`;
 
 export const PAIR_TOOL_DESCRIPTION = `Set up the user's TotalReclaw account (browser-side recovery-phrase generation or import).
 INVOKE WHEN USER SAYS:
 - "set up totalreclaw" / "set up my account"
 - "I don't have a totalreclaw recovery phrase yet" / "create a totalreclaw account"
 - ANY tool returns "not_configured" — propose this tool BEFORE asking the user to edit MCP config.
-DOES: opens a brief relay session, returns {url, pin, expires_at_ms}. Hand the URL + PIN to the user — they open the URL in any browser, the BROWSER generates (or imports) a 12-word phrase, encrypts it, uploads ciphertext to this MCP server. Server decrypts in-memory, writes ~/.totalreclaw/credentials.json (mode 0600). Phrase NEVER touches LLM context, chat transcript, stdout, or logs.
-AFTER PAIRING: tell the user to RESTART their MCP host (Claude Desktop / Cursor / Claude Code) so the server re-reads credentials.json and switches out of unconfigured mode.
+DOES: opens a relay pairing session, returns {url, pin, expires_at_ms}. Hand the URL + PIN to the user — they open the URL in any browser, the BROWSER generates (or imports) a 12-word phrase, encrypts it, uploads ciphertext to this MCP server. Server decrypts in-memory, writes ~/.totalreclaw/credentials.json (mode 0600). Phrase NEVER touches LLM context, chat transcript, stdout, or logs.
+AFTER PAIRING: when the page says "You're all set", tell the user to fully quit and reopen their MCP host (Claude Desktop / Cursor / Claude Code); the server reads credentials.json only at startup. The link lasts about 10 minutes.
 WHEN NOT TO USE:
 - already set up (credentials.json exists or the server is configured) → the tool refuses with already_configured. Tell the user they are set up. Only if THEY ask to replace their account, call with replace=true; the pairing page asks the user to confirm. You cannot confirm it for them.
 - user explicitly wants terminal-only setup → point them at \`npx @totalreclaw/mcp-server setup\` (CLI wizard, runs OUTSIDE your shell tool)

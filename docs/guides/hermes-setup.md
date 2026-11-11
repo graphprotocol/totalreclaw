@@ -48,7 +48,7 @@ Install TotalReclaw RC <version>. See https://github.com/graphprotocol/totalrecl
 Install TotalReclaw RC <version> against the staging relay (TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz). See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md
 ```
 
-The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` and `TOTALRECLAW_RELAY_URL=https://api-staging.totalreclaw.xyz` in the install / setup shell before any TotalReclaw command. Without these env vars, both stable AND RC installs default to the production relay `api.totalreclaw.xyz`.
+The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` in the install / setup shell before any TotalReclaw command. That one variable picks the relay for reads, writes and pairing. Without it, both stable AND RC installs default to the production relay `api.totalreclaw.xyz`. `TOTALRECLAW_RELAY_URL` is not an alias for it: it only sets the pairing URL, and only when `TOTALRECLAW_SERVER_URL` is unset, so setting it alone leaves reads and writes on production.
 
 ---
 

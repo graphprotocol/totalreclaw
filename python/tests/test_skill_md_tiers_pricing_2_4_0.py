@@ -13,8 +13,8 @@ mcp/SKILL.md) carry the canonical copy; Hermes did not.
 
 2.4.0rc2 ships a new ``## Tiers + pricing`` section with:
 
-- A canonical table (Free: 250/month Gnosis, Pro: 1,500/month Gnosis +
-  LLM-guided dedup) that mirrors ``skill-nanoclaw/SKILL.md``.
+- A canonical table (Free: 250/month Gnosis, Pro: 3,000/month Gnosis +
+  LLM-guided dedup) whose tier numbers match ``skill-nanoclaw/SKILL.md``.
 - An automatic quota-signalling spec (>80%, 403 quota exceeded, first
   successful pair).
 - An upgrade-flow user-intent → action matrix.
@@ -65,11 +65,11 @@ def test_skill_pricing_table_has_free_tier_with_250_cap():
     )
 
 
-def test_skill_pricing_table_has_pro_tier_with_1500_cap():
+def test_skill_pricing_table_has_pro_tier_with_3000_cap():
     """Canonical Pro-tier numbers from skill-nanoclaw/SKILL.md."""
     body = _read_skill()
-    assert "1,500 memories/month" in body, (
-        "Pro-tier monthly cap must be stated as '1,500 memories/month' "
+    assert "3,000 memories/month" in body, (
+        "Pro-tier monthly cap must be stated as '3,000 memories/month' "
         "verbatim — NOT 'unlimited' (forbidden claim — Pro is capped) "
         "and NOT a different number."
     )
@@ -150,7 +150,7 @@ def test_skill_forbidden_claims_denylist():
     # Pro is NOT unlimited.
     assert "Pro = unlimited" in body or "Pro is unlimited" in body, (
         "Deny-list MUST pin the 'Pro = unlimited' false claim — Pro "
-        "is 1,500/month, NOT unlimited. Saying 'unlimited' silently "
+        "is 3,000/month, NOT unlimited. Saying 'unlimited' silently "
         "breaks user expectations when they hit the cap."
     )
     # Encryption is identical across tiers.

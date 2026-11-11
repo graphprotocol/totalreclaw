@@ -6,6 +6,12 @@ Hermes Agent plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Pro tier copy is 3,000 memories/month ($3.99/month), not 1,500.** Stripe is the source of truth (Free 250/month, Pro 3,000/month). Updated `SKILL.md`, the session-start quota nudge (the Pro nudge now quotes the relay-returned limit instead of a hard-coded number) and the `totalreclaw_upgrade` tool description. Text only; no behaviour change.
+
 ## [2.5.3] — 2026-11-02
 
 ### Added
