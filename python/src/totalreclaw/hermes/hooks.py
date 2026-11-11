@@ -513,13 +513,13 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
                 pct = int(used / limit * 100)
                 if tier == "pro":
                     nudge = (
-                        "Pro cap is 1,500 memories/month. The quota resets on "
-                        "the 1st of next month."
+                        f"Pro cap is {limit:,} memories/month. The quota "
+                        "resets on the 1st of next month."
                     )
                 else:
                     nudge = (
                         "Free cap is 250 memories/month. Upgrade to Pro for "
-                        "1,500 memories/month — run "
+                        "3,000 memories/month — run "
                         "totalreclaw_upgrade or visit "
                         "https://totalreclaw.xyz/pricing."
                     )
