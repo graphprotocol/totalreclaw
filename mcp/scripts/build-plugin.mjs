@@ -19,9 +19,9 @@
  * On failure: one line `build-plugin: <reason>` on stderr and a non-zero exit.
  */
 import {
-  cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
+  cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
 
@@ -32,6 +32,26 @@ const MARKER = '.totalreclaw-build';
 
 function fail(msg) { throw new Error(msg); }
 
+/**
+ * Real path of `p`, which may not exist yet: realpath of the nearest existing
+ * ancestor plus the remaining segments. Defeats symlinked or /var vs
+ * /private/var spellings so the overlap check compares like with like.
+ */
+function realish(p) {
+  let cur = resolve(p);
+  const rest = [];
+  for (;;) {
+    try {
+      return rest.length ? join(realpathSync(cur), ...rest.reverse()) : realpathSync(cur);
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return resolve(p);
+      rest.push(basename(cur));
+      cur = parent;
+    }
+  }
+}
+
 function contains(a, b) { return b === a || b.startsWith(a.endsWith(sep) ? a : a + sep); }
 
 /**
@@ -40,8 +60,10 @@ function contains(a, b) { return b === a || b.startsWith(a.endsWith(sep) ? a : a
  * carries the marker this script wrote on a previous build.
  */
 function checkDest(dest) {
-  if (contains(PLUGIN_SRC, dest) || contains(dest, PLUGIN_SRC)) {
-    fail(`refusing: output ${dest} overlaps the plugin source ${PLUGIN_SRC}`);
+  const realSrc = realish(PLUGIN_SRC);
+  const realDest = realish(dest);
+  if (contains(realSrc, realDest) || contains(realDest, realSrc)) {
+    fail(`refusing: output ${dest} (real path ${realDest}) overlaps the plugin source ${realSrc}`);
   }
   if (!existsSync(dest)) return;
   const st = lstatSync(dest);
