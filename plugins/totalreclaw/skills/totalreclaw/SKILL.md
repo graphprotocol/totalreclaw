@@ -28,6 +28,9 @@ Never store secrets: passwords, API keys, tokens, private keys, or a recovery ph
 
 When the user says "forget X", use `totalreclaw_forget`. For pinning, retyping or re-scoping a memory, use `totalreclaw_pin`, `totalreclaw_retype` and `totalreclaw_set_scope`.
 
+- Scope requests ("file that under work", "put that in my personal memories", "that's a work thing", "categorize as health") are not searches: call `totalreclaw_set_scope` on the fact just discussed. Call `totalreclaw_recall` first only if you don't already have its id.
+- Type corrections ("that's a directive, not a preference", "make that a decision") likewise call `totalreclaw_retype` on that fact, not recall.
+
 ## Set up an account
 
 If a tool says the account is not set up, or `totalreclaw_status` shows it is not onboarded:
