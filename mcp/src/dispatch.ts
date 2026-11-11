@@ -25,6 +25,7 @@
 
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolResponse } from './tools/types.js';
+import { shortErrorMessage } from './tools/write-errors.js';
 import {
   rememberToolDefinition,
   recallToolDefinition,
@@ -225,7 +226,7 @@ export function genericErrorResponse(error: unknown): ToolResponse {
   return {
     content: [{
       type: 'text',
-      text: JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      text: JSON.stringify({ error: shortErrorMessage(error) }),
     }],
     isError: true,
   };

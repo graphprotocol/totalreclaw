@@ -22,6 +22,7 @@ import {
   type MemoryVolatility,
 } from '../v1-types.js';
 import { buildV1ClaimBlob } from '../claims-helper.js';
+import { rethrowIfQuota, shortErrorMessage } from './write-errors.js';
 
 // ── Tool definition ──────────────────────────────────────────────────────────
 
@@ -427,11 +428,12 @@ export async function executeMetadataOp<T>(
       ...(indexed ? {} : { partial: true }),
     };
   } catch (err) {
+    rethrowIfQuota(err);
     return {
       success: false,
       memory_id: memoryId,
       previous_value: String(current),
-      error: `Failed to submit batch: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Failed to submit batch: ${shortErrorMessage(err)}`,
     };
   }
 }

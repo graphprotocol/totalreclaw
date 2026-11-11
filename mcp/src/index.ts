@@ -23,6 +23,7 @@ import {
 } from './tools/index.js';
 import { getLastBillingResponse } from './tools/status.js';
 import type { ToolContext, ToolResponse } from './tools/types.js';
+import { isQuotaExceededError, rethrowIfQuota, shortErrorMessage } from './tools/write-errors.js';
 import {
   findNearDuplicate,
   shouldSupersede,
@@ -1197,7 +1198,8 @@ async function handleRememberSubgraph(
       }
       console.error(`Batch submitted ${batchResult.batchSize} payloads in 1 UserOp (tx=${batchResult.txHash.slice(0, 10)}...)`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
+      rethrowIfQuota(error);
+      const message = shortErrorMessage(error);
       batchError = message;
       for (const meta of pendingFactMeta) {
         results.push({ success: false, fact_id: meta.factId, tx_hash: undefined, error: message });
@@ -1302,8 +1304,10 @@ async function handleDebriefSubgraph(
         content: [{ type: 'text', text: JSON.stringify({ success: batchResult.success, stored: batchResult.success ? 1 : 0, fact_id: factId, tx_hash: batchResult.txHash, crystal: true }) }],
       };
     } catch (error) {
-      console.error(`Crystal debrief failed: ${error instanceof Error ? error.message : String(error)}`);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: String(error) }) }] };
+      rethrowIfQuota(error);
+      const message = shortErrorMessage(error);
+      console.error(`Crystal debrief failed: ${message}`);
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: message }) }] };
     }
   }
 
@@ -1378,7 +1382,8 @@ async function handleDebriefSubgraph(
       }
       console.error(`Debrief: submitted ${batchResult.batchSize} items (tx=${batchResult.txHash.slice(0, 10)}...)`);
     } catch (error) {
-      batchError = error instanceof Error ? error.message : String(error);
+      rethrowIfQuota(error);
+      batchError = shortErrorMessage(error);
       for (const meta of pendingFactMeta) {
         results.push({ success: false, fact_id: meta.factId, error: batchError });
       }
@@ -1679,7 +1684,8 @@ async function handleForgetSubgraph(
       }],
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
+    rethrowIfQuota(error);
+    const message = shortErrorMessage(error);
     return {
       content: [{
         type: 'text',
@@ -1806,17 +1812,6 @@ function isAuthError(error: unknown): boolean {
 }
 
 // ── Quota error helper ──────────────────────────────────────────────────────
-
-/**
- * Check if an error is a quota exceeded error (HTTP 403 with error_code: QUOTA_EXCEEDED).
- */
-function isQuotaExceededError(error: unknown): boolean {
-  if (error instanceof Error) {
-    const msg = error.message.toLowerCase();
-    return msg.includes('quota_exceeded') || msg.includes('quota exceeded');
-  }
-  return false;
-}
 
 function quotaExceededResponse(): { content: Array<{ type: string; text: string }>; isError: true } {
   return {

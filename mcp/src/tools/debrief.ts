@@ -11,6 +11,7 @@
 
 import { TotalReclaw, FactMetadata } from '@totalreclaw/client';
 import type { ToolContext } from './types.js';
+import { rethrowIfQuota, shortErrorMessage } from './write-errors.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -254,7 +255,8 @@ export async function handleDebrief(
         content: [{ type: 'text', text: JSON.stringify({ success: true, stored: 1, fact_id: factId, crystal: true }) }],
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
+      rethrowIfQuota(error);
+      const message = shortErrorMessage(error);
       return {
         content: [{ type: 'text', text: JSON.stringify({ success: false, error: message }) }],
       };
@@ -288,7 +290,8 @@ export async function handleDebrief(
       results.push({ success: true, fact_id: factId });
       stored++;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
+      rethrowIfQuota(error);
+      const message = shortErrorMessage(error);
       results.push({ success: false, fact_id: '' });
       console.error(`Failed to store debrief item: ${message}`);
     }
