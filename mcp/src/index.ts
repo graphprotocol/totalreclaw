@@ -25,7 +25,7 @@ import { getLastBillingResponse } from './tools/status.js';
 import type { ToolContext, ToolResponse } from './tools/types.js';
 import { isQuotaExceededError, rethrowIfQuota, shortErrorMessage, logWriteError } from './tools/write-errors.js';
 import { pickMemoryId } from './tools/helpers.js';
-import { classifyForgetTarget, forgetNotFoundResponse } from './tools/forget.js';
+import { classifyForgetTarget, forgetNotFoundResponse, forgetLookupFailedResponse } from './tools/forget.js';
 import {
   findNearDuplicate,
   shouldSupersede,
@@ -91,7 +91,7 @@ import {
 } from './subgraph/credentials.js';
 import type { UnusableCredentials } from './dispatch.js';
 import { bundleVaultToBuffers, redactedBundleSummary, type DerivedBundleV1 } from './subgraph/bundle.js';
-import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, fetchFactById } from './subgraph/search.js';
+import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, fetchFactById, fetchFactForForget } from './subgraph/search.js';
 import { confirmIndexed } from './subgraph/confirm-indexed.js';
 import {
   decodeEmbeddingUniversal,
@@ -1636,14 +1636,20 @@ async function handleForgetSubgraph(
   try {
     // Existence check first: never tombstone (or report deleted_count: 1 for)
     // an id that isn't an active fact of this owner.
-    const lookup = await classifyForgetTarget(
-      () => fetchFactById(
-        state.smartAccountAddress,
-        factId,
-        state.serverUrl,
-        Buffer.from(state.authKey).toString('hex'),
-      ),
-    );
+    let lookup: 'exists' | 'missing' | 'inactive';
+    try {
+      lookup = await classifyForgetTarget(
+        () => fetchFactForForget(
+          state.smartAccountAddress,
+          factId,
+          state.serverUrl,
+          Buffer.from(state.authKey).toString('hex'),
+        ),
+      );
+    } catch (lookupErr) {
+      logWriteError('Forget existence check failed', lookupErr);
+      return forgetLookupFailedResponse();
+    }
     if (lookup !== 'exists') return forgetNotFoundResponse(factId, lookup);
 
     // Build a tombstone payload: same fact ID with isActive=false

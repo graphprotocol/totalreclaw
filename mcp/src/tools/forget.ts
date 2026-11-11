@@ -154,9 +154,28 @@ export function forgetNotFoundResponse(
         error:
           why === 'inactive'
             ? `Memory ${factId} was already forgotten; nothing was changed.`
-            : `Memory ${factId} not found; nothing was deleted. Use an id from a totalreclaw_recall result.`,
+            : `Memory ${factId} not found; nothing was deleted. Use an id from a totalreclaw_recall result. If it was saved in the last few seconds, wait about 20 seconds and retry (indexing lag).`,
         mode: 'subgraph',
       }),
     }],
+  };
+}
+
+/** The existence check itself failed: nothing was deleted, no tombstone was written. */
+export function forgetLookupFailedResponse(): {
+  content: Array<{ type: string; text: string }>;
+  isError: true;
+} {
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        deleted_count: 0,
+        fact_ids: [],
+        error: "Couldn't check whether that memory exists right now; nothing was deleted. Try again.",
+        mode: 'subgraph',
+      }),
+    }],
+    isError: true,
   };
 }

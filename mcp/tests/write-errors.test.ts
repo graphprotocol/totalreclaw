@@ -360,3 +360,70 @@ describe('README leads with pairing (review finding 3)', () => {
     expect(md).toMatch(/plain text in a config file/);
   });
 });
+
+describe('forget lookup tells exists / missing / inactive / failed apart (review, medium)', () => {
+  const { fetchFactForForget } = require('../src/subgraph/search');
+  const { classifyForgetTarget, forgetNotFoundResponse, forgetLookupFailedResponse } = require('../src/tools/forget');
+  const OWNER = '0xAbC0000000000000000000000000000000000001';
+  const realFetch = global.fetch;
+  afterEach(() => { global.fetch = realFetch; });
+  const mockFetch = (impl: () => Promise<unknown>) => { global.fetch = jest.fn(impl as never) as never; };
+  const ok = (body: unknown) => async () => ({ ok: true, status: 200, json: async () => body });
+  const run = () => classifyForgetTarget(() => fetchFactForForget(OWNER, 'id1', 'https://relay.invalid', 'aa'));
+
+  test('(a) active fact of this owner => exists', async () => {
+    mockFetch(ok({ data: { fact: { id: 'id1', owner: OWNER.toLowerCase(), isActive: true } } }));
+    expect(await run()).toBe('exists');
+  });
+  test('(b) subgraph answers fact: null => missing', async () => {
+    mockFetch(ok({ data: { fact: null } }));
+    expect(await run()).toBe('missing');
+  });
+  test('fact owned by someone else => missing', async () => {
+    mockFetch(ok({ data: { fact: { id: 'id1', owner: '0xdead', isActive: true } } }));
+    expect(await run()).toBe('missing');
+  });
+  test('inactive fact is visible => inactive ("already forgotten")', async () => {
+    mockFetch(ok({ data: { fact: { id: 'id1', owner: OWNER, isActive: false } } }));
+    expect(await run()).toBe('inactive');
+    const body = JSON.parse(forgetNotFoundResponse('id1', 'inactive').content[0].text);
+    expect(body.error).toMatch(/already forgotten/);
+    expect(body.deleted_count).toBe(0);
+  });
+  test.each([403, 429, 503])('(c) HTTP %i is a failed lookup, not "missing"', async (status) => {
+    mockFetch(async () => ({ ok: false, status, json: async () => ({}) }));
+    await expect(run()).rejects.toThrow(/HTTP/);
+  });
+  test('(c) network error is a failed lookup', async () => {
+    mockFetch(async () => { throw new Error('ECONNRESET'); });
+    await expect(run()).rejects.toThrow('ECONNRESET');
+  });
+  test('(c) GraphQL error / malformed answer is a failed lookup', async () => {
+    mockFetch(ok({ errors: [{ message: 'boom' }] }));
+    await expect(run()).rejects.toThrow(/GraphQL/);
+    mockFetch(ok({}));
+    await expect(run()).rejects.toThrow(/malformed/);
+  });
+  test('(c) failed-lookup response: isError, deleted_count 0, one line, no tombstone fields', () => {
+    const r = forgetLookupFailedResponse();
+    expect(r.isError).toBe(true);
+    const body = JSON.parse(r.content[0].text);
+    expect(body.deleted_count).toBe(0);
+    expect(body.tx_hash).toBeUndefined();
+    expect(body.error).not.toContain('\n');
+    expect(body.error).toMatch(/nothing was deleted/);
+    expect(body.error).toMatch(/Try again/);
+  });
+  test('not-found message carries the indexing-lag hint', () => {
+    const body = JSON.parse(forgetNotFoundResponse('id1', 'missing').content[0].text);
+    expect(body.error).toMatch(/wait about 20 seconds and retry/);
+  });
+  test('managed forget uses the error-surfacing lookup and returns the failure response', () => {
+    const fs = require('node:fs'); const path = require('node:path');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.ts'), 'utf8');
+    const f = src.slice(src.indexOf('async function handleForgetSubgraph'));
+    expect(f.slice(0, 2500)).toContain('fetchFactForForget(');
+    expect(f.slice(0, 2500)).toContain('forgetLookupFailedResponse()');
+    expect(f.indexOf('forgetLookupFailedResponse()')).toBeLessThan(f.indexOf('encodeFactProtobuf(tombstonePayload)'));
+  });
+});
