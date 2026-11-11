@@ -169,7 +169,7 @@ On-chain writes are visible only after the subgraph indexes them. Empirically: *
 | Tier | Anchor | Cost | Persistence |
 |---|---|---|---|
 | **Free** | Gnosis mainnet (chain 100) | $0 | Permanent, permissionless — 250 memories/month |
-| **Pro** | Gnosis mainnet (chain 100) | subscription | Permanent, permissionless — 1,500 memories/month + LLM-guided dedup |
+| **Pro** | Gnosis mainnet (chain 100) | subscription | Permanent, permissionless — 3,000 memories/month + LLM-guided dedup |
 
 Both tiers use the same `EventfulDataEdge` contract pattern (single `fallback()` emitting `Log(msg.data)`), the same ERC-4337 Smart Account derivation, and the same paymaster-sponsored UserOps. Tier (free vs pro) is a quota + feature flag the relay enforces; it is not a chain choice — both tiers write to the same Gnosis contract, so a free→pro upgrade needs zero data migration.
 
