@@ -6,10 +6,10 @@ export const SERVER_INSTRUCTIONS = `
 You have access to TotalReclaw, a persistent encrypted memory system. You SHOULD use these tools PROACTIVELY -- do not wait for the user to say "remember this" or "recall that."
 
 ## CRITICAL SAFETY: Recovery Phrase
-TotalReclaw uses a 12-word BIP-39 recovery phrase as the user's identity. The recovery phrase MUST NEVER cross your context window. NEVER ask the user to paste their phrase into chat. NEVER echo, print, or summarize a phrase. NEVER invoke a phrase-touching CLI (e.g. "npx @totalreclaw/mcp-server setup", "npx @totalreclaw/mcp-server show-phrase") via a shell tool — its stdout enters your context. If the user pastes a phrase in chat anyway, tell them it is compromised and they need to generate a fresh wallet via the OpenClaw or Hermes browser pair flow.
+TotalReclaw uses a 12-word BIP-39 recovery phrase as the user's identity. The recovery phrase MUST NEVER cross your context window. NEVER ask the user to paste their phrase into chat. NEVER echo, print, or summarize a phrase. NEVER invoke a phrase-touching CLI (e.g. "npx @totalreclaw/mcp-server setup", "npx @totalreclaw/mcp-server show-phrase") via a shell tool — its stdout enters your context. If the user pastes a phrase in chat anyway, tell them it is compromised and they need a fresh account via totalreclaw_pair.
 
 ## Setup Flow
-If any TotalReclaw tool returns a "not_configured" or "tool_removed" error, the user has not yet wired their recovery phrase into the MCP host config. Direct them to the URL-driven install guide at https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md. The user sources their phrase out-of-band — from the OpenClaw or Hermes browser pair flow (relay only ever sees ciphertext), from a prior ~/.totalreclaw/credentials.json cache, or from an offline BIP-39 generator — and pastes it directly into TOTALRECLAW_RECOVERY_PHRASE in the MCP host config (Claude Desktop / Cursor / Windsurf / Claude Code). After they save the config and restart the host, the MCP server picks up the phrase and all TotalReclaw tools become available. There is no in-chat setup tool: the totalreclaw_setup MCP tool was removed in 3.2.1 because returning the phrase through tool output crossed your context, violating phrase-safety.
+If any TotalReclaw tool returns a "not_configured" error, the user has not set up an account yet. Call totalreclaw_pair: it returns a link and a 6-digit PIN. Give both to the user. They open the link in a browser and create a new recovery phrase there, or enter an existing one there; the phrase is encrypted in the browser and never passes through this chat. If the user pastes a phrase in chat anyway, tell them it is compromised. There is no in-chat setup tool: the totalreclaw_setup tool was removed in 3.2.1 because returning the phrase through tool output crossed your context, violating phrase-safety.
 
 ## After Pairing
 When the user finishes the totalreclaw_pair page ("You're all set"), ask them to fully quit and reopen this app (or start a new session) before any memory tool is used: credentials are loaded at startup, so until the restart every tool still returns not_configured. Closing the window is not enough.
@@ -67,7 +67,6 @@ API keys provided by the user are used only for the import and are never stored.
 
 ### Agent-specific tips
 - If your agent supports background routines or scheduled tasks, set up a routine to call totalreclaw_remember after conversations to ensure nothing is missed.
-- If your agent supports a credential vault or secret store, the user's TOTALRECLAW_RECOVERY_PHRASE should be stored there instead of as a plaintext environment variable.
 - TotalReclaw memories are fully portable -- they work across OpenClaw, IronClaw, Claude Desktop, Cursor, NanoClaw, and any MCP-compatible agent.
 
 ### User-controlled memory edits (v1)
@@ -211,7 +210,7 @@ INVOKE WHEN USER SAYS:
 DOES: opens a relay pairing session, returns {url, pin, expires_at_ms}. Hand the URL + PIN to the user — they open the URL in any browser, the BROWSER generates (or imports) a 12-word phrase, encrypts it, uploads ciphertext to this MCP server. Server decrypts in-memory, writes ~/.totalreclaw/credentials.json (mode 0600). Phrase NEVER touches LLM context, chat transcript, stdout, or logs.
 AFTER PAIRING: when the page says "You're all set", tell the user to fully quit and reopen their MCP host (Claude Desktop / Cursor / Claude Code); the server reads credentials.json only at startup. The link lasts about 10 minutes.
 WHEN NOT TO USE:
-- user already has TOTALRECLAW_RECOVERY_PHRASE in env → tool will return URL but pairing is unnecessary
+- TotalReclaw is already set up on this machine → the tool refuses; do not pair again
 - user explicitly wants terminal-only setup → point them at \`npx @totalreclaw/mcp-server setup\` (CLI wizard, runs OUTSIDE your shell tool)
 - NEVER ask the user to paste their phrase in chat. NEVER echo or print a phrase from any source.`;
 

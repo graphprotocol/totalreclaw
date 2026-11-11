@@ -2087,7 +2087,7 @@ async function main(): Promise<void> {
       );
     } else {
       console.error(
-        'TotalReclaw MCP server started (unconfigured — set TOTALRECLAW_RECOVERY_PHRASE in the MCP host config; see docs/guides/claude-code-setup.md)',
+        'TotalReclaw MCP server started (unconfigured — ask the assistant to run totalreclaw_pair to set up an account)',
       );
     }
   } else {

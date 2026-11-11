@@ -244,3 +244,48 @@ describe('restart guidance after pairing', () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/After Pairing[\s\S]*fully quit and reopen[\s\S]*new session/);
   });
 });
+
+describe('phrase-rail wording: point users to totalreclaw_pair, never to env/config', () => {
+  const { notConfiguredResponse, setupRemovedResponse, createCallToolHandler: mk, TOOL_MANIFEST: manifest } = require('../src/dispatch');
+  const { SERVER_INSTRUCTIONS, PAIR_TOOL_DESCRIPTION } = require('../src/prompts');
+  const bad = /RECOVERY_PHRASE|host config|MCP host config|environment variable/i;
+
+  test('server instructions and pair description carry no env/config phrase guidance', () => {
+    expect(SERVER_INSTRUCTIONS).not.toMatch(bad);
+    expect(PAIR_TOOL_DESCRIPTION).not.toMatch(bad);
+    expect(SERVER_INSTRUCTIONS).toMatch(/Call totalreclaw_pair[\s\S]*link[\s\S]*PIN/);
+    expect(SERVER_INSTRUCTIONS).toMatch(/in a browser|in the browser|there/);
+  });
+
+  test('not_configured and tool_removed envelopes name totalreclaw_pair', () => {
+    for (const r of [notConfiguredResponse(), setupRemovedResponse()]) {
+      const text = r.content[0].text as string;
+      expect(text).toContain('totalreclaw_pair');
+      expect(text).not.toMatch(bad);
+    }
+  });
+
+  test('every tool except support/pair/setup returns a not_configured error naming totalreclaw_pair when unconfigured', async () => {
+    const call = mk({
+      getMode: () => 'unconfigured',
+      handleSupport: async () => ({ content: [] }),
+      handlePair: async () => ({ content: [] }),
+      common: {},
+      resolveBundle: async () => ({}),
+      isQuotaExceededError: () => false,
+      quotaExceededResponse: () => ({ content: [] }),
+      isAuthError: () => false,
+      authHintResponse: () => ({ content: [] }),
+      onMutate: () => {},
+    });
+    const names = (manifest as Array<{ name: string }>).map((t) => t.name)
+      .filter((n) => n !== 'totalreclaw_support' && n !== 'totalreclaw_pair');
+    expect(names.length).toBeGreaterThan(10);
+    for (const n of names) {
+      const res = await call(n, {});
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain('not_configured');
+      expect(res.content[0].text).toContain('totalreclaw_pair');
+    }
+  });
+});
