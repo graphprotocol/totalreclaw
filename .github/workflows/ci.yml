@@ -106,6 +106,24 @@ jobs:
       - name: Run phrase-safety dist scan (compiled JS payloads)
         run: bash scripts/check-phrase-safety-dist.sh
 
+  url-binding-guard:
+    # Self-test for scripts/check-url-binding.cjs, the publish-time relay-URL
+    # guard for NanoClaw, @totalreclaw/client, @totalreclaw/core, the crates
+    # and the PyPI wheels (internal#706). It also runs the real profiles
+    # against the source trees whose layout matches the shipped artifact, so
+    # a renamed or rebound default-URL site fails here, not at publish time.
+    # No install; runs in about a second.
+    name: URL-binding guard tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Run guard tests
+        run: node --test scripts/check-url-binding.test.cjs
+
   client-tests:
     name: Client Tests (TypeScript)
     needs: changes
