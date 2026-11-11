@@ -17,7 +17,12 @@ export { statusToolDefinition, handleStatus } from './status.js';
 export { upgradeToolDefinition, handleUpgrade } from './upgrade.js';
 export { debriefToolDefinition, handleDebrief, parseDebriefResponse, DEBRIEF_SYSTEM_PROMPT, type DebriefItem } from './debrief.js';
 export { supportToolDefinition, handleSupport } from './support.js';
-export { accountToolDefinition, handleAccount } from './account.js';
+export {
+  accountToolDefinition,
+  handleAccount,
+  accountContextFromState,
+  accountUnavailableResponse,
+} from './account.js';
 export {
   pairToolDefinition,
   handlePair,

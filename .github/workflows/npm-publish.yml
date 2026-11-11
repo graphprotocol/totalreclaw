@@ -10,8 +10,10 @@ name: Publish npm packages
 # (the PR that introduced this comment) for full write-up.
 #
 # `release-type` input was added 2026-04-20 for the RC (release-candidate)
-# publish flow — see docs/guides/release-process.md. `stable` keeps the
-# default `latest` dist-tag + version-as-in-package.json. `rc` appends
+# publish flow — see docs/guides/release-process.md. Since 2026-11-10 the
+# input defaults to `rc`, so a dispatch that omits it can't ship a stable
+# by accident; a stable needs `-f release-type=stable`. `stable` keeps the
+# `latest` dist-tag + version-as-in-package.json. `rc` appends
 # `-rc.<N>` to the version, publishes to the `rc` dist-tag, and does NOT
 # touch the checked-in package.json (version bump is in-workflow only).
 
@@ -34,9 +36,9 @@ on:
         required: false
         type: choice
         options:
-          - stable
           - rc
-        default: stable
+          - stable
+        default: rc
       rc-number:
         description: 'RC increment (1, 2, 3...) — only used when release-type=rc'
         required: false
@@ -154,10 +156,25 @@ jobs:
         # at all: `npm view @totalreclaw/core readme` returned "No README
         # data found", confirmed by unpacking a published tarball — only
         # nodejs/README.md + web/README.md existed, nothing at the
-        # tarball root. Ship the repo's real, hand-maintained README
-        # instead (same file crates.io + PyPI already use via
-        # Cargo.toml's `readme = "README.md"`).
-        run: cp rust/totalreclaw-core/README.md rust/totalreclaw-core/pkg/README.md
+        # tarball root.
+        #
+        # Ship README.npm.md (written for npm/JS readers: entry points,
+        # Node + browser usage, who should install the agent integrations
+        # instead) rather than the crate README.md, which crates.io + PyPI
+        # use via Cargo.toml's `readme = "README.md"` and which is written
+        # for Rust readers.
+        #
+        # Also delete the wasm-pack copies nested under nodejs/ and web/
+        # so the root file is the ONLY README in the tarball. npm sorts
+        # tarball entries by extension then basename, so a nested
+        # nodejs/README.md lands BEFORE the root README.md. The one other
+        # package of ours with a nested README (skill-nanoclaw's
+        # mcp/README.md) also renders no README on npmjs.com despite
+        # shipping a root README.md, while every package with a single
+        # root README renders fine. Keep one README per tarball.
+        run: |
+          cp rust/totalreclaw-core/README.npm.md rust/totalreclaw-core/pkg/README.md
+          rm -f rust/totalreclaw-core/pkg/nodejs/README.md rust/totalreclaw-core/pkg/web/README.md
 
       - name: Apply RC version suffix (rc mode only)
         if: inputs.release-type == 'rc'
@@ -174,6 +191,13 @@ jobs:
           fs.writeFileSync('./package.json', JSON.stringify(p, null, 2) + '\n');
           console.log('RC version:', p.version);
           "
+
+      # Environment-binding guard (internal#706). Same contract as the plugin,
+      # MCP and Python guards: rc AND stable default to production. Core binds
+      # no relay URL at all (callers pass one), so this fails on ANY relay URL
+      # in the composed package, and on the staging host inside the .wasm.
+      - name: Stable / RC URL guard (core binds no relay URL)
+        run: node scripts/check-url-binding.cjs --profile=core-npm --root=rust/totalreclaw-core/pkg --release-type=${{ inputs.release-type }}
 
       - name: Guard — refuse to republish an existing version
         if: inputs.dry-run == false
@@ -272,6 +296,17 @@ jobs:
           console.log('RC version:', p.version);
           "
 
+      # Environment-binding guard (internal#706). Scans the packed tarball,
+      # i.e. exactly the files npm would publish. The client has no default
+      # relay URL (callers pass `serverUrl`), so ANY relay URL fails, staging
+      # or production.
+      - name: Stable / RC URL guard (client binds no relay URL)
+        run: |
+          PACK_DIR=$(mktemp -d)
+          (cd client && npm pack --pack-destination "$PACK_DIR" >/dev/null)
+          tar -xzf "$PACK_DIR"/*.tgz -C "$PACK_DIR"
+          node scripts/check-url-binding.cjs --profile=client --root="$PACK_DIR/package" --release-type=${{ inputs.release-type }}
+
       - name: Guard — refuse to republish an existing version
         if: inputs.dry-run == false
         # #456: an omitted `rc-number` silently defaulted to 1, republished
@@ -350,6 +385,16 @@ jobs:
           console.log('RC version:', p.version);
           "
 
+      # Environment-binding guard (p-diogo/totalreclaw-internal#673). Same
+      # contract as the plugin (skill/scripts/check-url-binding.mjs) and the
+      # Python wheel guard since the F flip (#198): rc AND stable default to
+      # https://api.totalreclaw.xyz, staging is opt-in via
+      # TOTALRECLAW_SERVER_URL. Fails on any staging default literal in dist/
+      # or a canonical default site that lost the production literal.
+      # `prepublishOnly` runs it again at `npm publish`.
+      - name: Stable / RC URL guard (production default for both)
+        run: cd mcp && node scripts/check-url-binding.cjs --release-type=${{ inputs.release-type }}
+
       - name: Guard — refuse to republish an existing version
         if: inputs.dry-run == false
         # #456: an omitted `rc-number` silently defaulted to 1, republished
@@ -396,6 +441,10 @@ jobs:
           fi
           echo "Publishing with dist-tag: $TAG (OIDC trusted publishing)"
           npm publish --access public --tag "$TAG" --provenance
+        env:
+          # Read by `prepublishOnly` -> scripts/check-url-binding.cjs. Not an
+          # auth token: OIDC publish is tokenless (no NODE_AUTH_TOKEN).
+          TOTALRECLAW_RELEASE_TYPE: ${{ inputs.release-type }}
 
       - name: Report version
         run: |
@@ -443,6 +492,17 @@ jobs:
           fs.writeFileSync('./package.json', JSON.stringify(p, null, 2) + '\n');
           console.log('RC version:', p.version);
           "
+
+      # Environment-binding guard (internal#706). Scans the packed tarball,
+      # i.e. exactly the files npm would publish: no quoted staging URL in
+      # dist/ or mcp/, and both default-URL sites (dist/billing.js,
+      # mcp/nanoclaw-agent-runner.ts) still fall back to production.
+      - name: Stable / RC URL guard (production default for both)
+        run: |
+          PACK_DIR=$(mktemp -d)
+          (cd skill-nanoclaw && npm pack --pack-destination "$PACK_DIR" >/dev/null)
+          tar -xzf "$PACK_DIR"/*.tgz -C "$PACK_DIR"
+          node scripts/check-url-binding.cjs --profile=nanoclaw --root="$PACK_DIR/package" --release-type=${{ inputs.release-type }}
 
       - name: Guard — refuse to republish an existing version
         if: inputs.dry-run == false

@@ -30,7 +30,7 @@ After install, ask your agent something like *"set up TotalReclaw"* or just *"re
 2. **Generate or paste a 12-word recovery phrase** — the browser handles this end-to-end encrypted, so the phrase never enters the chat or the relay. Pick *Set up* for a fresh phrase, or *Log in* if you already have one from another device.
 3. **Confirm.** The browser will tell you when you are all set.
 
-You are then on the free tier (250 memories per month on Gnosis mainnet, E2E encrypted, no credit card required). Pro tier raises the cap to 1,500 memories per month — pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>. Self-hosting and custom relays are also documented at that link.
+You are then on the free tier (250 memories per month on Gnosis mainnet, E2E encrypted, no credit card required). Pro tier raises the cap to 3,000 memories per month — pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>. Self-hosting and custom relays are also documented at that link.
 
 ## Write down the recovery phrase
 

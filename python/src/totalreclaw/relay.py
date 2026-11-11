@@ -45,8 +45,9 @@ logger = logging.getLogger(__name__)
 # wheels default to PRODUCTION. The publish-time rewrite that previously
 # differentiated stable vs. RC defaults is removed. Staging access is
 # opt-in via TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz
-# at runtime. A pre-publish CI guard fails the build if any wheel
-# contains ``api-staging`` (stranded staging defaults are forbidden).
+# at runtime. A pre-publish CI guard (scripts/check-url-binding.cjs,
+# profile ``python-client``) fails the build unless this line binds
+# production, and on any quoted staging URL in the wheel.
 #
 # This is THE canonical default-URL site for the Python package. Every
 # other module that resolves a default URL imports

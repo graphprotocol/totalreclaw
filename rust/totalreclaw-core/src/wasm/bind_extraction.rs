@@ -58,6 +58,38 @@ pub fn wasm_build_debrief_prompt(stored_facts_json: &str) -> Result<String, JsEr
     Ok(debrief::build_debrief_prompt(&refs))
 }
 
+/// Render the "Existing memories" block appended to the extraction user
+/// prompt (PRD-04 DEP-3).
+///
+/// Each argument is a JSON array of `{ id: string, text: string }` objects
+/// (`"null"` = empty section; extra fields such as `embedding` are ignored).
+/// Pinned first, then topical, then recent; dedupe by fact id; at most `cap`
+/// lines; returns `""` when no line survives. Malformed JSON → `JsError`.
+///
+/// `cap` defaults to 30 when omitted (`undefined` / `null`). It must be a
+/// non-negative integer: a negative, fractional, `NaN` or infinite value
+/// throws instead of being coerced (a plain `usize` parameter would turn `-1`
+/// into "no cap" and `NaN` into an empty block).
+#[wasm_bindgen(js_name = "buildDedupContext")]
+pub fn wasm_build_dedup_context(
+    topical_json: &str,
+    pinned_json: &str,
+    recent_json: &str,
+    cap: Option<f64>,
+) -> Result<String, JsError> {
+    let cap = match cap {
+        None => crate::dedup_context::DEFAULT_DEDUP_CONTEXT_CAP,
+        Some(c) if c.is_finite() && c >= 0.0 && c.fract() == 0.0 => c as usize,
+        Some(c) => {
+            return Err(JsError::new(&format!(
+                "buildDedupContext: cap must be a non-negative integer, got {c}"
+            )))
+        }
+    };
+    crate::dedup_context::build_dedup_context_json(topical_json, pinned_json, recent_json, cap)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // Constants (exposed as getter functions since wasm_bindgen doesn't support statics)
 // ---------------------------------------------------------------------------

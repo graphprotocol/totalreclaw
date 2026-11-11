@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Requires a core release with `pii_filter` (2.7.0). See `docs/guides/sensitive-data-filter.md`.
 
+### Fixed
+
+- **Pro tier copy is 3,000 memories/month ($3.99/month), not 1,500.** Stripe is the source of truth (Free 250/month, Pro 3,000/month). Updated `SKILL.md`, the session-start quota nudge (the Pro nudge now quotes the relay-returned limit instead of a hard-coded number) and the `totalreclaw_upgrade` tool description. Text only; no behaviour change.
+
 ## [2.5.3] — 2026-11-02
 
 ### Added

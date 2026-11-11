@@ -441,7 +441,7 @@ UPGRADE = {
         "it contains the checkout URL the user must open in their browser. "
         "Do NOT call this tool speculatively; only when the user has "
         "explicitly asked to upgrade, pay, or hit the quota limit. Pro "
-        "removes the free-write cap — 1,500 memories/month vs the free "
+        "removes the free-write cap — 3,000 memories/month vs the free "
         "tier's 250 — and adds LLM-guided dedup; encryption, ownership, "
         "and on-chain durability are identical across tiers."
     ),

@@ -1,9 +1,9 @@
 name: Publish to crates.io
 
+# Dispatch only. A `push: tags: ['v*']` trigger was removed 2026-11-10 (#706):
+# `v*` tags are plugin release tags, so it fired on plugin releases (RC tags
+# included) and tried to publish stable crates; all five such runs failed.
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       crate:
@@ -20,9 +20,9 @@ on:
         required: false
         type: choice
         options:
-          - stable
           - rc
-        default: stable
+          - stable
+        default: rc
       rc-number:
         description: 'RC increment (1, 2, 3...) — only used when release-type=rc'
         required: false
@@ -50,7 +50,6 @@ on:
 jobs:
   publish-core:
     if: >
-      github.event_name == 'push' ||
       inputs.crate == 'totalreclaw-core' ||
       inputs.crate == 'all'
     name: Publish totalreclaw-core
@@ -61,6 +60,10 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v5  # runs scripts/check-url-binding.cjs
+        with:
+          node-version: '22'
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -107,10 +110,18 @@ jobs:
       - name: Cargo package (dry-run sanity check)
         run: cd rust/totalreclaw-core && cargo package --allow-dirty
 
+      # Environment-binding guard (internal#706). Scans src/ of the .crate
+      # that `cargo package` just built, i.e. what crates.io would receive.
+      # Core binds no relay URL at all, so ANY relay URL fails.
+      - name: Stable / RC URL guard (core binds no relay URL)
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          OUT=$(mktemp -d)
+          tar -xzf "rust/totalreclaw-core/target/package/totalreclaw-core-$VERSION.crate" -C "$OUT"
+          node scripts/check-url-binding.cjs --profile=core-crate --root="$OUT/totalreclaw-core-$VERSION" --release-type=${{ inputs.release-type }}
+
       - name: Publish
-        if: >
-          github.event_name == 'push' ||
-          inputs.dry-run == false
+        if: inputs.dry-run == false
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         run: |
@@ -136,7 +147,6 @@ jobs:
       always() &&
       (needs.publish-core.result == 'success' || needs.publish-core.result == 'skipped') &&
       (
-        github.event_name == 'push' ||
         inputs.crate == 'totalreclaw-memory' ||
         inputs.crate == 'all'
       )
@@ -148,6 +158,10 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v5  # runs scripts/check-url-binding.cjs
+        with:
+          node-version: '22'
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -241,10 +255,19 @@ jobs:
       - name: Cargo package (dry-run sanity check)
         run: cd rust/totalreclaw-memory && cargo package --allow-dirty
 
+      # Environment-binding guard (internal#706). Scans src/ of the .crate
+      # that `cargo package` just built: no quoted staging URL, and
+      # DEFAULT_RELAY_URL in src/backend.rs still binds production. (The
+      # TOTALRECLAW_SERVER_URL env override is runtime-only and unaffected.)
+      - name: Stable / RC URL guard (production default for both)
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          OUT=$(mktemp -d)
+          tar -xzf "rust/totalreclaw-memory/target/package/totalreclaw-memory-$VERSION.crate" -C "$OUT"
+          node scripts/check-url-binding.cjs --profile=memory-crate --root="$OUT/totalreclaw-memory-$VERSION" --release-type=${{ inputs.release-type }}
+
       - name: Publish
-        if: >
-          github.event_name == 'push' ||
-          inputs.dry-run == false
+        if: inputs.dry-run == false
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         run: |
