@@ -642,6 +642,6 @@ export function pairInstructions(mode: 'generate' | 'import', minutesLeft: numbe
     phraseStep,
     `The link works for about ${minutesLeft} minutes, so there is time to write the phrase down carefully. If it expires, call totalreclaw_pair again for a new link.`,
     `The phrase is encrypted in the browser and sent to this MCP server. It never passes through this chat. Never ask the user to paste it here.`,
-    `When the page says "You're all set", tell the user to fully quit and reopen this app (Claude Desktop, Cursor, Claude Code or whichever app runs this server; closing the window is not enough). The memory tools start working after that restart; until then they return not_configured.`,
+    `When the page says "You're all set", ask the user to fully quit and reopen this app (Claude Desktop, Cursor, Claude Code or whichever app runs this server; closing the window is not enough), or to start a new session. The server reads the credentials only at startup, so the memory tools return not_configured until then.`,
   ];
 }

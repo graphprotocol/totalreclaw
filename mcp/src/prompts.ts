@@ -11,6 +11,9 @@ TotalReclaw uses a 12-word BIP-39 recovery phrase as the user's identity. The re
 ## Setup Flow
 If any TotalReclaw tool returns a "not_configured" or "tool_removed" error, the user has not yet wired their recovery phrase into the MCP host config. Direct them to the URL-driven install guide at https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md. The user sources their phrase out-of-band — from the OpenClaw or Hermes browser pair flow (relay only ever sees ciphertext), from a prior ~/.totalreclaw/credentials.json cache, or from an offline BIP-39 generator — and pastes it directly into TOTALRECLAW_RECOVERY_PHRASE in the MCP host config (Claude Desktop / Cursor / Windsurf / Claude Code). After they save the config and restart the host, the MCP server picks up the phrase and all TotalReclaw tools become available. There is no in-chat setup tool: the totalreclaw_setup MCP tool was removed in 3.2.1 because returning the phrase through tool output crossed your context, violating phrase-safety.
 
+## After Pairing
+When the user finishes the totalreclaw_pair page ("You're all set"), ask them to fully quit and reopen this app (or start a new session) before any memory tool is used: credentials are loaded at startup, so until the restart every tool still returns not_configured. Closing the window is not enough.
+
 ## CRITICAL: Automatic Memory Behaviors
 
 ### At Conversation Start

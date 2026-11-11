@@ -230,3 +230,17 @@ describe('#702 contract gaps', () => {
     expect(fg.slice(0, 600)).toContain('pickMemoryId(input)');
   });
 });
+
+describe('restart guidance after pairing', () => {
+  const { pairInstructions } = require('../src/tools/pair');
+  const { SERVER_INSTRUCTIONS } = require('../src/prompts');
+  test.each(['generate', 'import'])('pair completion text (%s) asks for a full quit/reopen or new session', (mode: string) => {
+    const text = pairInstructions(mode, 10).join('\n');
+    expect(text).toMatch(/ask the user to fully quit and reopen/);
+    expect(text).toMatch(/start a new session/);
+    expect(text).toMatch(/only at startup/);
+  });
+  test('server instructions say the same', () => {
+    expect(SERVER_INSTRUCTIONS).toMatch(/After Pairing[\s\S]*fully quit and reopen[\s\S]*new session/);
+  });
+});
