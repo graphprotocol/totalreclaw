@@ -1,0 +1,49 @@
+{
+  "manifest_version": "0.3",
+  "name": "totalreclaw",
+  "display_name": "TotalReclaw",
+  "version": "0.0.0-template",
+  "description": "End-to-end encrypted memory for Claude. Your memories are encrypted on this computer with a key only you hold, then stored across a decentralized network.",
+  "long_description": "TotalReclaw gives Claude a private, portable memory. Facts, preferences and decisions are encrypted on your computer before they leave it, so the server only ever sees ciphertext. Set up once with a recovery phrase you generate in your browser (never in chat), and the same memory follows you across Claude Desktop, Claude Code, Cursor and other MCP apps on this machine.",
+  "author": {
+    "name": "TotalReclaw Team",
+    "url": "https://totalreclaw.xyz"
+  },
+  "homepage": "https://totalreclaw.xyz",
+  "documentation": "https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md",
+  "support": "https://github.com/graphprotocol/totalreclaw/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/graphprotocol/totalreclaw.git"
+  },
+  "license": "MIT",
+  "keywords": ["memory", "e2ee", "encryption", "privacy", "agent-memory"],
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "server/dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/dist/index.js"],
+      "env": {
+        "TOTALRECLAW_SERVER_URL": "${user_config.server_url}"
+      }
+    }
+  },
+  "user_config": {
+    "server_url": {
+      "type": "string",
+      "title": "Server URL (advanced)",
+      "description": "Leave empty unless you run your own TotalReclaw server",
+      "required": false,
+      "default": ""
+    }
+  },
+  "tools": [],
+  "compatibility": {
+    "platforms": ["darwin", "win32"],
+    "runtimes": {
+      "node": ">=20"
+    }
+  }
+}

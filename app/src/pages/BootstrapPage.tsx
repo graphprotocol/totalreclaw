@@ -1,16 +1,23 @@
 import { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useCrypto, type EscrowChoice } from "../contexts/CryptoContext";
 import { isMnemonicValid } from "../lib/crypto";
-import { isPasskeyPrfAvailable } from "../lib/auth/prf-support";
+import { assessPasskeySupport, currentPasskeyPlatform, type PasskeySupport } from "../lib/auth/prf-support";
 import { PrfUnsupportedError } from "../lib/auth/passkey";
 import { download } from "../lib/download";
 import { escrowFilename } from "../lib/auth/escrow";
 import { recordFileBackup } from "../lib/vault/fileBackupRecord";
+import {
+  PasskeyAdvisoryNotice,
+  PasskeyEnrolFailedNotice,
+  PasskeyUnsupportedNotice,
+} from "../components/PasskeySupportNotice";
 
 type Step =
   | "checking"
   | "unsupported"
+  | "enrol-failed"
+  | "advisory"
   | "choose"
   | "show-phrase"
   | "confirm-backup"
@@ -38,19 +45,50 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * Router state the /unlock front door passes when the user picked "Create a
+ * vault", so this page skips its own create-or-restore choice.
+ */
+export type BootstrapIntent = { intent?: "create" };
+
+/**
+ * Where the browser check sends the user (support matrix §5.2): a hard block,
+ * before any phrase exists, whenever the browser can say for certain that PRF
+ * won't work (see `assessPasskeySupport`); an advisory, with "Continue
+ * anyway", when that's unknown and no built-in passkey was reported;
+ * otherwise straight on — to the new phrase if the front door already chose
+ * "Create a vault", else to the create-or-restore choice.
+ */
+export function stepAfterSupportCheck(
+  support: PasskeySupport,
+  wantsCreate: boolean,
+): "unsupported" | "advisory" | "create" | "choose" {
+  if (support === "blocked") return "unsupported";
+  if (support === "advisory") return "advisory";
+  return wantsCreate ? "create" : "choose";
+}
+
+/**
+ * Where a failed bootstrap sends the user. PRF missing at enrolment comes
+ * AFTER they wrote down a phrase, so it gets a recoverable screen (retry with
+ * another passkey, keep the phrase) rather than the bare pre-gate block.
+ */
+export function stepAfterBootstrapError(e: unknown): "enrol-failed" | "choose" {
+  return e instanceof PrfUnsupportedError ? "enrol-failed" : "choose";
+}
+
 export function BootstrapPage() {
   const { generatePhrase, bootstrap } = useCrypto();
   const navigate = useNavigate();
+  const location = useLocation();
+  const wantsCreate = (location.state as BootstrapIntent | null)?.intent === "create";
+  const platform = currentPasskeyPlatform();
   const [step, setStep] = useState<Step>("checking");
   const [phrase, setPhrase] = useState("");
   const [positions, setPositions] = useState<number[]>([]);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [importValue, setImportValue] = useState("");
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    isPasskeyPrfAvailable().then((ok) => setStep(ok ? "choose" : "unsupported"));
-  }, []);
 
   const words = phrase ? phrase.trim().split(/\s+/) : [];
 
@@ -72,12 +110,9 @@ export function BootstrapPage() {
         }
         goVault();
       } catch (e) {
-        if (e instanceof PrfUnsupportedError) {
-          setStep("unsupported");
-          return;
-        }
-        setError(e instanceof Error ? e.message : String(e));
-        setStep("choose");
+        const next = stepAfterBootstrapError(e);
+        if (next === "choose") setError(e instanceof Error ? e.message : String(e));
+        setStep(next);
       }
     },
     [bootstrap, goVault],
@@ -91,6 +126,30 @@ export function BootstrapPage() {
     setError(null);
     setStep("show-phrase");
   }, [generatePhrase]);
+
+  // After the browser check passes (or the user accepts the advisory): go
+  // straight to the phrase when they already chose "Create a vault".
+  const afterSupportCheck = useCallback(() => {
+    if (stepAfterSupportCheck("ok", wantsCreate) === "create") startCreate();
+    else setStep("choose");
+  }, [wantsCreate, startCreate]);
+
+  // Support-matrix §5.2 pre-gate. Definitive "no PRF" blocks here, before any
+  // phrase; "advisory" warns but lets the user go on. The enrol-time PRF check
+  // stays authoritative (PrfUnsupportedError → "enrol-failed").
+  useEffect(() => {
+    let cancelled = false;
+    void assessPasskeySupport(platform).then((support) => {
+      if (cancelled) return;
+      const next = stepAfterSupportCheck(support, wantsCreate);
+      if (next === "create") startCreate();
+      else setStep(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Run once on mount: the check is not re-run if the intent changes.
+  }, []);
 
   const beginBackupCheck = useCallback(() => {
     setPositions(pickPositions(words.length, 3));
@@ -115,16 +174,23 @@ export function BootstrapPage() {
   if (step === "unsupported") {
     return (
       <Shell>
-        <h1 className="font-display text-2xl font-semibold text-ink">Passkeys not available</h1>
-        <p className="mt-3 text-ink-muted">
-          TotalReclaw needs a passkey (the WebAuthn <span className="font-mono text-sm">prf</span>{" "}
-          extension) to protect your vault key on this device. Your browser or platform doesn’t
-          support it yet.
-        </p>
-        <p className="mt-3 text-ink-muted">
-          Try a recent Chrome, Edge, or Safari 18+ (iOS 18+) on a device with Touch ID / Face ID / Windows
-          Hello.
-        </p>
+        <PasskeyUnsupportedNotice platform={platform} />
+      </Shell>
+    );
+  }
+
+  if (step === "enrol-failed") {
+    return (
+      <Shell>
+        <PasskeyEnrolFailedNotice platform={platform} onRetry={() => setStep("escrow-consent")} />
+      </Shell>
+    );
+  }
+
+  if (step === "advisory") {
+    return (
+      <Shell>
+        <PasskeyAdvisoryNotice platform={platform} onContinue={afterSupportCheck} />
       </Shell>
     );
   }
@@ -257,12 +323,14 @@ export function BootstrapPage() {
       <Shell>
         <h1 className="font-display text-2xl font-semibold text-ink">Back up your recovery phrase?</h1>
         <p className="mt-3 text-ink-muted">
-          We can store an encrypted copy of your phrase, locked to this passkey. If you lose this
-          device, your passkey unlocks it again on a new one.
+          We can store an encrypted copy of your phrase that only this passkey can open. If you lose
+          this device, the passkey opens it on any other device where you have it, such as a phone
+          or laptop signed in to the same Apple, Google or password manager account. A passkey that
+          stays on one device, like Windows Hello or a security key, can’t do that.
         </p>
         <p className="mt-3 text-ink-muted">
-          We can’t read it — only your passkey can unlock it. But it does mean someone who takes over
-          both our servers and your Apple or Google account could reach your memories. Without a
+          We can’t read the copy. But anyone who gets into the account that syncs this passkey,
+          along with its PIN or device passcode, could open it and reach your memories. Without a
           backup, losing this device and your written phrase means losing your vault permanently.
         </p>
         <div className="mt-6 space-y-3">
