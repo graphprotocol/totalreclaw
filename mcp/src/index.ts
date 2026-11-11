@@ -40,6 +40,7 @@ import {
   invalidateMemoryContextCache,
 } from './resources/index.js';
 import { createTotalReclawServer } from './server-setup.js';
+import { buildRecallResponse } from './recall-format.js';
 import {
   createCallToolHandler,
   type HandlerBundle,
@@ -1405,7 +1406,7 @@ async function handleDebriefSubgraph(
 async function handleRecallSubgraph(
   state: SubgraphState,
   args: unknown,
-): Promise<{ content: Array<{ type: string; text: string }> }> {
+): Promise<ToolResponse> {
   const input = args as Record<string, unknown>;
   const query = (input?.query as string) || '';
   const startTime = Date.now();
@@ -1578,19 +1579,21 @@ async function handleRecallSubgraph(
         : '',
     }));
 
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          memories,
-          latency_ms: Date.now() - startTime,
-          candidates_searched: candidates.length,
-          broadened_search: true,
-          mode: 'subgraph',
-          query_intent: intent,
-        }),
-      }],
-    };
+    return buildRecallResponse(
+      {
+        memories,
+        latency_ms: Date.now() - startTime,
+        candidates_searched: candidates.length,
+        broadened_search: true,
+        mode: 'subgraph',
+        query_intent: intent,
+      },
+      reranked.map((r) => ({
+        type: categoryMap.get(r.id) ?? 'fact',
+        text: r.text,
+        createdAtUnix: r.createdAt ?? 0,
+      })),
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return {
