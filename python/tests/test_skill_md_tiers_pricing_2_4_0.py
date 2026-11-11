@@ -14,7 +14,7 @@ mcp/SKILL.md) carry the canonical copy; Hermes did not.
 2.4.0rc2 ships a new ``## Tiers + pricing`` section with:
 
 - A canonical table (Free: 250/month Gnosis, Pro: 3,000/month Gnosis +
-  LLM-guided dedup) that mirrors ``skill-nanoclaw/SKILL.md``.
+  LLM-guided dedup) whose tier numbers match ``skill-nanoclaw/SKILL.md``.
 - An automatic quota-signalling spec (>80%, 403 quota exceeded, first
   successful pair).
 - An upgrade-flow user-intent → action matrix.

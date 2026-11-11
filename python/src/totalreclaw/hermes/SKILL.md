@@ -105,7 +105,7 @@ Pattern is always **recall first → mutate second**, because the mutation tools
 | Tier | Monthly memory cap | Notes |
 |---|---|---|
 | **Free** | 250 memories/month | Permanent, end-to-end encrypted. No credit card. Cap resets monthly. |
-| **Pro** | 3,000 memories/month ($3.99/month) | Same encryption + ownership. Adds LLM-guided dedup. Stripe checkout via `totalreclaw_upgrade`. |
+| **Pro** | 3,000 memories/month (price: `totalreclaw_status` or the pricing URL) | Same encryption + ownership. Adds LLM-guided dedup. Stripe checkout via `totalreclaw_upgrade`. |
 
 Both tiers: encryption, ownership, and on-chain durability are identical. Tier only changes the monthly memory cap + Pro's dedup feature.
 
