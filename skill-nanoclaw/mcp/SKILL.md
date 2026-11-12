@@ -14,7 +14,7 @@ You have access to an end-to-end encrypted memory system via the `totalreclaw` M
 **At the start of every conversation**, call `mcp__totalreclaw__totalreclaw_recall` with a query derived from the user's first message. This loads relevant context from prior sessions. Example:
 
 ```
-mcp__totalreclaw__totalreclaw_recall({ query: "<summary of user's message>", k: 8 })
+mcp__totalreclaw__totalreclaw_recall({ query: "<summary of user's message>" })
 ```
 
 If the user's message is a greeting or vague, use a broad query like their name or "preferences goals".

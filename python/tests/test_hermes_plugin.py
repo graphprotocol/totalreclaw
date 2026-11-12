@@ -175,10 +175,23 @@ class TestPluginState:
         assert state.get_max_candidate_pool() == 250
 
     def test_candidate_pool_billing_override(self):
-        """Billing cache max_candidate_pool overrides default."""
+        """A billing pool below the cap overrides the default."""
         state = _make_state()
-        state.update_from_billing({"features": {"max_candidate_pool": 800}})
-        assert state.get_max_candidate_pool() == 800
+        state.update_from_billing({"features": {"max_candidate_pool": 100}})
+        assert state.get_max_candidate_pool() == 100
+
+    def test_candidate_pool_billing_capped(self):
+        """A billing pool above MAX_SERVER_CANDIDATE_POOL is capped (#696)."""
+        state = _make_state()
+        state.update_from_billing({"features": {"max_candidate_pool": 2000}})
+        assert state.get_max_candidate_pool() == 250
+
+    def test_candidate_pool_env_not_capped(self):
+        """The env override can exceed the server cap."""
+        state = _make_state()
+        state.update_from_billing({"features": {"max_candidate_pool": 2000}})
+        with patch.dict(os.environ, {"CANDIDATE_POOL_MAX_FREE": "1000"}):
+            assert state.get_max_candidate_pool() == 1000
 
     def test_candidate_pool_env_free_override(self):
         """CANDIDATE_POOL_MAX_FREE applies when tier is free/unknown.
@@ -417,6 +430,10 @@ class TestHooks:
         from totalreclaw.hermes.hooks import on_session_start
         state = _make_state()
         state._client = MagicMock()
+        # conftest pins TOTALRECLAW_SERVER_URL to staging, which queues the
+        # staging banner on the same channel; that banner has its own tests
+        # (test_env_binding_and_rc_banner.py). Mark it shown to isolate quota.
+        state._totalreclaw_staging_banner_shown = True
         billing = {"free_writes_used": 200, "free_writes_limit": 500, "features": {}}
         state.set_billing_cache(billing)
         on_session_start(state, session_id="test")
@@ -611,7 +628,7 @@ class TestStoreTimeDedup:
         mock_recall_result.text = "User prefers dark mode"
         mock_recall_result.embedding = [1.0, 0.0, 0.0]
 
-        async def mock_recall(query, top_k=50):
+        async def mock_recall(query, top_k=50, **kwargs):
             return [mock_recall_result]
 
         async def mock_forget(fact_id):
@@ -619,6 +636,12 @@ class TestStoreTimeDedup:
 
         mock_client.recall = mock_recall
         mock_client.forget = mock_forget
+
+        # PRD-04 DEP-5: the pin guard reads the UPDATE target's pin state.
+        async def mock_get_fact_pin_status(fact_id):
+            return False
+
+        mock_client.get_fact_pin_status = mock_get_fact_pin_status
 
         state.add_message("user", "I like dark mode")
         state.add_message("assistant", "OK")
@@ -645,7 +668,7 @@ class TestStoreTimeDedup:
              patch("totalreclaw.agent.lifecycle.extract_facts_heuristic"), \
              patch("totalreclaw.embedding.get_embedding", return_value=[1.0, 0.0, 0.0]):
 
-            async def llm_extract(messages, mode, existing_memories, llm_config=None):
+            async def llm_extract(messages, mode, existing_memories, llm_config=None, **kwargs):
                 return [add_fact, update_fact]
 
             mock_llm.side_effect = llm_extract

@@ -35,6 +35,44 @@ import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { parseBundleV1, type DerivedBundleV1 } from './bundle.js';
 import { CREDENTIALS_PATH } from '../cli/setup.js';
 
+/**
+ * A credentials.json this server recognises as a real credential written by
+ * another TotalReclaw client, in a form the MCP server cannot read: an
+ * OS-keychain-wrapped file (Hermes on a desktop host, either the v1
+ * mnemonic marker or a `version: 2` bundle with `keychain_wrapped: true`),
+ * or a `version` newer than this build knows.
+ *
+ * Distinct from the plain `Error`s below (a `version: 2` bundle that fails
+ * `parseBundleV1`'s §4.7 validation): those are evidence of a corrupt or
+ * tampered credential store and stay fatal at startup. This one is not —
+ * the file is presumably fine, this server just can't use it — so
+ * `index.ts` starts in `unconfigured` mode and reports `message` on every
+ * tool call instead of crashing (a crash makes the host drop all tools and
+ * leaves the reason in a log file the user never sees). Still never a silent
+ * downgrade: nothing in the file is used, and `totalreclaw_pair` refuses to
+ * overwrite it.
+ *
+ * `message` never contains any value from the file.
+ */
+export class UnsupportedCredentialsError extends Error {
+  readonly reason: 'keychain_wrapped' | 'unknown_version';
+  constructor(reason: 'keychain_wrapped' | 'unknown_version', message: string) {
+    super(message);
+    this.name = 'UnsupportedCredentialsError';
+    this.reason = reason;
+  }
+}
+
+/** Hermes' v1 keychain marker (`credentials_wrap.py`): `"__keychain__:v1:0x<eoa>"`. */
+const KEYCHAIN_MARKER_PREFIX = '__keychain__:';
+
+const KEYCHAIN_MESSAGE =
+  'The credentials file at ~/.totalreclaw/credentials.json keeps its secret in the OS ' +
+  'keychain (another TotalReclaw client, such as Hermes, set it up that way). The MCP ' +
+  'server cannot read the OS keychain yet (a known gap; see mcp/README.md), so TotalReclaw ' +
+  'is not available in this app for now. The file and the account are untouched, and ' +
+  'pairing here is blocked so it cannot replace that account.';
+
 export type ResolvedCredential =
   | { kind: 'mnemonic'; mnemonic: string }
   | { kind: 'bundle'; bundle: DerivedBundleV1 };
@@ -61,14 +99,15 @@ function isValidBip39Mnemonic(candidate: string): boolean {
  * `unconfigured` mode).
  *
  * Throws — never returns — on a credentials.json that is present but
- * malformed in a way that must not be silently downgraded:
- *   - `version` present and not `2` (derived-bundle-v1.md §4.7 / the
- *     client-consistency contract: unknown version is a loud error).
- *   - `version === 2` but `keychain_wrapped: true` (MCP has no keychain
- *     unwrap — see the module doc).
- *   - `version === 2` and the bundle fails `parseBundleV1`'s §4.7
- *     validation (malformed hex, unknown `signing.kind`, address/key
- *     mismatch, …).
+ * must not be silently downgraded:
+ *   - `UnsupportedCredentialsError`: `version` present and not `2`
+ *     (derived-bundle-v1.md §4.7 / the client-consistency contract: unknown
+ *     version is a loud error), or an OS-keychain-wrapped file (v1 marker or
+ *     `version === 2` with `keychain_wrapped: true`; MCP has no keychain
+ *     unwrap — see the module doc). `index.ts` starts unconfigured on these.
+ *   - plain `Error`: `version === 2` and the bundle fails `parseBundleV1`'s
+ *     §4.7 validation (malformed hex, unknown `signing.kind`, address/key
+ *     mismatch, …). Fatal at startup.
  *
  * A missing file, an unreadable file, or a file that fails to parse as JSON
  * at all are treated as "nothing configured" (`undefined`) — matching the
@@ -132,16 +171,19 @@ export function resolveManagedCredential(
   const obj = parsed as Record<string, unknown>;
 
   const version = obj.version;
-  if (version === 2) {
-    if (obj.keychain_wrapped === true) {
-      throw new Error(
-        'credentials.json has version=2 with keychain_wrapped=true, but the MCP server ' +
-          'does not implement OS-keychain unwrapping (that is Python/Hermes-only — see ' +
-          'derived-bundle-v1.md §4.3 and mcp/README.md\'s Known Gaps). Provision a ' +
-          'plaintext derived-bundle-v1 bundle (the "headless / no keychain" storage form) ' +
-          'for MCP hosts instead.',
-      );
+  // OS-keychain-wrapped file (Hermes desktop storage), v1 marker or v2
+  // bundle. MCP has no keychain unwrap (derived-bundle-v1.md §4.3,
+  // mcp/README.md Known Gaps). Checked before the version switch so the v1
+  // marker (no `version` key) gets the same actionable error instead of
+  // silently reading as "nothing configured".
+  const mnemonicMarker =
+    typeof obj.mnemonic === 'string' && obj.mnemonic.trim().startsWith(KEYCHAIN_MARKER_PREFIX);
+  if (obj.keychain_wrapped === true || mnemonicMarker) {
+    if (version === undefined || version === 2) {
+      throw new UnsupportedCredentialsError('keychain_wrapped', KEYCHAIN_MESSAGE);
     }
+  }
+  if (version === 2) {
     // parseBundleV1 runs every derived-bundle-v1.md §4.7 invariant and
     // throws a loud, actionable Error on any violation — never a silent
     // downgrade to legacy mnemonic handling.
@@ -149,10 +191,16 @@ export function resolveManagedCredential(
     return { kind: 'bundle', bundle };
   }
   if (version !== undefined) {
-    throw new Error(
-      `credentials.json has an unrecognised version=${JSON.stringify(version)}. Expected 2 ` +
-        '(a derived-bundle-v1 bundle) or no version key at all (legacy plaintext mnemonic). ' +
-        'Refusing to guess — an unknown version is never silently treated as legacy.',
+    // `version` is a number or short string in every real file; cap it so a
+    // hostile file can't stuff arbitrary content into the message.
+    const shown = JSON.stringify(version).slice(0, 16);
+    throw new UnsupportedCredentialsError(
+      'unknown_version',
+      `credentials.json has an unrecognised version=${shown}. This MCP server reads ` +
+        'version 2 (a derived-bundle-v1 bundle) or no version key at all (legacy plaintext ' +
+        'mnemonic). It may have been written by a newer TotalReclaw client; updating ' +
+        '@totalreclaw/mcp-server may fix it. Refusing to guess, so nothing in the file is ' +
+        'used, and pairing here is blocked so it cannot replace that account.',
     );
   }
 

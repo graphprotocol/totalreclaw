@@ -4,11 +4,21 @@ Contradiction detection for the TotalReclaw Python agent layer.
 For each new fact with entities, recalls existing facts from the vault that
 share an entity, then delegates to ``totalreclaw_core.resolve_with_candidates()``
 to check for semantic contradictions (cosine similarity in the [0.3, 0.85)
-band). Facts where an existing claim wins (SkipNew) are filtered out.
+band).
+
+Pin contract (PRD-04 F1 / DEP-5): the new claim and every candidate reach core
+with their entity refs (short-key ``e``) and, for pinned candidates, the v0
+``st: "p"`` sentinel. Core compares only claims that share an entity and reads
+pin state from ``st`` on this shape, so both are required for its pin check
+(``SkipNew { reason: ExistingPinned }``) to fire. A new fact that contradicts
+a pinned fact is dropped. Every other resolver outcome (``skip_new`` with
+``existing_wins``, ``supersede_existing``, ``tie_leave_both``) is logged and
+NOT acted on -- applying those is PRD-04 DEP-12.
 
 Falls back to "store everything" if ``totalreclaw_core`` is not installed or
-any error occurs — contradiction detection is best-effort and must never block
-the store pipeline.
+any error occurs -- contradiction detection is best-effort and must never block
+the store pipeline. Log lines carry categories and counts only, never fact
+text.
 """
 from __future__ import annotations
 
@@ -31,27 +41,78 @@ logger = logging.getLogger(__name__)
 CONTRADICTION_THRESHOLD_LOWER = 0.30
 CONTRADICTION_THRESHOLD_UPPER = 0.85
 
+#: Resolver ``skip_new`` reason for a new claim that contradicts a pinned claim.
+SKIP_REASON_EXISTING_PINNED = "existing_pinned"
+
+# v1 memory type -> short-key category accepted by core's ``ClaimCategory``.
+_V1_TO_SHORT_CATEGORY = {
+    "claim": "fact",
+    "preference": "pref",
+    "directive": "rule",
+    "commitment": "goal",
+    "episode": "epi",
+    "summary": "sum",
+}
+
+
+def _short_key_claim_for_resolver(
+    *,
+    text: str,
+    fact_type: str,
+    importance: int,
+    confidence: float,
+    source_agent: str,
+    created_at: str,
+    entities: Optional[List[dict]] = None,
+    pinned: bool = False,
+) -> dict:
+    """Build a short-key canonical claim for core.resolve_with_candidates().
+
+    The resolver accepts the v0 short-key format (``{t, c, cf, i, sa, ea}``)
+    -- the v1 claim shape is NOT accepted by core's resolver. We emit short
+    keys only for the resolver's transient input; the actual on-chain write
+    goes through ``build_canonical_claim_v1`` which emits a v1 JSON blob.
+
+    ``entities`` are short-key refs (``{"n", "tp", "r"?}``, see
+    :func:`totalreclaw.claims_helper.to_entity_refs`) emitted as ``e``.
+    ``pinned`` emits ``st: "p"`` -- the pin sentinel core's
+    ``is_pinned_claim`` reads on this shape.
+    """
+    claim: dict = {
+        "t": text,
+        "c": _V1_TO_SHORT_CATEGORY.get(fact_type, "fact"),
+        "cf": confidence,
+        "i": importance,
+        "sa": source_agent,
+        "ea": created_at,
+    }
+    if entities:
+        claim["e"] = list(entities)
+    if pinned:
+        claim["st"] = "p"
+    return claim
+
 
 async def detect_and_resolve_contradictions(
     new_facts: List["ExtractedFact"],
     client: "TotalReclaw",
     log: Optional[Any] = None,
 ) -> List["ExtractedFact"]:
-    """Filter out new facts that lose to existing vault claims.
+    """Filter out new facts that contradict a pinned vault claim.
 
     For each new fact that has entities and an embedding, this function:
 
-    1. Computes entity trapdoors and recalls existing claims from the vault
-       that share at least one entity.
-    2. Decrypts the candidates and pairs them with their embeddings.
-    3. Calls ``totalreclaw_core.resolve_with_candidates()`` to run the P2-3
-       contradiction formula.
-    4. If any resolution action is ``skip_new``, the fact is dropped.
+    1. Recalls existing claims from the vault that share its entities.
+    2. Projects the new fact and each candidate to short-key claims carrying
+       entity refs and (candidates only) pin state.
+    3. Calls ``totalreclaw_core.resolve_with_candidates()``.
+    4. Drops the fact if any action is ``skip_new`` with reason
+       ``existing_pinned``. Other actions are logged, not applied (DEP-12).
 
     Returns the subset of ``new_facts`` that should proceed to storage.
 
     On any error (missing core, subgraph issues, decrypt failures), returns
-    the full ``new_facts`` list unchanged — contradiction detection is
+    the full ``new_facts`` list unchanged -- contradiction detection is
     best-effort.
 
     Parameters
@@ -76,45 +137,12 @@ async def detect_and_resolve_contradictions(
     try:
         from totalreclaw.embedding import get_embedding
         from totalreclaw.claims_helper import (
-            TYPE_TO_CATEGORY_V1,
             compute_entity_trapdoor,
+            to_entity_refs,
         )
     except ImportError:
         log.debug("Required modules not available — skipping contradiction detection")
         return list(new_facts)
-
-    def _short_key_claim_for_resolver(
-        *, text: str, fact_type: str, importance: int, confidence: float,
-        source_agent: str, created_at: str,
-    ) -> dict:
-        """Build a short-key canonical claim for core.resolve_with_candidates().
-
-        The resolver accepts the v0 short-key format (``{t, c, cf, i, sa,
-        ea}``) — the v1 claim shape is NOT accepted by core 2.0.0's resolver
-        as of the plugin-v3 pairing. We emit short keys only for the
-        resolver's transient input; the actual on-chain write goes through
-        ``build_canonical_claim_v1`` which emits a v1 JSON blob.
-        """
-        # Map v1 type → short-key category expected by the resolver.
-        # ``TYPE_TO_CATEGORY_V1`` gives v1 type → display short tag; we need
-        # a category the Rust ``ClaimCategory`` enum accepts.
-        v1_to_short = {
-            "claim": "fact",
-            "preference": "pref",
-            "directive": "rule",
-            "commitment": "goal",
-            "episode": "epi",
-            "summary": "sum",
-        }
-        c_key = v1_to_short.get(fact_type, "fact")
-        return {
-            "t": text,
-            "c": c_key,
-            "cf": confidence,
-            "i": importance,
-            "sa": source_agent,
-            "ea": created_at,
-        }
 
     # Load default resolution weights once
     try:
@@ -130,6 +158,7 @@ async def detect_and_resolve_contradictions(
 
     now_unix = int(time.time())
     kept: List["ExtractedFact"] = []
+    pinned_conflicts = 0
 
     for fact_idx, fact in enumerate(new_facts):
         # Only run contradiction detection on facts with entities
@@ -195,14 +224,11 @@ async def detect_and_resolve_contradictions(
                 kept.append(fact)
                 continue
 
-            # Build the new claim JSON for the resolver
+            # Build the new claim JSON for the resolver (short-key shape, with
+            # entity refs so core's shared-entity detection can run).
             importance_int = max(1, min(10, int(round(
                 fact.importance if fact.importance > 1 else fact.importance * 10
             ))))
-            # Build a short-key claim for the resolver only. The on-chain
-            # write pipeline still emits v1 JSON; this transient short-key
-            # shape is the format ``core.resolve_with_candidates`` accepts
-            # as of core 2.0.0.
             new_claim_json_obj = _short_key_claim_for_resolver(
                 text=fact.text,
                 fact_type=fact.type,
@@ -210,6 +236,7 @@ async def detect_and_resolve_contradictions(
                 confidence=fact.confidence,
                 source_agent="hermes-auto",
                 created_at=time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+                entities=to_entity_refs(fact.entities),
             )
             new_claim_json = json.dumps(new_claim_json_obj, ensure_ascii=False, separators=(",", ":"))
             new_claim_id = f"pending-{id(fact)}"
@@ -220,13 +247,11 @@ async def detect_and_resolve_contradictions(
             for result in existing_results:
                 if not result.embedding or not result.text:
                     continue
-                # Parse the result text back into a claim-like structure.
-                # The results come from the reranker as RerankerResult with
-                # .text, .id, .embedding, .importance, .category
                 try:
                     existing_importance = max(1, min(10, int(round(
                         result.importance * 10 if result.importance <= 1 else result.importance
                     ))))
+                    result_entities = getattr(result, "entities", None)
                     existing_short = _short_key_claim_for_resolver(
                         text=result.text,
                         fact_type=result.category or "claim",
@@ -238,6 +263,8 @@ async def detect_and_resolve_contradictions(
                         ) if getattr(result, "created_at", None) else time.strftime(
                             "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()
                         ),
+                        entities=result_entities if isinstance(result_entities, list) else None,
+                        pinned=getattr(result, "pinned", False) is True,
                     )
                     candidates.append({
                         "claim": existing_short,
@@ -245,7 +272,7 @@ async def detect_and_resolve_contradictions(
                         "embedding": list(result.embedding),
                     })
                 except Exception as exc:
-                    log.debug("Failed to build candidate from result %s: %s", result.id, exc)
+                    log.debug("Failed to build a contradiction candidate (%s)", type(exc).__name__)
                     continue
 
             if not candidates:
@@ -267,47 +294,39 @@ async def detect_and_resolve_contradictions(
 
             actions = json.loads(actions_json)
 
-            # Check if any action tells us to skip the new fact
-            skip = False
-            for action in actions:
-                action_type = action.get("type", "")
-                if action_type == "skip_new":
-                    reason = action.get("reason", "unknown")
-                    existing_id = action.get("existing_id", "?")
-                    log.info(
-                        "Contradiction: skipping new fact %r — existing %s wins (reason=%s)",
-                        fact.text[:60],
-                        existing_id,
-                        reason,
-                    )
-                    skip = True
-                    break
-
-            if skip:
+            if any(
+                action.get("type") == "skip_new"
+                and action.get("reason") == SKIP_REASON_EXISTING_PINNED
+                for action in actions
+            ):
+                pinned_conflicts += 1
+                log.info(
+                    "Contradiction: new fact not stored, it contradicts a pinned fact (reason=%s)",
+                    SKIP_REASON_EXISTING_PINNED,
+                )
                 continue
 
-            # Log supersede actions (informational — the new fact proceeds,
-            # but we don't tombstone the old one from here; that's a future
-            # enhancement matching the plugin's full flow)
+            # Every other outcome is observed only; PRD-04 DEP-12 owns applying
+            # skip_new/existing_wins and supersede_existing.
             for action in actions:
-                if action.get("type") == "supersede_existing":
-                    log.info(
-                        "Contradiction: new fact %r supersedes existing %s (not tombstoned yet)",
-                        fact.text[:60],
-                        action.get("existing_id", "?"),
-                    )
+                log.debug(
+                    "Contradiction: observed %s (reason=%s), not applied (PRD-04 DEP-12)",
+                    action.get("type", "?"),
+                    action.get("reason", "-"),
+                )
 
             kept.append(fact)
 
         except Exception as exc:
             # Any per-fact error: keep the fact and continue
-            log.debug("Contradiction check failed for fact %r: %s", fact.text[:60], exc)
+            log.debug("Contradiction check failed for a fact (%s); keeping it", type(exc).__name__)
             kept.append(fact)
 
     log.info(
-        "Contradiction detection: %d/%d facts passed (removed %d)",
+        "Contradiction detection: %d/%d facts passed (removed %d, pinned conflicts %d)",
         len(kept),
         len(new_facts),
         len(new_facts) - len(kept),
+        pinned_conflicts,
     )
     return kept

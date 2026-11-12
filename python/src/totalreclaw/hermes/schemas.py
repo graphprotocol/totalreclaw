@@ -26,7 +26,9 @@ REMEMBER = {
         "session-scoped and not encrypted, TotalReclaw is durable and "
         "private. Uses Memory Taxonomy v1 (claim | preference | directive "
         "| commitment | episode | summary); legacy v0 tokens (fact, "
-        "decision, episodic, goal, context, rule) are coerced transparently."
+        "decision, episodic, goal, context, rule) are coerced transparently. "
+        "Secrets and sensitive identifiers are refused unless the user "
+        "confirms — see allow_sensitive."
     ),
     "parameters": {
         "type": "object",
@@ -82,7 +84,23 @@ REMEMBER = {
                     "quotes / IDs / numbers the user wants stored as-is and "
                     "you believe the extractor would paraphrase. For ordinary "
                     "'remember X' intents, omit this param + trust the "
-                    "auto-extract path."
+                    "auto-extract path. Also use force=true after a "
+                    "possible_duplicate result when the new text adds or "
+                    "changes information. An exact copy of a stored memory "
+                    "is never written again, even with force=true."
+                ),
+            },
+            "allow_sensitive": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Default false. Text that looks like a secret or sensitive "
+                    "identifier (API key, token, password/PIN, private key, "
+                    "recovery phrase, payment card, IBAN, government ID) is NOT "
+                    "stored: the result has blocked='sensitive' plus a message "
+                    "— relay that message to the user. Set true ONLY when "
+                    "retrying after the user explicitly confirmed they want "
+                    "that exact item stored."
                 ),
             },
         },
@@ -426,7 +444,7 @@ UPGRADE = {
         "it contains the checkout URL the user must open in their browser. "
         "Do NOT call this tool speculatively; only when the user has "
         "explicitly asked to upgrade, pay, or hit the quota limit. Pro "
-        "removes the free-write cap — 1,500 memories/month vs the free "
+        "removes the free-write cap — 3,000 memories/month vs the free "
         "tier's 250 — and adds LLM-guided dedup; encryption, ownership, "
         "and on-chain durability are identical across tiers."
     ),

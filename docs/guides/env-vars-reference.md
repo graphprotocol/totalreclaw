@@ -1,7 +1,7 @@
 # Environment Variables Reference
 
 **Applies to:** TotalReclaw v1 (all clients).
-**Last updated:** 2026-10-29.
+**Last updated:** 2026-11-10.
 
 v1 deliberately removes every env var that was an internal knob pretending to be user configuration. The list below is the **complete** set of env vars that end users or deployment operators should ever need to set.
 
@@ -48,6 +48,7 @@ export TOTALRECLAW_SERVER_URL="http://localhost:8080"
 
 **Default:** `https://api.totalreclaw.xyz` (managed service).
 **When to override:** pointing at a self-hosted server, or at the staging relay for development (`https://api-staging.totalreclaw.xyz`).
+**Precedence:** in ZeroClaw this variable overrides `relay_url` under `[memory.totalreclaw]` in `~/.zeroclaw/config.toml`. In Hermes, `TOTALRECLAW_RELAY_URL` is not an alias: it only sets the pairing URL when this variable is unset, and reads and writes stay on the default.
 
 ### `TOTALRECLAW_SELF_HOSTED`
 
@@ -262,5 +263,6 @@ See [client-consistency spec](../specs/totalreclaw/client-consistency.md) for th
 - [v1 migration guide](./v1-migration.md)
 - [Client setup guide](./client-setup-v1.md)
 - [OpenClaw setup](./openclaw-setup.md)
-- [Claude Desktop setup](./claude-code-setup.md)
+- [Claude Desktop setup](./claude-desktop-setup.md)
+- [Claude Code / Cursor / Windsurf setup](./claude-code-setup.md)
 - [Hermes setup](./hermes-setup.md)

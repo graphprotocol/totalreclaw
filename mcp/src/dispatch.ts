@@ -23,8 +23,9 @@
  *      wrap the whole thing in the shared quota → auth → generic error funnel.
  */
 
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Tool } from '@modelcontextprotocol/server';
 import type { ToolResponse } from './tools/types.js';
+import { shortErrorMessage } from './tools/write-errors.js';
 import {
   rememberToolDefinition,
   recallToolDefinition,
@@ -141,6 +142,12 @@ export interface DispatchDeps {
   authHintResponse: () => ToolResponse;
   /** Invalidate the memory-context resource cache + notify subscribers. */
   onMutate: () => void;
+  /**
+   * Set when startup found a credentials file it could not use (see
+   * `UnusableCredentials`). Unconfigured-mode responses then explain that
+   * instead of the generic setup guidance.
+   */
+  getUnusableCredentials?: () => UnusableCredentials | undefined;
 }
 
 /** Response for the removed `totalreclaw_setup` tool (phrase-safety, 3.2.1). */
@@ -152,29 +159,52 @@ export function setupRemovedResponse(): ToolResponse {
         error: 'tool_removed',
         message:
           'The totalreclaw_setup tool was removed in @totalreclaw/mcp-server@3.2.1 ' +
-          'for phrase-safety. Follow the URL-driven install flow at ' +
-          'https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md. ' +
-          'The user sources their recovery phrase out-of-band (OpenClaw or Hermes ' +
-          'browser pair flow, or an offline BIP-39 generator) and pastes it directly ' +
-          'into TOTALRECLAW_RECOVERY_PHRASE in the MCP host config — never into chat.',
+          'for phrase-safety. To set up an account, call totalreclaw_pair: it returns a link and a ' +
+          'PIN, and the user creates or enters their recovery phrase in the browser only — ' +
+          'never in chat.',
       }),
     }],
     isError: true,
   };
 }
 
+/**
+ * Why the server is unconfigured even though a credentials file exists: a
+ * file written by another TotalReclaw client in a form this server can't
+ * read (see `UnsupportedCredentialsError` in `subgraph/credentials.ts`).
+ */
+export interface UnusableCredentials {
+  reason: 'keychain_wrapped' | 'unknown_version';
+  message: string;
+}
+
 /** Response when a tool is called before the server is configured. */
-export function notConfiguredResponse(): ToolResponse {
+export function notConfiguredResponse(unusable?: UnusableCredentials): ToolResponse {
+  if (unusable) {
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          error: 'not_configured',
+          reason: unusable.reason,
+          message:
+            `${unusable.message} Tell the user this plainly. Do not call totalreclaw_pair ` +
+            '(it would refuse), and do not move, rename or delete the credentials file.',
+        }),
+      }],
+      isError: true,
+    };
+  }
   return {
     content: [{
       type: 'text',
       text: JSON.stringify({
         error: 'not_configured',
         message:
-          'TotalReclaw is not configured yet. Follow the URL-driven install flow ' +
-          'at https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md — ' +
-          'the user pastes their recovery phrase directly into the MCP host config (TOTALRECLAW_RECOVERY_PHRASE), ' +
-          'never into chat.',
+          'TotalReclaw is not set up yet. Call totalreclaw_pair now: it returns a link and a PIN. ' +
+          'Give both to the user; they open the link in a browser and create or enter their recovery ' +
+          'phrase there, never in chat. When the page says it is done, ask them to fully quit and ' +
+          'reopen this app (or start a new session), because credentials load at startup.',
       }),
     }],
     isError: true,
@@ -194,7 +224,7 @@ export function genericErrorResponse(error: unknown): ToolResponse {
   return {
     content: [{
       type: 'text',
-      text: JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      text: JSON.stringify({ error: shortErrorMessage(error) }),
     }],
     isError: true,
   };
@@ -218,7 +248,7 @@ export function createCallToolHandler(
 
     // 4. Unconfigured: everything else returns setup guidance.
     const mode = deps.getMode();
-    if (mode === 'unconfigured') return notConfiguredResponse();
+    if (mode === 'unconfigured') return notConfiguredResponse(deps.getUnusableCredentials?.());
 
     // 5. Configured dispatch, wrapped in the shared quota → auth → generic funnel.
     try {

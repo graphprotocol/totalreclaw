@@ -6,6 +6,19 @@
 
 - **`search::search_candidates` downloads much less data and runs batches concurrently.** Blind-index queries now return fact ids only, up to 6 at a time (they ran one by one). Each unique fact's payload is then fetched once, in batches of 100. The candidate set is the same as before, and results now come back in first-hit order instead of `HashMap` order. Adds a direct `futures-util` dependency, already in the tree through `reqwest`. Port of the Python change (public #703); internal #666.
 
+- **Auto-recall returns 16 facts, up from 8.** `AUTO_RECALL_TOP_K` is now 16, matching the other clients (public #365: on LOCOMO, 8 to 16 raised overall accuracy from 40% to 47% and multi-hop from 18% to 35%). `recall(query, limit, ..)` with an explicit limit is unchanged. This crate does not read the relay's `features.recall_top_k` yet; the constant is the only source.
+
+### Fixed
+
+- `TOTALRECLAW_SERVER_URL` now picks the relay, as the README always said.
+  When set to a non-empty value it overrides `TotalReclawConfig::relay_url`
+  (ZeroClaw: `relay_url` under `[memory.totalreclaw]` in
+  `~/.zeroclaw/config.toml`). Before, the crate ignored the variable, so
+  setting it alone (to pin staging, say) left ZeroClaw on the production
+  relay. The built-in default is unchanged: `https://api.totalreclaw.xyz`
+  (internal#706).
+- New public constant `SERVER_URL_ENV` names the variable.
+
 ## 2.0.1 — 2026-04-19
 
 Patch release: tracks `totalreclaw-core` bump to 2.1.0. No behavioural

@@ -340,6 +340,8 @@ Uses optimistic locking + LLM-assisted merge as defined in v0.3.1 §340-357:
 
 ## MCP Server Implementation
 
+> **Transport (2026-09, DEP-15):** the shipped server is built on MCP TypeScript SDK v2 (`@modelcontextprotocol/server`) and serves both protocol eras over stdio — 2025-11-25 `initialize` and 2026-07-28 `server/discover`. See [mcp-dual-era.md](./mcp-dual-era.md). The sketch below is the original 1.x-SDK design and is kept for history.
+
 ### Server Structure
 
 ```typescript

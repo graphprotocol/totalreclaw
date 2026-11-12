@@ -27,8 +27,10 @@ jobs:
     outputs:
       client: ${{ steps.filter.outputs.client }}
       mcp: ${{ steps.filter.outputs.mcp }}
+      mcpb: ${{ steps.filter.outputs.mcpb }}
       app: ${{ steps.filter.outputs.app }}
       plugin: ${{ steps.filter.outputs.plugin }}
+      pair-crypto: ${{ steps.filter.outputs.pair-crypto }}
       docs: ${{ steps.filter.outputs.docs }}
       enclave: ${{ steps.filter.outputs.enclave }}
     steps:
@@ -41,10 +43,17 @@ jobs:
               - 'client/**'
             mcp:
               - 'mcp/**'
+            mcpb:
+              - 'mcp/**'
+              - 'plugins/**'
+              - '.claude-plugin/**'
             app:
               - 'app/**'
             plugin:
               - 'skill/**'
+            pair-crypto:
+              - 'mcp/**'
+              - 'skill/plugin/**'
             docs:
               - '**/*.md'
               - 'skill/plugin/skill.json'
@@ -105,6 +114,24 @@ jobs:
         run: cd mcp && rm -f package-lock.json && npm install --legacy-peer-deps && npm run build
       - name: Run phrase-safety dist scan (compiled JS payloads)
         run: bash scripts/check-phrase-safety-dist.sh
+
+  url-binding-guard:
+    # Self-test for scripts/check-url-binding.cjs, the publish-time relay-URL
+    # guard for NanoClaw, @totalreclaw/client, @totalreclaw/core, the crates
+    # and the PyPI wheels (internal#706). It also runs the real profiles
+    # against the source trees whose layout matches the shipped artifact, so
+    # a renamed or rebound default-URL site fails here, not at publish time.
+    # No install; runs in about a second.
+    name: URL-binding guard tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Run guard tests
+        run: node --test scripts/check-url-binding.test.cjs
 
   client-tests:
     name: Client Tests (TypeScript)
@@ -241,6 +268,65 @@ jobs:
       - name: Install, build, and test
         run: cd mcp && rm -f package-lock.json && npm install --legacy-peer-deps && npm run build && npm test
 
+  mcpb-bundle:
+    # One-click install packaging: build the .mcpb bundle (one platform) from the
+    # freshly built mcp/dist, run `mcpb validate` (inside the build script), assemble
+    # the Claude plugin around it, and check the plugin JSON files parse. Builds
+    # only; nothing is published.
+    name: MCPB bundle + Claude plugin
+    needs: changes
+    if: ${{ needs.changes.outputs.mcpb == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Build mcp/dist
+        run: cd mcp && rm -f package-lock.json && npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund && npm run build
+      - name: Build .mcpb (darwin-arm64) and validate
+        run: node mcp/scripts/build-mcpb.mjs --from-dir mcp --platform darwin-arm64 --out "$RUNNER_TEMP/mcpb"
+      - name: Assemble the plugin
+        run: node mcp/scripts/build-plugin.mjs --bundle "$RUNNER_TEMP"/mcpb/totalreclaw-*-darwin-arm64.mcpb --out "$RUNNER_TEMP/plugin"
+      - name: Plugin and marketplace JSON parse
+        run: |
+          for f in .claude-plugin/marketplace.json plugins/totalreclaw/.claude-plugin/plugin.json plugins/totalreclaw/.mcp.json "$RUNNER_TEMP/plugin/totalreclaw/.claude-plugin/plugin.json"; do
+            node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$f" && echo "ok $f"
+          done
+
+  pair-crypto-node-matrix:
+    # Pairing crypto (X25519 private-key construction) must work on every
+    # supported Node. Node 26 rejected the empty-`x` JWK that both the MCP
+    # server and the OpenClaw plugin used, which broke every pairing
+    # (totalreclaw-internal#708). Runs only the pair-crypto tests, with
+    # `--ignore-scripts` so onnxruntime-node's binary fetch never runs.
+    name: Pair Crypto (Node ${{ matrix.node }})
+    needs: changes
+    if: ${{ needs.changes.outputs.pair-crypto == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24', '26']
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - name: MCP pair-crypto test
+        run: cd mcp && rm -f package-lock.json && npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund && npx jest tests/pair-crypto.test.ts
+      - name: Plugin pair-crypto tests
+        run: |
+          cd skill/plugin
+          rm -f package-lock.json
+          npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund
+          npx tsx crypto/vault-crypto.test.ts
+          npx tsx pairing/pair-crypto.test.ts
+
   rust-tests:
     name: Rust Core Tests
     runs-on: ubuntu-latest
@@ -365,8 +451,16 @@ jobs:
         run: cd tests/parity && npx tsx userop-batch-parity.test.ts
       - name: Session-key EIP-712 grant digest parity (TS/viem side, cred-9, #584)
         run: cd tests/parity && npx tsx session-key-grant-roundtrip.ts
+      - name: PII filter decision parity (TS/WASM side, PRD-04 DEP-4)
+        run: cd tests/parity && npx tsx pii/pii-parity.test.ts
       - name: Outer protobuf fields 9/11 absent — MCP + WASM calldata parity (PRD-04 F8 / DEP-6)
         run: cd tests/parity && npx tsx outer-protobuf-parity.test.ts
+      - name: Forget-guard parity (TS/WASM side, internal#605)
+        run: cd tests/parity && npx tsx forget-guard-parity.test.ts
+      - name: Topical dedup-context parity (TS/WASM side, PRD-04 DEP-3)
+        run: cd tests/parity && npx tsx dedup-context-parity.test.ts
+      - name: Store-time write gate parity (TS/WASM side)
+        run: cd tests/parity && npx tsx write-gate-parity.test.ts
 
   # NOTE: Relay unit tests run in the private totalreclaw-relay repo CI.
   # This job runs the E2E smoke test against a real relay + PostgreSQL

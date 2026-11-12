@@ -512,3 +512,56 @@ export async function fetchFactById(
   }
   return fact;
 }
+
+/**
+ * Error-surfacing fact lookup for forget's existence check.
+ *
+ * Unlike `fetchFactById` (which returns null for "not found", "inactive" AND
+ * every HTTP/network/relay failure, because `gqlQuery` never throws), this
+ * tells three cases apart:
+ *   - resolves with the fact (check `isActive`): it exists (active or already forgotten);
+ *   - resolves with null: the subgraph answered and there is no such fact for this owner;
+ *   - throws: the lookup itself failed (HTTP error, network error, GraphQL
+ *     error, malformed answer) — the caller must not treat that as "missing".
+ */
+export async function fetchFactForForget(
+  owner: string,
+  factId: string,
+  relayUrl?: string,
+  authKeyHex?: string,
+): Promise<(SubgraphSearchFact & { owner?: string }) | null> {
+  const effectiveRelayUrl = relayUrl ?? getSubgraphConfig().relayUrl;
+  const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${effectiveRelayUrl}/v1/subgraph`;
+  const query = `
+    query GetFactForForget($id: ID!) {
+      fact(id: $id) { id owner isActive }
+    }
+  `;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-TotalReclaw-Client': getClientId(),
+  };
+  if (authKeyHex) headers['Authorization'] = `Bearer ${authKeyHex}`;
+  const response = await fetch(subgraphUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ query, variables: { id: factId } }),
+  });
+  if (!response.ok) {
+    throw new Error(`fact lookup failed: HTTP ${response.status}`);
+  }
+  const json = (await response.json()) as {
+    data?: { fact?: (SubgraphSearchFact & { owner?: string }) | null };
+    errors?: unknown[];
+  };
+  if (json.errors && json.errors.length > 0) {
+    throw new Error('fact lookup failed: GraphQL error');
+  }
+  if (!json.data || !('fact' in json.data)) {
+    throw new Error('fact lookup failed: malformed response');
+  }
+  const fact = json.data.fact;
+  if (!fact) return null;
+  if (typeof fact.owner === 'string' && fact.owner.toLowerCase() !== owner.toLowerCase()) return null;
+  return fact;
+}

@@ -445,6 +445,7 @@ pub fn decrypt_and_rerank(
             embedding: emb,
             timestamp: fact.timestamp.clone().unwrap_or_default(),
             source: None,
+            pinned: false,
         });
     }
 
@@ -486,6 +487,7 @@ pub fn decrypt_and_rerank_with_key(
             embedding: emb,
             timestamp: fact.timestamp.clone().unwrap_or_default(),
             source: None,
+            pinned: false,
         });
     }
 

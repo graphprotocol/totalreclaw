@@ -60,3 +60,102 @@ pub(crate) fn py_get_compaction_system_prompt() -> &'static str {
     crate::prompts::get_compaction_system_prompt()
 }
 
+
+// ---------------------------------------------------------------------------
+// Forget guard (internal#605 / #640)
+// ---------------------------------------------------------------------------
+
+/// Does an extracted candidate restate a fact the user explicitly forgot?
+///
+/// ``embedding_json`` is a JSON array of numbers or ``"null"``.
+/// ``entries_json`` is a JSON array of ``{"id", "text", "embedding"?}``
+/// (the client's forgotten-facts ledger, decrypted in memory). Returns
+/// ``"null"`` or ``{"id", "reason", "cosine"}`` as JSON, where reason is
+/// ``exact`` / ``subset`` / ``superset`` / ``anchor``. Raises ``ValueError`` on bad JSON.
+#[pyfunction]
+#[pyo3(name = "match_forgotten")]
+pub(crate) fn py_match_forgotten(
+    text: &str,
+    embedding_json: &str,
+    entries_json: &str,
+) -> PyResult<String> {
+    crate::forget_guard::match_forgotten_json(text, embedding_json, entries_json)
+        .map_err(PyValueError::new_err)
+}
+
+/// True when ``text`` is a note about deleting a memory ("User asked to
+/// forget X") rather than a fact about the user.
+#[pyfunction]
+#[pyo3(name = "is_forget_request")]
+pub(crate) fn py_is_forget_request(text: &str) -> bool {
+    crate::forget_guard::is_forget_request(text)
+}
+// ---------------------------------------------------------------------------
+// Topical dedup context (PRD-04 DEP-3)
+// ---------------------------------------------------------------------------
+
+/// Render the "Existing memories" block appended to the extraction user prompt.
+///
+/// Each argument is a JSON array of ``{"id": str, "text": str}`` objects
+/// (``"null"`` = empty section; extra keys such as ``embedding`` are ignored).
+/// Pinned first, then topical, then recent; dedupe by fact id; at most
+/// ``cap`` lines (default 30); returns ``""`` when no line survives.
+///
+/// Raises ``ValueError`` on malformed JSON or a non-array section, and
+/// ``OverflowError`` on a negative ``cap``.
+#[pyfunction]
+#[pyo3(
+    name = "build_dedup_context",
+    signature = (topical_json, pinned_json, recent_json, cap = crate::dedup_context::DEFAULT_DEDUP_CONTEXT_CAP)
+)]
+pub(crate) fn py_build_dedup_context(
+    topical_json: &str,
+    pinned_json: &str,
+    recent_json: &str,
+    cap: usize,
+) -> PyResult<String> {
+    crate::dedup_context::build_dedup_context_json(topical_json, pinned_json, recent_json, cap)
+        .map_err(to_pyerr)
+}
+
+// ---------------------------------------------------------------------------
+// Store-time write gate
+// ---------------------------------------------------------------------------
+
+/// Normalize a fact for the write gate's exact-duplicate check (NFC,
+/// lowercase, typographic folding, whitespace collapse, edge punctuation
+/// stripped). See ``write_gate::normalize_fact_text``.
+#[pyfunction]
+#[pyo3(name = "normalize_fact_text")]
+pub(crate) fn py_normalize_fact_text(text: &str) -> String {
+    crate::write_gate::normalize_fact_text(text)
+}
+
+/// Decide whether a new fact should be written.
+///
+/// Args:
+///     text: The new fact.
+///     embedding_json: JSON array of floats, or ``"null"`` / ``"[]"``.
+///     candidates_json: JSON array of ``{"id", "text", "embedding"?, "pinned"?}``.
+///     mode: ``"auto"`` | ``"explicit"`` | ``"exact_only"``.
+///     threshold: Cosine threshold in (0, 1]; ``None`` means 0.85.
+///
+/// Returns:
+///     JSON ``{"action": "store"|"skip"|"confirm", "match": null | {...}}``.
+///     Raises ``ValueError`` on malformed input.
+#[pyfunction]
+#[pyo3(
+    name = "decide_write",
+    signature = (text, embedding_json, candidates_json, mode = "auto", threshold = None)
+)]
+pub(crate) fn py_decide_write(
+    text: &str,
+    embedding_json: &str,
+    candidates_json: &str,
+    mode: &str,
+    threshold: Option<f64>,
+) -> PyResult<String> {
+    crate::write_gate::decide_write_json(text, embedding_json, candidates_json, threshold, mode)
+        .map_err(to_pyerr)
+}
+

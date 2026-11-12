@@ -14,10 +14,11 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 from ..relay import ReadBlockState, RelayReadBlocked
 from ..agent.read_block import read_block_tool_payload
+from ..pii import log_label, parse_allow_sensitive, screen_explicit
 
 if TYPE_CHECKING:
     from .state import PluginState
@@ -128,7 +129,46 @@ def _is_likely_agent_self_directive(text: str) -> bool:
     return has_agent_voice and has_tool_name
 
 
-async def remember(args: dict, state: "PluginState", **kwargs) -> str:
+def _gate_response(decision) -> Optional[str]:
+    """Tool result for a write the store-time gate stopped, or ``None``."""
+    m = decision.match
+    if decision.action == "store" or m is None:
+        return None
+    base = {
+        "stored": False,
+        "fact_id": m.fact_id,
+        "existing_text": m.text,
+        "match": m.kind,
+        "similarity": round(m.similarity, 3),
+        "pinned": m.pinned,
+    }
+    pinned_note = " The existing memory is pinned and was not changed." if m.pinned else ""
+    if decision.action == "skip":
+        return json.dumps({
+            **base,
+            "already_stored": True,
+            "reason": "This memory is already stored. Nothing was written." + pinned_note,
+        })
+    return json.dumps({
+        **base,
+        "possible_duplicate": True,
+        "reason": (
+            "A very similar memory is already stored (existing_text). Nothing "
+            "was written. If the new text says the same thing, do nothing. If "
+            "it adds or changes information, call totalreclaw_remember again "
+            "with force=true." + pinned_note
+        ),
+    })
+
+
+async def remember(
+    args: dict,
+    state: "PluginState",
+    *,
+    gate_mode: Optional[str] = None,
+    gate_exclude_ids: Iterable[str] = (),
+    **kwargs,
+) -> str:
     """Store a memory in TotalReclaw (v1 taxonomy).
 
     Accepts v1 taxonomy fields: ``type`` (claim | preference | directive |
@@ -136,6 +176,14 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
     ``reasoning`` for decision-style claims, plus the legacy ``importance``
     slider. Legacy v0 tokens (fact, decision, episodic, goal, context,
     rule) are coerced transparently via :func:`normalize_to_v1_type`.
+
+    Every write passes the store-time gate (``totalreclaw.write_gate``,
+    internal #632 / #501): an exact duplicate (after normalization) of a
+    stored or just-written fact is never written again, and a near duplicate
+    (cosine >= 0.85) asks the agent to confirm with ``force=true``.
+    ``gate_mode="exact_only"`` (the USER.md mirror and reconcile, which have
+    no agent to confirm) only skips exact duplicates. ``gate_exclude_ids``
+    leaves out facts the caller is about to replace.
     """
     from totalreclaw.agent.extraction import (
         VALID_MEMORY_TYPES,
@@ -151,10 +199,20 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
     if not text:
         return json.dumps({"error": "No text provided"})
 
+    # PRD-04 DEP-4 block-and-tell. First gate, so a blocked value never
+    # reaches a log line below; later logs use ``log_text`` (redacted unless
+    # the filter allowed the text).
+    pii_result, pii_notice = screen_explicit(
+        text, parse_allow_sensitive(args.get("allow_sensitive"))
+    )
+    if pii_notice is not None:
+        return json.dumps(pii_notice)
+    log_text = log_label(text, pii_result)
+
     if _is_likely_agent_self_directive(text):
         logger.warning(
             "totalreclaw_remember blocked agent self-directive: %r",
-            text[:200],
+            log_text,
         )
         return json.dumps({
             "stored": False,
@@ -179,7 +237,7 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
         state.increment_suppressed_writes()
         logger.info(
             "totalreclaw_remember suppressed (duplicate of pending auto-extract): %r",
-            text[:200],
+            log_text,
         )
         return json.dumps({
             "stored": False,
@@ -219,8 +277,38 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
             from totalreclaw.embedding import get_embedding
             embedding = get_embedding(text)
         except Exception as e:
-            logger.debug("embed failed for remember %r: %s", text[:40], e)
+            logger.debug("embed failed for remember %r: %s", log_label(text, pii_result, 40), e)
             # degrade: store without embedding (search falls back to blind indices)
+
+        from totalreclaw.write_gate import check_store, record_write
+
+        mode = gate_mode or ("exact_only" if force_write else "explicit")
+        decision = await check_store(
+            client, text, embedding, mode=mode, exclude_ids=gate_exclude_ids,
+        )
+        stopped = _gate_response(decision)
+        if stopped is not None:
+            logger.info(
+                "totalreclaw_remember not written (%s duplicate of %s)",
+                decision.match.kind, decision.match.fact_id,
+            )
+            return stopped
+
+        if kwargs.get("_from_mirror"):
+            # A copy of a Hermes built-in memory write (its memory tool or
+            # background review, which can re-add a line from an old
+            # transcript). Not an explicit request: never re-create a fact
+            # the user forgot (#605).
+            from totalreclaw.agent.lifecycle import _forget_ledger, _restates_forgotten
+
+            why = _restates_forgotten(text, embedding, _forget_ledger(client))
+            if why:
+                logger.info("memory mirror: not storing entry: %s", why)
+                return json.dumps({"stored": False, "skipped": "forgotten"})
+        else:
+            # An explicit remember brings a forgotten fact back: drop it from
+            # the forget ledger so auto-extraction may store it again (#605).
+            _release_forgotten(client, text, embedding)
 
         fact_id = await client.remember(
             text,
@@ -232,6 +320,7 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
             reasoning=reasoning,
             confidence=1.0,  # explicit remember = highest confidence
         )
+        record_write(client, fact_id, text, embedding)
         return json.dumps({
             "stored": True,
             "fact_id": fact_id,
@@ -242,6 +331,20 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
     except Exception as e:
         logger.error("totalreclaw_remember failed: %s", e)
         return json.dumps({"error": str(e)})
+
+
+def _release_forgotten(client, text: str, embedding) -> None:
+    """Best-effort: drop forget-ledger entries that *text* restates."""
+    from totalreclaw.forget_guard import ForgetLedger
+
+    try:
+        ledger = getattr(client, "forget_ledger", None)
+        if isinstance(ledger, ForgetLedger):
+            released = ledger.release(text, embedding)
+            if released:
+                logger.info("forget ledger: explicit remember released %d entr%s", released, "y" if released == 1 else "ies")
+    except Exception as e:
+        logger.debug("forget ledger: release failed: %s", type(e).__name__)
 
 
 async def recall(args: dict, state: "PluginState", **kwargs) -> str:
@@ -320,7 +423,13 @@ async def forget(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": "No fact_id provided"})
 
     try:
-        result = await client.forget(fact_id)
+        # A user-asked forget also goes into the encrypted forget ledger, so
+        # later auto-extraction doesn't re-create it (#605). The memory
+        # mirror's forget (a USER.md line was edited, i.e. replaced) passes
+        # ``_from_mirror`` and stays out of the ledger.
+        result = await client.forget(
+            fact_id, suppress_reextraction=not kwargs.get("_from_mirror", False)
+        )
         return json.dumps({"deleted": result["success"], "fact_id": fact_id})
     except Exception as e:
         logger.error("totalreclaw_forget failed: %s", e)

@@ -23,7 +23,7 @@
 | Parameter | Value | Notes |
 |-----------|-------|-------|
 | Trigger | First turn of each session | Hook: `before_agent_start` / `pre_llm_call` |
-| top_k | 8 | After reranking |
+| top_k | 16 (default) | After reranking. Server-driven via `billing.features.recall_top_k`; env override `TOTALRECLAW_RECALL_TOP_K`; an explicit caller `k` always wins (public #365) |
 | Query | Raw user message | No preprocessing |
 
 ### Billing
@@ -245,6 +245,23 @@ The write-path 403 `quota_exceeded` on `/v1/bundler` is a **different, unrelated
 | Debrief items bypass store-time near-duplicate detection | MCP, NanoClaw, Hermes | LOW | Only OpenClaw routes debrief through `storeExtractedFacts()` with batch+cosine dedup. Others call `client.remember()` directly. LLM-level dedup via `{already_stored_facts}` prompt + server-side content fingerprint mitigate. |
 | Hermes debrief stores without embedding | Hermes | LOW | `hooks.py` calls `client.remember()` without `embedding=` param, so debrief items lack LSH bucket hashes. Search relies on word-level blind indices only. |
 | NanoClaw debrief has no code-level 8-message guard | NanoClaw | LOW | Triggers based on `validation.facts.length > 0`, not conversation length. LLM prompt returns `[]` for trivial conversations, but no code guard like other clients. |
+
+### Sensitive-data (PII / credential) filter
+
+PRD-04 DEP-4. Every client screens candidate memory text with core `pii_filter` (WASM `piiFilter`, PyO3 `pii_filter`) before storing it. Never re-implement the patterns client-side.
+
+| Decision | Automatic writes (turn extraction, session Crystal, background mirrors, MCP trajectory poller) | Explicit `totalreclaw_remember` |
+|----------|------|------|
+| `allow` | store | store |
+| `flag` | drop | store |
+| `block` | drop | do not store; return block-and-tell. Store only when the call carries `allow_sensitive: true` |
+
+- **Binding output** (byte-identical in WASM and PyO3): `{"decision":"allow"}` or `{"decision":"block"|"flag","category":"<tag>","message":"<text>"}`. Tags: `private_key`, `seed_phrase`, `api_key`, `auth_token`, `password`, `payment_card`, `bank_account`, `government_id`. `message` is the user-facing text; relay it verbatim.
+- **Block-and-tell result** (single-fact remember, Hermes and MCP): `{"stored": false, "blocked": "sensitive", "category": "<tag>", "message": "<text>", "override": "allow_sensitive"}`, keys in this order. MCP `facts[]` batches keep their envelope, store the other facts, and add `sensitive_blocked: [<notice + "index">]`; blocked facts count as `skipped`.
+- **`allow_sensitive`** is strict: only boolean `true` or the string `"true"` overrides.
+- **Logs** carry the decision and category only, never the screened text.
+- **Filter failure** (binding missing or throwing): treat the text as `flag` with category `filter_error`. Automatic paths drop it; an explicit remember stores it.
+- **Parity:** `tests/parity/pii/corpus.json` — the Rust, WASM and PyO3 runners assert identical decisions. The extraction and compaction prompts carry the matching Rule 7.
 
 ### On-Chain Write Pipeline
 

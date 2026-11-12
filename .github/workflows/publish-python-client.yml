@@ -8,9 +8,9 @@ on:
         required: false
         type: choice
         options:
-          - stable
           - rc
-        default: stable
+          - stable
+        default: rc
       rc-number:
         description: 'RC increment (1, 2, 3...) — only used when release-type=rc'
         required: false
@@ -36,8 +36,14 @@ on:
 #   - Staging access is opt-in via
 #     ``TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz`` at
 #     runtime. The rule only changes the default.
-#   - A pre-publish CI guard fails the build if any wheel still contains
-#     ``api-staging`` (stranded staging defaults are forbidden).
+#   - A pre-publish CI guard (scripts/check-url-binding.cjs, profile
+#     ``python-client``) fails the build unless both default-URL sites in the
+#     built wheel bind production (``_HARDCODED_DEFAULT_URL`` in
+#     ``relay.py``, ``DEFAULT_RELAY_URL`` in ``pair/remote_client.py``), and
+#     fails on any quoted staging URL in the wheel's ``.py`` files. Mentions
+#     of ``api-staging`` in comments, in the staging-mode banner copy and in
+#     the staging-detection check (a host without a scheme) are allowed:
+#     they don't change the default.
 
 jobs:
   build:
@@ -190,34 +196,30 @@ jobs:
       - name: Build sdist and wheel
         run: cd python && python -m build
 
-      # 2.3.12-rc.1 (F flip) pre-publish CI guard. Both stable and RC
-      # wheels MUST default to production. Any stranded ``api-staging``
-      # literal is a release-blocker.
+      # 2.3.12-rc.1 (F flip) pre-publish CI guard, widened in internal#706.
+      # Both stable and RC wheels MUST default to production. Until #706 this
+      # step read only the `_HARDCODED_DEFAULT_URL` line, while the header
+      # above said it failed on any staging URL; it now checks both default
+      # sites and rejects any quoted staging URL in the wheel's .py files
+      # (see the header).
+      - uses: actions/setup-node@v5  # runs scripts/check-url-binding.cjs
+        with:
+          node-version: '22'
+
       - name: Verify wheel default-URL binding (post-F-flip — production for both)
         run: |
-          cd python
           set -euo pipefail
-          rm -rf /tmp/wheel-check
-          mkdir -p /tmp/wheel-check
-          for whl in dist/*.whl; do
-            python -m zipfile -e "$whl" /tmp/wheel-check/
+          shopt -s nullglob
+          wheels=(python/dist/*.whl)
+          if [ ${#wheels[@]} -eq 0 ]; then
+            echo "::error::no wheel in python/dist/"
+            exit 1
+          fi
+          for whl in "${wheels[@]}"; do
+            out=$(mktemp -d)
+            python -m zipfile -e "$whl" "$out"
+            node scripts/check-url-binding.cjs --profile=python-client --root="$out" --release-type=${{ inputs.release-type }}
           done
-          echo "Scanning extracted wheel for URL literals..."
-          default_url_line=$(grep -RIn '^_HARDCODED_DEFAULT_URL\s*=' /tmp/wheel-check/ --include='*.py' || true)
-          echo "Canonical default-URL line: ${default_url_line:-<not-found>}"
-          if [ -z "$default_url_line" ]; then
-            echo "::error::Canonical _HARDCODED_DEFAULT_URL line not found in wheel."
-            exit 1
-          fi
-          if echo "$default_url_line" | grep -q "api-staging\.totalreclaw\.xyz"; then
-            echo "::error::Wheel default-URL still binds to staging. Both stable and RC must default to production."
-            exit 1
-          fi
-          if ! echo "$default_url_line" | grep -q "https://api\.totalreclaw\.xyz"; then
-            echo "::error::Wheel default-URL is neither staging nor production. Inspect the line above."
-            exit 1
-          fi
-          echo "OK (${{ inputs.release-type }}): wheel binds to production by default."
 
       - uses: actions/upload-artifact@v6
         with:

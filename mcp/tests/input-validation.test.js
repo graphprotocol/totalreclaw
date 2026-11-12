@@ -177,20 +177,20 @@ describe('Input Validation Edge Cases', () => {
       const parsed = JSON.parse(result.content[0].text);
       // Should not error -- handler trims and passes to client
       expect(parsed.memories).toEqual([]);
-      expect(mockClient.recall).toHaveBeenCalledWith(longQuery.trim(), 8);
+      expect(mockClient.recall).toHaveBeenCalledWith(longQuery.trim(), 16);
     });
 
-    it('clamps k=0 to default (8)', async () => {
+    it('clamps k=0 to default (16)', async () => {
       const mockClient = createMockClient();
       const result = await handleRecall({ client: mockClient }, { query: 'test', k: 0 }, 'default');
       // k < 1 is reset to 8
-      expect(mockClient.recall).toHaveBeenCalledWith('test', 8);
+      expect(mockClient.recall).toHaveBeenCalledWith('test', 16);
     });
 
-    it('clamps negative k to default (8)', async () => {
+    it('clamps negative k to default (16)', async () => {
       const mockClient = createMockClient();
       const result = await handleRecall({ client: mockClient }, { query: 'test', k: -5 }, 'default');
-      expect(mockClient.recall).toHaveBeenCalledWith('test', 8);
+      expect(mockClient.recall).toHaveBeenCalledWith('test', 16);
     });
 
     it('clamps k=100 to maximum (50)', async () => {

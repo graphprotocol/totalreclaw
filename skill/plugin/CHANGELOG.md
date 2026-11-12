@@ -4,6 +4,8 @@
 
 - **Recall downloads much less data on large vaults.** Blind-index queries now return fact ids only. Each unique fact's payload (blob + embedding) is then fetched once, in batches of 100, with at most 6 subgraph queries in flight. Before, every trapdoor batch carried the full payload of every fact it matched, so a fact that matched several batches was downloaded several times. Same candidates in the same order, so ranking is unchanged. On a mocked 1,000-fact vault, a recall dropped from about 10 MB to 3.2 MB. Port of the Python change (public #703); internal #666.
 
+- **Recall returns 16 facts by default, up from 8.** `memory_search` without `maxResults` and the `before_agent_start` auto-recall now return up to 16 reranked facts, matching Hermes. 16 has been the Python default since public #365: on LOCOMO, going from 8 to 16 raised overall accuracy from 40% to 47% and multi-hop from 18% to 35%; 24 was tested and was flat against 16. The default resolves as env `TOTALRECLAW_RECALL_TOP_K` > the relay's `features.recall_top_k` from the billing cache > 16, the same order as the Python client (`resolveRecallTopK` in `billing/billing-cache.ts`). An explicit `maxResults` still wins, and the existing cap of 20 still applies. `memory_search` no longer pins a default of its own, so the relay value reaches it. Each hit's snippet stays capped at 500 characters, so 16 hits are at most about 8 KB of tool output. `skill.json` defaults and the reranker's `topK` default say 16. Tests: `billing/billing-cache.test.ts`, `memory/memory-runtime.test.ts`.
+
 ## [3.4.5] — 2026-09-06
 
 ### Fixed
@@ -17,6 +19,12 @@
 All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Fixed
+
+- **Pro tier copy is 3,000 memories/month, not 1,500.** Stripe is the source of truth (Free 250/month, Pro 3,000/month). Updated the upgrade tool descriptions in `skill.json`. Text only; no behaviour change.
 
 ## [3.4.4] — 2026-08-05
 

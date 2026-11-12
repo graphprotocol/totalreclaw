@@ -5,6 +5,59 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **[PRD-04 F1 / DEP-5] Recall pin boost.** `RerankerConfig.pin_boost: Option<f64>` (JSON `pin_boost`) multiplies the BM25 and cosine scores of candidates whose new `Candidate.pinned: bool` (JSON `pinned`, default `false`) is set, before the RRF ranks are computed. A pin moves up only past candidates whose relevance is within the boost of its own, so an irrelevant pin never jumps the queue, even in a small candidate pool (a multiplier on the fused RRF score would put every pin first in pools of 31 or fewer). `None` (the default), a non-finite value, a value `<= 1.0`, or an empty query embedding is a no-op, so every existing caller ranks bit-for-bit as before and no parity vector changes. `DEFAULT_PIN_BOOST = 1.5` (= `PinConfig::default().hard_boost`, signed off 2026-04-28). PyO3: `rerank_with_config(..., pin_boost=None)`, `default_pin_boost()`. WASM: `rerankWithConfig(..., pin_boost?)`, `defaultPinBoost()`. Spec: `docs/specs/totalreclaw/retrieval-v2.md` §Pin boost.
+
+- **[PRD-04 DEP-3] `dedup_context` — topical dedup context for extraction prompts.** New module `dedup_context`. `build_dedup_context(topical, pinned, recent, cap) -> String` renders the "Existing memories" block a client appends to the extraction user prompt. The header is byte-identical to the block Hermes and the OpenClaw plugin built inline. There is one `[ID: <fact id>] <text>` line per memory: pinned first, then topical, then recent. Duplicate fact ids keep the first occurrence. Ids and texts are collapsed to one line: every line-break character (the `str.splitlines` set, including U+2028, U+2029 and NEL) becomes one space, so a stored fact cannot inject a line. At most `cap` lines are kept (`DEFAULT_DEDUP_CONTEXT_CAP` = 30), and the result is `""` when nothing survives. The input element is `DedupContextItem { id, text }`, where `id` is the on-chain fact id the LLM echoes back as `existingFactId`. The v0 `Claim` was not used because it carries no id. The bindings go through the JSON wrapper `build_dedup_context_json`: WASM `buildDedupContext(topicalJson, pinnedJson, recentJson, cap?)` and PyO3 `build_dedup_context(topical_json, pinned_json, recent_json, cap=30)`. `cap` defaults to 30 in both. WASM throws on a negative, fractional, `NaN` or infinite `cap`; PyO3 raises `OverflowError` on a negative one. Malformed JSON or a non-array section raises (`JsError` / `ValueError`), `null` is an empty section, and extra fields are ignored. The cross-language fixture `tests/parity/fixtures/dedup-context-v1.json` (16 cases, written by `generate-dedup-context-v1.py` from an independent Python reference) is checked by the Rust tests, `tests/parity/dedup-context-parity.test.ts` (WASM) and `python/tests/test_dedup_context_parity.py` (PyO3).
+
+- **Store-time write gate.** New module `write_gate`. `normalize_fact_text(text)` folds case, Unicode form (NFC), typographic quotes and dashes, whitespace runs and edge punctuation, so "User is vegetarian" and "user is vegetarian." compare equal while "knows C" and "knows C++" stay different. `decide_write(text, embedding, candidates, threshold, mode)` returns `store`, `skip` or `confirm` plus the matching fact: an exact normalized match skips in every mode; a cosine match at `>= 0.85` (`STORE_DEDUP_COSINE_THRESHOLD`) skips in `auto` mode (pinned candidates ignored), asks for confirmation in `explicit` mode and is stored in `exact_only` mode. It only decides; the caller picks the candidates. PyO3: `normalize_fact_text`, `decide_write(text, embedding_json, candidates_json, mode="auto", threshold=None)`. WASM: `normalizeFactText`, `decideWrite(text, embeddingJson, candidatesJson, mode, threshold?)`. Fixture `tests/parity/fixtures/write-gate-v1.json` (23 normalize + 18 decide cases from an independent Python reference), checked by Rust, `tests/parity/write-gate-parity.test.ts` and `python/tests/test_write_gate_parity.py`.
+- **`forget_guard`: keep auto-extraction from re-creating a fact the user forgot (internal#605, #640).** Pure write-time checks for a client-side list of explicitly forgotten facts. `match_forgotten(text, embedding, entries)` returns the first entry the candidate restates: `exact` (normalized text equal; no embedding needed), `subset` (candidate adds no content word, cosine >= 0.70), `superset` (candidate keeps every content word, cosine >= 0.80) or `anchor` (2+ and at least half of the forgotten text's capitalized / numeric words, cosine >= 0.80). A candidate that drops and adds ordinary words never matches, so value swaps ("blue" → "green", "Lisbon" → "Porto") still store. `is_forget_request(text)` flags notes about a deletion ("User asked to forget X", "asked for that record to be removed"); it needs a request verb before "to forget" or a memory/record target, so "tends to forget appointments" and "wants to delete their Facebook account" pass. Bindings: PyO3 `match_forgotten(text, embedding_json, entries_json) -> str` and `is_forget_request(text) -> bool`; WASM `matchForgotten` / `isForgetRequest`. Cross-language fixture `tests/parity/fixtures/forget-guard-v1.json`, checked by the Rust tests, `tests/parity/forget-guard-parity.test.ts` (WASM) and `python/tests/test_forget_guard.py`. No on-chain or protobuf change.
+- **[PRD-04 DEP-4] PII / credential filter.** New `pii` module:
+  - `pii_filter(text) -> PiiDecision { Allow | Block { category } | Flag { category } }`;
+  - `PiiCategory`, with stable snake_case tags via `as_str()`;
+  - `pii_block_message(category)`, the user-facing block-and-tell text (word-identical across clients; **copy pending approval**, internal #549);
+  - `PiiDecision::to_json()`.
+
+  It is a regex + validator tier only, with no ML:
+  - credentials: the 14 `secrets` classes; GitHub fine-grained, GitLab, Google, npm, PyPI, Groq, xAI, OpenRouter and Telegram bot token formats; keyword-assigned keys/tokens; upper-case env-var assignments; bearer/basic/`Authorization` headers; passwords, PINs and URL credentials;
+  - payment cards: issuer prefix + Luhn;
+  - IBAN: country length table + mod-97;
+  - government IDs: PT NIF/CC, ES DNI/NIE, IT codice fiscale, FR NIR, US SSN, BR CPF, and keyword-named passport/ID/licence/NINO/NHS/Aadhaar numbers;
+  - private keys: 64/128-hex, PEM, `xprv`, and keyword-named base58/WIF;
+  - BIP-39 phrases: checksum-valid → block; a checksum-invalid run of exactly 12/15/18/21/24 wordlist words, or one named as a phrase → flag.
+
+  Bindings: WASM `piiFilter` and PyO3 `pii_filter`, both returning the canonical JSON. The corpus `tests/parity/pii/corpus.json` (317 items: 142 negative, 175 positive) is asserted by the Rust, WASM and PyO3 runners: 0 negative-set leaks, 0 positive-set false blocks.
+- **Extraction and compaction prompts: Rule 7.** Never extract secrets or sensitive identifiers; this is the prompt half of DEP-4. The prompt bytes (and therefore their SHA-256) change with this minor (`memory-taxonomy-v1.md` "Version locking").
+
+### Changed
+
+- `dedup_context` (unreleased, PRD-04 DEP-3): a line from the pinned section now reads `[ID: <id>] [pinned, read-only] <text>`, and a block with at least one pinned line ends with `DEDUP_CONTEXT_PINNED_NOTE`, which tells the LLM never to UPDATE or DELETE a pinned memory and to ADD new information instead. Pin guards drop an UPDATE aimed at a pin, so without the note the new information was lost. The note is not counted against `cap`. `dedup-context-v1.json` was regenerated in place (17 cases); it has not been released.
+- `reranker::Candidate` gains the public field `pinned`. Rust code that builds a `Candidate` with a struct literal must add `pinned: false`; JSON callers (all WASM/PyO3 clients) are unaffected because the field defaults to `false`. In-tree callers (`search.rs`, `totalreclaw-memory`) are updated.
+
+### Changed
+
+- **Extraction prompt stores fewer non-facts.** The canonical `extraction.md` gains
+  three rules and two sharper type definitions: a memory is a full sentence with a
+  subject, never a clause or question (internal #620, #662); a single request is
+  not a trait, and one-off tasks are skipped unless they belong to the user's job or
+  project (what a request reveals about the user is still kept); the assistant's
+  suggestions are not stored as the user's decisions (#638); `commitment` excludes
+  past and ongoing activity (#344). Measured on the internal small-model testbed with
+  GLM 5.3 Flash through the shipped Python pipeline: on real user chats
+  (held out from tuning) precision rises by 9.7 points on Enclave-style batches and
+  10.4 on 3-turn plugin windows, recall moves by -3.2 and -2.3 (95% intervals
+  include zero), and facts stored on windows with nothing worth storing drop by 11
+  and 15 points. Applies to every client that reads the core prompt (Python/Hermes,
+  NanoClaw). The OpenClaw plugin and MCP server keep their own copies of the prompt
+  and are unchanged.
+
+### Fixed
+
+- **`secrets::detect_secrets` was unsafe on multi-byte text.** It panicked when accented text sat within 38 bytes of a secret, because the context window was sliced mid-UTF-8. It could also miss a secret right after a multi-byte character, because the word-boundary check read a UTF-8 continuation byte as a `char`. Both paths now decode characters.
+
 ## [2.6.1] - 2026-11-02
 
 Packaging-only release for the PyPI wheel. No source, API or output changes:

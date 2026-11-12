@@ -63,7 +63,8 @@ All clients ship v1 by default. Stable production versions: core 2.5.6 (npm; 2.5
 ## Setup Guides
 
 - [OpenClaw](openclaw-setup.md)
-- [Claude Desktop / Cursor / Windsurf](claude-code-setup.md)
+- [Claude Desktop](claude-desktop-setup.md)
+- [Claude Code / Cursor / Windsurf](claude-code-setup.md)
 - [NanoClaw](nanoclaw-getting-started.md)
 - [Hermes (Python)](hermes-setup.md)
 - [IronClaw (NEAR AI)](ironclaw-setup.md)
@@ -79,6 +80,6 @@ All platforms support two storage modes. The encryption is identical -- the diff
 |---|---|---|
 | **Storage** | On-chain (Gnosis Chain) via The Graph | Your PostgreSQL database |
 | **Free tier** | 250 memories/month on Gnosis mainnet, permanent | Subject to your infrastructure |
-| **Pro tier** | 1,500 memories/month on Gnosis mainnet, permanent (see `totalreclaw_status` for current pricing) | N/A |
+| **Pro tier** | 3,000 memories/month on Gnosis mainnet, permanent (see `totalreclaw_status` for current pricing) | N/A |
 | **Setup** | Nothing -- works out of the box | Set `TOTALRECLAW_SELF_HOSTED=true` + server URL |
 | **Consolidation tool** | Not available (no batch delete on-chain) | Available |

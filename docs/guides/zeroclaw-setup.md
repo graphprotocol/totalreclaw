@@ -33,7 +33,10 @@ backend = "totalreclaw"
 [memory.totalreclaw]
 recovery_phrase_path = "~/.totalreclaw/credentials.json"
 embedding_config_path = "~/.totalreclaw/embedding-config.json"
+# relay_url = "https://api.totalreclaw.xyz"   # optional; this is the default
 ```
+
+`relay_url` is optional and defaults to the production relay. The `TOTALRECLAW_SERVER_URL` environment variable, when set, overrides it. QA and test runs pin the staging relay that way: `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz`.
 
 ## 3. First Run — Setup Wizard
 
@@ -108,7 +111,7 @@ Switch agents, keep your memories. No export/import needed.
 Check [totalreclaw.xyz/pricing](https://totalreclaw.xyz/pricing) for current pricing.
 
 - **Free tier** — 250 memories/month on Gnosis mainnet. Permanent, E2E encrypted, no credit card required.
-- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup. See `totalreclaw_status` for current pricing.
+- **Pro tier** — 3,000 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup. See `totalreclaw_status` for current pricing.
 
 ## Troubleshooting
 

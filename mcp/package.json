@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/mcp-server",
-  "version": "3.5.0",
+  "version": "3.5.3",
   "description": "End-to-end encrypted memory for AI agents \u2014 portable, yours forever. MCP server with XChaCha20-Poly1305 E2EE, semantic search, import/export, and on-chain storage",
   "homepage": "https://totalreclaw.xyz",
   "main": "dist/index.js",
@@ -17,7 +17,9 @@
     "lint": "eslint src --ext .ts",
     "clean": "rm -rf dist",
     "start": "node dist/index.js",
-    "setup": "node dist/cli/setup.js"
+    "setup": "node dist/cli/setup.js",
+    "check-url-binding": "node scripts/check-url-binding.cjs",
+    "prepublishOnly": "node scripts/check-url-binding.cjs"
   },
   "keywords": [
     "totalreclaw",
@@ -35,7 +37,7 @@
   "license": "MIT",
   "dependencies": {
     "@huggingface/transformers": "^4.0.1",
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/server": "^2.1.0",
     "@noble/hashes": "^2.0.1",
     "@scure/bip39": "^2.0.1",
     "@totalreclaw/client": "^1.3.0",
@@ -51,6 +53,7 @@
     }
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.1.0",
     "@types/jest": "^29.5.0",
     "@types/node": "^20.11.0",
     "@types/ws": "^8.5.12",
@@ -62,7 +65,7 @@
     "typescript": "^5.3.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "files": [
     "dist",

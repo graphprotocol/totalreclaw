@@ -282,12 +282,25 @@ def _find_mirrored_facts(state: "PluginState", text: str) -> List[str]:
     return []
 
 
-def _mirror_remember(state: "PluginState", args: Dict[str, Any]) -> bool:
-    """Store a mirrored entry through ``tools.remember``. False on error."""
+def _mirror_remember(
+    state: "PluginState", args: Dict[str, Any], exclude_ids: Optional[List[str]] = None,
+) -> bool:
+    """Store a mirrored entry through ``tools.remember``. False on error.
+
+    The store-time gate runs in ``exact_only`` mode: an entry already in the
+    vault (same text after normalization, or written moments ago and not yet
+    indexed) is not written again, and that still counts as success. Near
+    duplicates are written: with no agent to judge them, a changed value
+    ("lives in Porto" vs "lives in Lisbon") must not be dropped.
+    ``exclude_ids`` are facts this entry replaces (they are forgotten next).
+    """
     from .tools import remember as _remember
     from totalreclaw.agent.loop_runner import run_sync
 
-    result = _parse_tool_result(run_sync(_remember(args, state)))
+    result = _parse_tool_result(run_sync(_remember(
+        args, state, gate_mode="exact_only", gate_exclude_ids=list(exclude_ids or ()),
+        _from_mirror=True,
+    )))
     if result.get("error"):
         logger.warning("memory mirror: remember failed: %s", result["error"])
         return False
@@ -302,7 +315,7 @@ def _mirror_forget(state: "PluginState", fact_ids: List[str]) -> int:
 
     forgotten = 0
     for fact_id in fact_ids:
-        result = _parse_tool_result(run_sync(_forget({"fact_id": fact_id}, state)))
+        result = _parse_tool_result(run_sync(_forget({"fact_id": fact_id}, state, _from_mirror=True)))
         if result.get("error") or not result.get("deleted", True):
             logger.warning(
                 "memory mirror: forget %s failed: %s",
@@ -752,6 +765,20 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         exact_previous = bool(meta.get("previous_content"))
         previous = str(meta.get("previous_content") or meta.get("old_text") or "").strip()
 
+        # PRD-04 DEP-4: this mirror is an automatic write (Hermes' built-in
+        # memory tool / background review, not an explicit TotalReclaw
+        # remember), so it follows the auto-extraction rule — only ``allow``
+        # text is mirrored; block and flag are dropped (category-only log).
+        if action != "remove" and text:
+            from totalreclaw.pii import auto_storable
+
+            if not auto_storable(text):
+                logger.info(
+                    "TotalReclaw on_memory_write mirror skipped: sensitive content (action=%s)",
+                    action,
+                )
+                return
+
         if action == "add":
             if not text:
                 return
@@ -848,7 +875,7 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
                 old_ids = _find_mirrored_facts(self._state, previous)
             except Exception as exc:  # e.g. reads paused: still store the new entry
                 logger.info("memory mirror: old-entry lookup failed: %s", exc)
-        if not _mirror_remember(self._state, {"text": text}):
+        if not _mirror_remember(self._state, {"text": text}, exclude_ids=old_ids):
             # Keep the old fact rather than lose both.
             logger.info("memory mirror: replace target=%s stored=0 forgotten=0", target)
             return

@@ -149,6 +149,28 @@ assistant-source facts surface when the user query targets them.
 
 ---
 
+## Pin boost (PRD-04 F1 / DEP-5)
+
+**What:** `RerankerConfig.pin_boost: Option<f64>` (JSON `pin_boost`) multiplies the BM25 and cosine scores of candidates whose `Candidate.pinned` is `true` (JSON `pinned`, default `false`) before the RRF ranks are computed:
+
+    rank_bm25   = rank of (pinned && bm25 > 0   ? bm25   × pin_boost : bm25)
+    rank_cosine = rank of (pinned && cosine > 0 ? cosine × pin_boost : cosine)
+    final_score = fused(rank_bm25, rank_cosine) × source_weight
+
+The intent weights use the raw cosine, and `RankedResult.bm25_score` / `cosine_score` report the raw values. `None` (the default), a non-finite value, a value ≤ 1.0, or an **empty query embedding** is a no-op. Callers that do not opt in therefore rank bit-for-bit as before, and no parity vector changed.
+
+**Enabled value:** `DEFAULT_PIN_BOOST = 1.5` (core `reranker.rs`; equal to `PinConfig::default().hard_boost`). Pedro signed off 1.5× on 2026-04-28 (internal F1 pin-UX defaults note) as strong enough to lift pinned facts about 50% above unpinned ones without making every pin rank first. On-wire pins are binary (`pin_status == "pinned"`) and carry no pin timestamp, so the non-decaying hard-pin value applies. Soft-pin decay (`claims::pin_boost`) needs a pin timestamp on the wire first.
+
+**Why the boost scales relevance, not the fused score:** RRF scores sit on a `1 / (60 + rank)` floor, so they span only about 2× between rank 1 and rank 60. A 1.5× multiplier on the fused score would move a candidate from combined rank r to roughly (60 + r) / 1.5 − 60: any candidate ranked 31 or better on both signals would land above rank 1. In a pool of 31 or fewer candidates, every pinned fact would rank first however unrelated to the query. Scaling BM25 and cosine instead means a pin moves up only past candidates whose relevance is within 1.5× of its own, which is the signed-off "about 50% above unpinned". A relevant pin just outside the top k still moves into it; a pin that matches neither signal stays where it is in any pool size (core tests `test_pin_boost_lifts_pinned_candidate_just_outside_top_k_into_top_k`, `test_pin_boost_lifts_a_pin_only_past_candidates_it_is_within_1_5x_of`, `test_pin_boost_does_not_surface_an_irrelevant_pinned_fact`, `..._in_a_small_pool`).
+
+**Why no boost without a query embedding:** Hermes auto-recall is lexical-only until PRD-04 DEP-8 adds a query embedding. Keeping the boost off there leaves auto-recall ranking unchanged until DEP-8 decides it; with the relevance-scaled boost a lexical-only boost would be safe, so DEP-8 may lift this rule. Explicit recall, contradiction-candidate recall and MCP recall all embed the query.
+
+**Pin state source:** clients set `pinned` from core `is_pinned_claim` / `isPinnedClaim` on the decrypted blob (v1.1 `pin_status` or v0 `st == "p"`).
+
+**Status:** Hermes: every recall through `search_facts`. MCP managed recall: DEP-5 Part B. Not wired: OpenClaw plugin (parked), ZeroClaw, MCP self-hosted HTTP recall.
+
+---
+
 ## Tier 2 — Scope pre-filter (OPTIONAL, post-v1)
 
 **Rationale:** If user query carries a scope hint ("at work…", "for my health…"), pre-filtering candidates by scope improves precision. Otherwise, scope is ignored at retrieval time (as today).

@@ -62,6 +62,7 @@ mod bind_store;
 mod bind_search;
 mod bind_kg;
 mod bind_recall;
+mod bind_pii;
 
 pub(crate) use bind_bundle::*;
 pub(crate) use bind_crypto::*;
@@ -75,6 +76,7 @@ pub(crate) use bind_store::*;
 pub(crate) use bind_search::*;
 pub(crate) use bind_kg::*;
 pub(crate) use bind_recall::*;
+pub(crate) use bind_pii::*;
 
 // ---------------------------------------------------------------------------
 // Module registration
@@ -123,15 +125,27 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_parse_debrief_response, m)?)?;
     m.add_function(wrap_pyfunction!(py_get_debrief_system_prompt, m)?)?;
 
+    // Forget guard: keep auto-extraction from re-creating forgotten facts (internal#605).
+    m.add_function(wrap_pyfunction!(py_match_forgotten, m)?)?;
+    m.add_function(wrap_pyfunction!(py_is_forget_request, m)?)?;
+
     // Canonical extraction + compaction system prompts (core 2.2.0 hoist).
     m.add_function(wrap_pyfunction!(py_get_extraction_system_prompt, m)?)?;
     m.add_function(wrap_pyfunction!(py_get_compaction_system_prompt, m)?)?;
+
+    // Topical dedup context for the extraction prompt (PRD-04 DEP-3).
+    m.add_function(wrap_pyfunction!(py_build_dedup_context, m)?)?;
+
+    // Store-time write gate (normalized exact + cosine near-duplicate).
+    m.add_function(wrap_pyfunction!(py_normalize_fact_text, m)?)?;
+    m.add_function(wrap_pyfunction!(py_decide_write, m)?)?;
 
     // Reranker
     m.add_function(wrap_pyfunction!(py_rerank, m)?)?;
     m.add_function(wrap_pyfunction!(py_rerank_with_config, m)?)?;
     m.add_function(wrap_pyfunction!(py_source_weight, m)?)?;
     m.add_function(wrap_pyfunction!(py_legacy_claim_fallback_weight, m)?)?;
+    m.add_function(wrap_pyfunction!(py_default_pin_boost, m)?)?;
     m.add_function(wrap_pyfunction!(py_validate_memory_claim_v1, m)?)?;
     m.add_function(wrap_pyfunction!(py_parse_memory_type_v1, m)?)?;
     m.add_function(wrap_pyfunction!(py_parse_memory_source, m)?)?;
@@ -242,6 +256,9 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Session segmentation (import Crystal grouping) — #368
     m.add_function(wrap_pyfunction!(py_segment_sessions, m)?)?;
+
+    // PII / credential filter (PRD-04 DEP-4)
+    m.add_function(wrap_pyfunction!(py_pii_filter, m)?)?;
 
     Ok(())
 }
@@ -774,6 +791,7 @@ mod tests {
             candidates,
             10,
             true,
+            None,
         )
         .unwrap();
         // User must come first — the JSON array is ordered by score desc.
@@ -799,6 +817,7 @@ mod tests {
             candidates_json,
             10,
             false,
+            None,
         )
         .unwrap();
         let v0 = py_rerank(
@@ -809,5 +828,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(off, v0, "flag OFF must equal v0 rerank output");
+    }
+
+    #[test]
+    fn py_rerank_with_config_pin_boost_lifts_pinned_candidate() {
+        // Same fixture as reranker::tests::pin_fixture (PRD-04 DEP-5).
+        let candidates = r#"[
+            {"id":"a","text":"alpha note","embedding":[1.0,0.0,0.0,0.0],"timestamp":""},
+            {"id":"b","text":"bravo note","embedding":[0.9,0.1,0.0,0.0],"timestamp":""},
+            {"id":"c","text":"charlie note","embedding":[0.8,0.2,0.0,0.0],"timestamp":""},
+            {"id":"p","text":"papa note","embedding":[0.7,0.3,0.0,0.0],"timestamp":"","pinned":true},
+            {"id":"e","text":"echo note","embedding":[0.6,0.4,0.0,0.0],"timestamp":""},
+            {"id":"f","text":"foxtrot note","embedding":[0.5,0.5,0.0,0.0],"timestamp":""}
+        ]"#;
+        let ids = |s: &str| -> Vec<String> {
+            serde_json::from_str::<Vec<serde_json::Value>>(s)
+                .unwrap()
+                .iter()
+                .map(|v| v["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let off = py_rerank_with_config("zulu", vec![1.0f32, 0.0, 0.0, 0.0], candidates, 3, false, None).unwrap();
+        let on = py_rerank_with_config(
+            "zulu",
+            vec![1.0f32, 0.0, 0.0, 0.0],
+            candidates,
+            3,
+            false,
+            Some(py_default_pin_boost()),
+        )
+        .unwrap();
+        assert_eq!(ids(&off), vec!["a", "b", "c"]);
+        assert_eq!(ids(&on), vec!["p", "a", "b"]);
+        assert_eq!(py_default_pin_boost(), 1.5);
     }
 }
