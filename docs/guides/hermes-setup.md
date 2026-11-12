@@ -5,7 +5,7 @@
 
 This document describes how the agent installs and sets up TotalReclaw on Hermes. The agent uses the tool surface listed here. The user only types one of the install prompts below in their chat client; everything else happens through tools.
 
-> **Wrong runtime?** This guide is for **Hermes** only. If you are an **OpenClaw** agent, follow [`openclaw-setup.md`](./openclaw-setup.md); if you are **Claude Desktop / Cursor / Windsurf / any MCP host**, follow [`claude-code-setup.md`](./claude-code-setup.md); if you are unsure which runtime you are, follow the universal dispatcher [`install.md`](./install.md) instead.
+> **Wrong runtime?** This guide is for **Hermes** only. If you are an **OpenClaw** agent, follow [`openclaw-setup.md`](./openclaw-setup.md); if you are **Claude Desktop**, follow [`claude-desktop-setup.md`](./claude-desktop-setup.md); if you are **Claude Code / Cursor / Windsurf / another MCP coding tool**, follow [`claude-code-setup.md`](./claude-code-setup.md); if you are unsure which runtime you are, follow the universal dispatcher [`install.md`](./install.md) instead.
 
 ---
 
@@ -48,7 +48,7 @@ Install TotalReclaw RC <version>. See https://github.com/graphprotocol/totalrecl
 Install TotalReclaw RC <version> against the staging relay (TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz). See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md
 ```
 
-The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` and `TOTALRECLAW_RELAY_URL=https://api-staging.totalreclaw.xyz` in the install / setup shell before any TotalReclaw command. Without these env vars, both stable AND RC installs default to the production relay `api.totalreclaw.xyz`.
+The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` in the install / setup shell before any TotalReclaw command. That one variable picks the relay for reads, writes and pairing. Without it, both stable AND RC installs default to the production relay `api.totalreclaw.xyz`. `TOTALRECLAW_RELAY_URL` is not an alias for it: it only sets the pairing URL, and only when `TOTALRECLAW_SERVER_URL` is unset, so setting it alone leaves reads and writes on production.
 
 ---
 

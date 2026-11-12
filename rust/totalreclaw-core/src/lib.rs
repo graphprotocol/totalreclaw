@@ -12,6 +12,7 @@
 //! - [`blind`] — Blind index generation (SHA-256 token hashing + Porter stemming)
 //! - [`stemmer`] — Porter 1 stemmer (hand-rolled, NOT Snowball/Porter 2)
 //! - [`fingerprint`] — Content fingerprint (HMAC-SHA256 with NFC normalization)
+//! - [`forget_guard`] — Write-time check that keeps auto-extraction from re-creating a fact the user forgot (internal#605)
 //! - [`protobuf`] — Minimal protobuf encoder for fact payloads
 //! - [`reranker`] — BM25 + Cosine + RRF fusion reranker
 //! - [`debrief`] — Session debrief response parser
@@ -23,11 +24,13 @@
 //! - [`consolidation`] — Store-time near-duplicate detection + supersede logic
 //! - [`smart_import`] — Smart import profiling (prompt construction + response parsing)
 //! - [`memory_types`] — Memory Taxonomy v1 string-level constants + runtime guard
+//! - [`pii`] — PII / credential filter: allow | block | flag for candidate memories (PRD-04 DEP-4)
 //! - [`pin_intent`] — Natural-language pin/unpin intent classifier (kg-2 / F1 Pin UX 2.2.8)
 //! - [`prompts`] — Canonical extraction + compaction system prompts (2.2.0)
 //! - [`confirm`] — Read-after-write primitive for on-chain mutation tools (2.2.x)
 //! - [`secrets`] — API-key vault: detect + redact 14 secret pattern classes (am-6)
 //! - [`session_segmentation`] — Centroid-walk session segmentation for imports (#368)
+//! - [`dedup_context`] — "Existing memories" block for extraction prompts: pinned + topical + recent, dedupe by fact id (PRD-04 DEP-3)
 //! - [`kg_ffi`] — Shared JSON-in/JSON-out knowledge-graph marshalling helpers behind the WASM/PyO3 bindings
 
 pub mod blind;
@@ -37,16 +40,19 @@ pub mod confirm;
 pub mod consolidation;
 pub mod contradiction;
 pub mod decision_log;
+pub mod dedup_context;
 pub mod embedding_codec;
 pub mod feedback_log;
 pub mod digest;
 pub mod crypto;
 pub mod debrief;
 pub mod fingerprint;
+pub mod forget_guard;
 pub mod hotcache;
 pub mod kg_ffi;
 pub mod lsh;
 pub mod memory_types;
+pub mod pii;
 pub mod pin_intent;
 pub mod prompts;
 pub mod protobuf;

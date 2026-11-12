@@ -52,17 +52,18 @@ Do **not** also require `pip` on your PATH. Hermes 0.22+ runs on its own bundled
 
 If that succeeds → follow **[`hermes-setup.md`](./hermes-setup.md)**. It installs the PyPI package `totalreclaw` into the environment Hermes imports from: its Install procedure step 1 finds that environment and step 2 installs into it. Never run a bare `pip install totalreclaw`; it lands where Hermes doesn't look.
 
-### You are neither — Claude Desktop, Cursor, Windsurf, Claude Code, or any MCP host
+### You are neither — Claude Desktop, another chat app, or a coding tool with MCP
 
 If neither `openclaw` nor `hermes` is present, you are an **MCP-compatible host**. TotalReclaw integrates via the MCP server `@totalreclaw/mcp-server`:
 
-→ follow **[`claude-code-setup.md`](./claude-code-setup.md)** (covers Claude Code, Claude Desktop, Cursor, Windsurf, and IronClaw).
+- **Claude Desktop, or another chat app** (no shell tool, you chat with the user) → follow **[`claude-desktop-setup.md`](./claude-desktop-setup.md)**. The user adds the server to the app's config; you then run `totalreclaw_pair`.
+- **A coding tool** (Claude Code, Cursor, Windsurf) or **IronClaw** → follow **[`claude-code-setup.md`](./claude-code-setup.md)**.
 
 ### If detection is ambiguous
 
 If you cannot tell which runtime you are (no shell tool, or more than one runtime present), ask the user **one** question — nothing more:
 
-> Which agent are you running — OpenClaw, Hermes, or something else (Claude Desktop / Cursor / Windsurf)?
+> Which agent are you running — OpenClaw, Hermes, Claude Desktop, or a coding tool (Claude Code / Cursor / Windsurf)?
 
 Then follow the matching guide above.
 

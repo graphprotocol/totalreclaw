@@ -115,7 +115,7 @@ The MCP server exposes 18 tools. Descriptions are summarized from the tool defin
 |------|-------------|
 | `totalreclaw_pair` | Set up the account: browser-mediated recovery-phrase generation or import. Returns a URL + PIN; the phrase is created in the browser and never enters LLM context. |
 | `totalreclaw_remember` | Store an atomic fact proactively (with v1 type, scope, importance). Dedup is automatic. |
-| `totalreclaw_recall` | Search the encrypted vault by natural-language query; top 8 reranked by provenance + semantic + recency. |
+| `totalreclaw_recall` | Search the encrypted vault by natural-language query; top 16 reranked by provenance + semantic + recency. |
 | `totalreclaw_forget` | Permanently remove a memory by `memory_id`, or by query (tombstones up to 50 matches). |
 | `totalreclaw_export` | Export the decrypted vault as Markdown or JSON (one-click portable backup). |
 | `totalreclaw_import` | Restore memories from a prior TotalReclaw export backup (JSON/Markdown). |
@@ -135,7 +135,7 @@ The MCP server exposes 18 tools. Descriptions are summarized from the tool defin
 ## Pricing
 
 - **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
-- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit [totalreclaw.xyz/pricing](https://totalreclaw.xyz/pricing/). See `totalreclaw_status` for current pricing.
+- **Pro tier** — 3,000 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit [totalreclaw.xyz/pricing](https://totalreclaw.xyz/pricing/). See `totalreclaw_status` for current pricing.
 
 Upgrade anytime via the `totalreclaw_upgrade` tool -- the agent handles it for you.
 

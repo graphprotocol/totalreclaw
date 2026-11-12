@@ -422,11 +422,13 @@ fn collect_slack(out: &mut Vec<(usize, usize, SecretKind)>, text: &str) {
 // ---------------------------------------------------------------------------
 
 fn is_word_boundary_before(text: &str, pos: usize) -> bool {
-    if pos == 0 {
-        return true;
+    // Decode the previous *char*, not the previous byte: a UTF-8 continuation
+    // byte cast to `char` can read as alphanumeric (e.g. 0xBA → 'º') and hide
+    // a secret that follows accented text.
+    match text[..pos].chars().next_back() {
+        None => true,
+        Some(prev) => !prev.is_alphanumeric() && prev != '_',
     }
-    let prev = text.as_bytes()[pos - 1] as char;
-    !prev.is_alphanumeric() && prev != '_'
 }
 
 fn find_body_end(text: &str, body_start: usize, valid: fn(char) -> bool) -> usize {
@@ -459,8 +461,16 @@ fn build_match(text: &str, start: usize, end: usize, kind: SecretKind) -> Secret
     let last_4: String = raw.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
 
     // observed_context: up to 38 chars before + *** + up to 38 chars after.
-    let ctx_start = start.saturating_sub(38);
-    let ctx_end = (end + 38).min(text.len());
+    // Clamp the context window to char boundaries — slicing mid-UTF-8 panics
+    // (accented text within 38 bytes of a secret used to crash the caller).
+    let mut ctx_start = start.saturating_sub(38);
+    while !text.is_char_boundary(ctx_start) {
+        ctx_start += 1;
+    }
+    let mut ctx_end = (end + 38).min(text.len());
+    while !text.is_char_boundary(ctx_end) {
+        ctx_end -= 1;
+    }
     let before = &text[ctx_start..start];
     let after = &text[end..ctx_end];
     let observed_context = format!("{}***{}", before, after);
@@ -691,6 +701,25 @@ mod tests {
         // "xghp_AAAA..." — the ghp_ prefix is not at a word boundary.
         let key = format!("xghp_{}", "A".repeat(36));
         assert!(detect_secrets(&key).is_empty());
+    }
+
+    // --- UTF-8 safety (DEP-4) ---
+
+    #[test]
+    fn multibyte_text_around_secret_does_not_panic() {
+        // Context window (38 bytes each side) used to slice mid-character.
+        let text = format!("{} ghp_{} {}", "é".repeat(30), "A".repeat(36), "ã".repeat(30));
+        let m = detect_secrets(&text).into_iter().next().expect("secret still detected");
+        assert_eq!(m.kind, SecretKind::GitHubPat);
+        assert!(m.observed_context.contains("***"));
+    }
+
+    #[test]
+    fn non_alphanumeric_multibyte_char_is_a_word_boundary() {
+        // '›' (U+203A) ends in byte 0xBA, which the old byte-cast read as 'º'
+        // (alphanumeric) and so missed the secret.
+        let text = format!("›ghp_{}", "A".repeat(36));
+        assert_eq!(kinds(&text), vec![SecretKind::GitHubPat]);
     }
 
     // --- code_subtype constant ---

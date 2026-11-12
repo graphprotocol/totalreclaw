@@ -1,7 +1,7 @@
 ---
 name: totalreclaw
 description: "End-to-end encrypted, decentralized memory for OpenClaw via the totalreclaw MCP server. Set up an account once, then call totalreclaw__totalreclaw_remember and totalreclaw__totalreclaw_recall instead of writing to MEMORY.md / USER.md / local files. Trigger on 'install TotalReclaw', 'set up TotalReclaw', 'restore my recovery phrase', or any user statement that contains a preference / fact / decision / commitment about themselves."
-version: 3.5.1
+version: 3.5.3
 author: TotalReclaw Team
 license: MIT
 homepage: https://totalreclaw.xyz
@@ -161,9 +161,9 @@ The poller honors:
 The 12-word recovery phrase is the master key — losing it means losing all memories. Hard rules:
 
 - **NEVER echo, generate, or ask the user to paste a recovery phrase in chat.** The browser at the pair URL handles phrase generation and import; the phrase never enters the agent's LLM context.
-- **NEVER call `totalreclaw__totalreclaw_pair` with a phrase as input.** The tool's only inputs are `mode` (generate / import) and optional config — never the phrase itself.
+- **NEVER call `totalreclaw__totalreclaw_pair` with a phrase as input.** The tool's only inputs are `mode` (generate / import) and `replace` — never the phrase itself.
 - **NEVER invoke any phrase-touching CLI via your shell tool.** The `npx @totalreclaw/mcp-server` binary is for the MCP host only; do not shell out to it for phrase ops.
-- **If the user pastes a phrase anyway**: tell them the phrase is now compromised, re-run `totalreclaw_pair` with `{"mode": "generate"}` to mint a fresh wallet.
+- **If the user pastes a phrase anyway**: tell them the phrase is now compromised, re-run `totalreclaw_pair` with `{"mode": "generate", "replace": true}` to mint a fresh wallet. The pairing page asks the user to confirm the replacement; you cannot confirm it for them.
 
 The trajectory poller passes ONLY chat-message text (user/assistant content) to the extraction LLM. The recovery phrase is read from `~/.totalreclaw/credentials.json` by the MCP server process and used solely for crypto operations — it never crosses the LLM call surface.
 
@@ -172,7 +172,7 @@ The trajectory poller passes ONLY chat-message text (user/assistant content) to 
 These will break the install or compromise security:
 
 1. **Do NOT use `--allow-dangerous` on any MCP-related command.** The MCP server is sandboxed by design.
-2. **Do NOT manually edit `~/.totalreclaw/credentials.json`.** Round-trip via `totalreclaw_pair` (re-generate) instead.
+2. **Do NOT manually edit `~/.totalreclaw/credentials.json`.** Round-trip via `totalreclaw_pair` instead. On a configured install it refuses; only if the user asks to replace their account, call it with `replace: true` and let the user confirm on the pairing page.
 3. **Do NOT install the legacy plugin path (the `@totalreclaw/totalreclaw` OpenClaw plugin) alongside the MCP server.** The two paths overlap and will double-write facts. Pick one — this skill assumes the MCP-only path.
 4. **Do NOT save QR PNGs from the pair flow.** The browser at the pair URL renders QR if the user wants to scan-to-confirm; the agent does not need to render anything.
 5. **Do NOT write to `MEMORY.md` or `USER.md` for user-supplied facts.** See the "NEVER store user statements in local files" rule above.

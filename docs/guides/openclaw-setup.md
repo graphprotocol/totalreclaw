@@ -4,7 +4,7 @@
 
 TotalReclaw gives your OpenClaw agent encrypted, persistent memory. The fastest path is a single chat message — your agent fetches this guide, you and your agent install the plugin together, and the agent walks you through setting up your TotalReclaw account.
 
-> **Wrong runtime?** This guide is for **OpenClaw** only. If you are a **Hermes** agent, follow [`hermes-setup.md`](./hermes-setup.md); if you are **Claude Desktop / Cursor / Windsurf / any MCP host**, follow [`claude-code-setup.md`](./claude-code-setup.md); if you are unsure which runtime you are, follow the universal dispatcher [`install.md`](./install.md) instead.
+> **Wrong runtime?** This guide is for **OpenClaw** only. If you are a **Hermes** agent, follow [`hermes-setup.md`](./hermes-setup.md); if you are **Claude Desktop**, follow [`claude-desktop-setup.md`](./claude-desktop-setup.md); if you are **Claude Code / Cursor / Windsurf / another MCP coding tool**, follow [`claude-code-setup.md`](./claude-code-setup.md); if you are unsure which runtime you are, follow the universal dispatcher [`install.md`](./install.md) instead.
 
 ## Install prompts
 
@@ -192,7 +192,7 @@ Notes:
   command -v hermes                         # Hermes agent (no bare pip on Hermes 0.22+)
   command -v claude                         # Claude Code / MCP host
   ```
-  - If that reveals you are a **Hermes** agent or an **MCP host** (Claude Desktop / Cursor / Windsurf), STOP following this guide and consult the universal dispatcher [`install.md`](./install.md), which routes you to [`hermes-setup.md`](./hermes-setup.md) or [`claude-code-setup.md`](./claude-code-setup.md) instead.
+  - If that reveals you are a **Hermes** agent or an **MCP host** (Claude Desktop / Cursor / Windsurf), STOP following this guide and consult the universal dispatcher [`install.md`](./install.md), which routes you to [`hermes-setup.md`](./hermes-setup.md), [`claude-desktop-setup.md`](./claude-desktop-setup.md) or [`claude-code-setup.md`](./claude-code-setup.md) instead.
   - If the runtime is genuinely ambiguous, ask the user one question — *"Are you using OpenClaw, Hermes, or a different agent (Claude Desktop / Cursor)?"* — then follow [`install.md`](./install.md).
   - Only if the probe confirms you really are inside an **OpenClaw** environment that simply doesn't expose host shell to the agent (managed / hosted service, shell-restricted) should you fall back to the plugins-UI path: tell the user verbatim *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
@@ -378,7 +378,7 @@ See [Importing Memories](importing-memories.md).
 ## Billing
 
 - **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
-- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `tr upgrade` CLI (e.g. `openclaw totalreclaw status` then follow the upgrade URL it prints, or the standalone `tr upgrade` if exposed) or visit <https://totalreclaw.xyz/pricing>. See `openclaw totalreclaw status` for current pricing.
+- **Pro tier** — 3,000 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `tr upgrade` CLI (e.g. `openclaw totalreclaw status` then follow the upgrade URL it prints, or the standalone `tr upgrade` if exposed) or visit <https://totalreclaw.xyz/pricing>. See `openclaw totalreclaw status` for current pricing.
 
 The plugin warns you automatically when you cross 80% of the monthly free-tier memory limit (injected at conversation start). Check anytime by asking *"what's my TotalReclaw status?"* — that surfaces tier, memories used, memory limit, reset date, and upgrade URL.
 

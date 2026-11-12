@@ -30,19 +30,7 @@ End-to-end encrypted memory vault as an MCP server. Your memories are encrypted 
 
 ## Quick Start
 
-### 1. Run the setup wizard
-
-```bash
-npx @totalreclaw/mcp-server setup
-```
-
-The wizard generates your 12-word recovery phrase, registers you, and prints a config snippet for your MCP client.
-
-> **Save your recovery phrase somewhere safe.** It's the only way to recover your encrypted memories.
-
-> **Note:** The first run downloads a ~600MB embedding model for local inference. This is cached locally and only happens once.
-
-### 2. Add to your MCP client
+### 1. Add to your MCP client
 
 #### Claude Desktop
 
@@ -53,10 +41,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "totalreclaw": {
       "command": "npx",
-      "args": ["-y", "@totalreclaw/mcp-server"],
-      "env": {
-        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here"
-      }
+      "args": ["-y", "@totalreclaw/mcp-server"]
     }
   }
 }
@@ -72,10 +57,7 @@ Add to your MCP settings (Settings > MCP Servers):
 {
   "totalreclaw": {
     "command": "npx",
-    "args": ["-y", "@totalreclaw/mcp-server"],
-    "env": {
-      "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here"
-    }
+    "args": ["-y", "@totalreclaw/mcp-server"]
   }
 }
 ```
@@ -89,16 +71,30 @@ Add to your IronClaw MCP configuration (typically `~/.ironclaw/mcp.json` or via 
   "mcpServers": {
     "totalreclaw": {
       "command": "npx",
-      "args": ["@totalreclaw/mcp-server"],
-      "env": {
-        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here"
-      }
+      "args": ["@totalreclaw/mcp-server"]
     }
   }
 }
 ```
 
-If IronClaw supports a credential vault, store `TOTALRECLAW_RECOVERY_PHRASE` there instead of in the config file. See the [IronClaw setup guide](../docs/guides/ironclaw-setup.md) for the full walkthrough including background routines.
+See the [IronClaw setup guide](../docs/guides/ironclaw-setup.md) for the full walkthrough including background routines.
+
+### 2. Set up your account in the browser
+
+Restart your MCP client, then ask your agent: *"Set up TotalReclaw."* It calls `totalreclaw_pair` and gives you a link and a 6-digit PIN. Open the link in any browser, on this computer or your phone. The page creates your 12-word recovery phrase, or takes the one you already have. Your phrase never goes through the chat and is never written into your MCP config. The link works for about 10 minutes; if it stops working, ask your agent for a new one. When the page says "You're all set", fully quit and reopen your MCP client once more: the server reads your account only at startup. Full walkthrough: [Claude Desktop setup guide](../docs/guides/claude-desktop-setup.md).
+
+> **Save your recovery phrase somewhere safe.** It's the only way to recover your encrypted memories.
+
+> **Note:** The first run downloads a ~600MB embedding model for local inference. This is cached locally and only happens once.
+
+If another TotalReclaw client on this computer (OpenClaw, Hermes) already saved your account in `~/.totalreclaw/credentials.json`, the server uses it and you can skip this step. Pairing does not replace that file unless you ask to replace your account and confirm it on the pairing page (your old file is kept as a copy). The server can't yet read a phrase that Hermes keeps in the system keychain; in that case it tells you so and leaves the Hermes account untouched.
+
+<details>
+<summary>Legacy: manual setup (discouraged): terminal wizard or phrase in the config</summary>
+
+`npx @totalreclaw/mcp-server setup` generates a phrase in your own terminal and prints a config snippet that contains it. Run it yourself, never through your AI agent. Putting the phrase into the config as `TOTALRECLAW_RECOVERY_PHRASE` stores it in plain text in a config file: anything that can read that file gets full access to your memories, and the server does not convert it to derived keys. If your client supports a credential vault, store the variable there instead. See the [setup guide](../docs/guides/claude-desktop-setup.md#advanced-recovery-phrase-in-the-config-not-recommended).
+
+</details>
 
 ### 3. Verify
 
@@ -243,7 +239,7 @@ keeps a stale-install downgrade loud rather than a crash.
 ## Free Tier & Pricing
 
 - **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
-- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>.
+- **Pro tier** — 3,000 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>.
 
 Pay with card via Stripe. Use `totalreclaw_status` to check current pricing. Counter resets monthly.
 
