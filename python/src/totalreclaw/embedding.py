@@ -136,6 +136,12 @@ def _ensure_loaded():
     return _session, _tokenizer
 
 
+def is_model_available_locally() -> bool:
+    """True when the model is loaded or already in the local HF cache, so a
+    ``get_embedding`` call will not start the one-time download."""
+    return (_session is not None and _tokenizer is not None) or _hf_cache_has_model()
+
+
 def get_embedding(text: str) -> list[float]:
     """Generate a 640-dim L2-normalized embedding."""
     session, tokenizer = _ensure_loaded()

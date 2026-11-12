@@ -1,0 +1,590 @@
+{
+  "_generator": "tests/parity/fixtures/generate-write-gate-v1.py. Expected values come from an independent Python reference implementation, not from the Rust code under test.",
+  "version": 1,
+  "default_threshold": 0.85,
+  "normalize": [
+    {
+      "input": "User is vegetarian",
+      "expected": "user is vegetarian"
+    },
+    {
+      "input": "User is vegetarian.",
+      "expected": "user is vegetarian"
+    },
+    {
+      "input": "  user   is VEGETARIAN!  ",
+      "expected": "user is vegetarian"
+    },
+    {
+      "input": "\"User is vegetarian.\"",
+      "expected": "user is vegetarian"
+    },
+    {
+      "input": "- User is vegetarian",
+      "expected": "user is vegetarian"
+    },
+    {
+      "input": "**User is vegetarian**",
+      "expected": "user is vegetarian"
+    },
+    {
+      "input": "User is vegetarian…",
+      "expected": "user is vegetarian"
+    },
+    {
+      "input": "(User is vegetarian)",
+      "expected": "user is vegetarian"
+    },
+    {
+      "input": "User knows C++",
+      "expected": "user knows c++"
+    },
+    {
+      "input": "User knows C#.",
+      "expected": "user knows c#"
+    },
+    {
+      "input": "Battery at 100%",
+      "expected": "battery at 100%"
+    },
+    {
+      "input": "User’s laptop is a 2023 MacBook Pro M3",
+      "expected": "user's laptop is a 2023 macbook pro m3"
+    },
+    {
+      "input": "Lisbon — Porto",
+      "expected": "lisbon - porto"
+    },
+    {
+      "input": "“quoted”",
+      "expected": "quoted"
+    },
+    {
+      "input": "café",
+      "expected": "café"
+    },
+    {
+      "input": "café",
+      "expected": "café"
+    },
+    {
+      "input": "1:1 with Inês on Tuesdays",
+      "expected": "1:1 with inês on tuesdays"
+    },
+    {
+      "input": "tabs\tand\nnewlines and　ideographic",
+      "expected": "tabs and newlines and ideographic"
+    },
+    {
+      "input": " ... ",
+      "expected": ""
+    },
+    {
+      "input": "",
+      "expected": ""
+    },
+    {
+      "input": "¿Qué tal?",
+      "expected": "qué tal"
+    },
+    {
+      "input": "用户住在里斯本。",
+      "expected": "用户住在里斯本"
+    },
+    {
+      "input": "\u001funit separator is not white space\u001f",
+      "expected": "\u001funit separator is not white space\u001f"
+    }
+  ],
+  "decide": [
+    {
+      "name": "no_candidates_store",
+      "text": "User is vegetarian",
+      "embedding": [
+        1,
+        0,
+        0
+      ],
+      "candidates": [],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "trailing_period_is_exact",
+      "text": "User is vegetarian",
+      "embedding": null,
+      "candidates": [
+        {
+          "id": "f1",
+          "text": "User is vegetarian."
+        }
+      ],
+      "mode": "exact_only",
+      "threshold": null,
+      "expected": {
+        "action": "skip",
+        "match": {
+          "fact_id": "f1",
+          "text": "User is vegetarian.",
+          "kind": "exact",
+          "similarity": 1.0,
+          "pinned": false
+        }
+      }
+    },
+    {
+      "name": "exact_skips_in_explicit_mode",
+      "text": "user is VEGETARIAN!",
+      "embedding": [
+        1,
+        0,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "f1",
+          "text": "User is vegetarian",
+          "embedding": [
+            0,
+            1,
+            0
+          ]
+        }
+      ],
+      "mode": "explicit",
+      "threshold": null,
+      "expected": {
+        "action": "skip",
+        "match": {
+          "fact_id": "f1",
+          "text": "User is vegetarian",
+          "kind": "exact",
+          "similarity": 1.0,
+          "pinned": false
+        }
+      }
+    },
+    {
+      "name": "exact_prefers_pinned",
+      "text": "User is vegetarian",
+      "embedding": null,
+      "candidates": [
+        {
+          "id": "a",
+          "text": "User is vegetarian"
+        },
+        {
+          "id": "p",
+          "text": "user is vegetarian.",
+          "pinned": true
+        }
+      ],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "skip",
+        "match": {
+          "fact_id": "p",
+          "text": "user is vegetarian.",
+          "kind": "exact",
+          "similarity": 1.0,
+          "pinned": true
+        }
+      }
+    },
+    {
+      "name": "exact_first_unpinned_when_no_pin",
+      "text": "User is vegetarian",
+      "embedding": null,
+      "candidates": [
+        {
+          "id": "a",
+          "text": "User is vegetarian."
+        },
+        {
+          "id": "b",
+          "text": "User is vegetarian"
+        }
+      ],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "skip",
+        "match": {
+          "fact_id": "a",
+          "text": "User is vegetarian.",
+          "kind": "exact",
+          "similarity": 1.0,
+          "pinned": false
+        }
+      }
+    },
+    {
+      "name": "empty_id_never_matches",
+      "text": "User is vegetarian",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "",
+          "text": "User is vegetarian",
+          "embedding": [
+            1,
+            0
+          ]
+        }
+      ],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "near_duplicate_auto_skips",
+      "text": "User is vegetarian",
+      "embedding": [
+        1,
+        0,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "f1",
+          "text": "User follows a vegetarian diet",
+          "embedding": [
+            0.99,
+            0.1,
+            0
+          ]
+        }
+      ],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "skip",
+        "match": {
+          "fact_id": "f1",
+          "text": "User follows a vegetarian diet",
+          "kind": "near_duplicate",
+          "similarity": 0.9949371889695597,
+          "pinned": false
+        }
+      }
+    },
+    {
+      "name": "near_duplicate_explicit_confirms",
+      "text": "User is vegetarian",
+      "embedding": [
+        1,
+        0,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "f1",
+          "text": "User follows a vegetarian diet",
+          "embedding": [
+            0.99,
+            0.1,
+            0
+          ]
+        }
+      ],
+      "mode": "explicit",
+      "threshold": null,
+      "expected": {
+        "action": "confirm",
+        "match": {
+          "fact_id": "f1",
+          "text": "User follows a vegetarian diet",
+          "kind": "near_duplicate",
+          "similarity": 0.9949371889695597,
+          "pinned": false
+        }
+      }
+    },
+    {
+      "name": "near_duplicate_exact_only_stores",
+      "text": "User is vegetarian",
+      "embedding": [
+        1,
+        0,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "f1",
+          "text": "User follows a vegetarian diet",
+          "embedding": [
+            0.99,
+            0.1,
+            0
+          ]
+        }
+      ],
+      "mode": "exact_only",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "different_fact_below_threshold_stores",
+      "text": "User drinks black coffee",
+      "embedding": [
+        1,
+        0,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "f1",
+          "text": "User prefers green tea",
+          "embedding": [
+            0.6,
+            0.8,
+            0
+          ]
+        }
+      ],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "auto_ignores_pinned_near_duplicate",
+      "text": "1:1 with Ines moved to Thursdays",
+      "embedding": [
+        0.99,
+        0.05
+      ],
+      "candidates": [
+        {
+          "id": "p",
+          "text": "1:1 with Ines on Tuesdays",
+          "embedding": [
+            1,
+            0
+          ],
+          "pinned": true
+        }
+      ],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "explicit_reports_pinned_near_duplicate",
+      "text": "1:1 with Ines moved to Thursdays",
+      "embedding": [
+        0.99,
+        0.05
+      ],
+      "candidates": [
+        {
+          "id": "p",
+          "text": "1:1 with Ines on Tuesdays",
+          "embedding": [
+            1,
+            0
+          ],
+          "pinned": true
+        }
+      ],
+      "mode": "explicit",
+      "threshold": null,
+      "expected": {
+        "action": "confirm",
+        "match": {
+          "fact_id": "p",
+          "text": "1:1 with Ines on Tuesdays",
+          "kind": "near_duplicate",
+          "similarity": 0.9987270546400474,
+          "pinned": true
+        }
+      }
+    },
+    {
+      "name": "best_similarity_wins_ties_keep_first",
+      "text": "new fact",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "a",
+          "text": "x",
+          "embedding": [
+            0.9,
+            0.3
+          ]
+        },
+        {
+          "id": "b",
+          "text": "y",
+          "embedding": [
+            1,
+            0.01
+          ]
+        },
+        {
+          "id": "c",
+          "text": "z",
+          "embedding": [
+            1,
+            0.01
+          ]
+        }
+      ],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "skip",
+        "match": {
+          "fact_id": "b",
+          "text": "y",
+          "kind": "near_duplicate",
+          "similarity": 0.9999500037519226,
+          "pinned": false
+        }
+      }
+    },
+    {
+      "name": "mismatched_dims_and_missing_embeddings_skipped",
+      "text": "new fact",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "a",
+          "text": "x",
+          "embedding": [
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "id": "b",
+          "text": "y"
+        },
+        {
+          "id": "d",
+          "text": "w",
+          "embedding": []
+        }
+      ],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "custom_threshold",
+      "text": "new fact",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "a",
+          "text": "x",
+          "embedding": [
+            0.8,
+            0.6
+          ]
+        }
+      ],
+      "threshold": 0.75,
+      "mode": "auto",
+      "expected": {
+        "action": "skip",
+        "match": {
+          "fact_id": "a",
+          "text": "x",
+          "kind": "near_duplicate",
+          "similarity": 0.7999999928474427,
+          "pinned": false
+        }
+      }
+    },
+    {
+      "name": "punctuation_only_never_exact",
+      "text": "...",
+      "embedding": null,
+      "candidates": [
+        {
+          "id": "a",
+          "text": "!!!"
+        }
+      ],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "inner_punctuation_kept",
+      "text": "User knows C",
+      "embedding": null,
+      "candidates": [
+        {
+          "id": "a",
+          "text": "User knows C++"
+        }
+      ],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "typographic_apostrophe_is_exact",
+      "text": "User's laptop is a MacBook",
+      "embedding": null,
+      "candidates": [
+        {
+          "id": "a",
+          "text": "User’s laptop is a MacBook."
+        }
+      ],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "skip",
+        "match": {
+          "fact_id": "a",
+          "text": "User’s laptop is a MacBook.",
+          "kind": "exact",
+          "similarity": 1.0,
+          "pinned": false
+        }
+      }
+    }
+  ]
+}

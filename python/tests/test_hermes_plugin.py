@@ -628,7 +628,7 @@ class TestStoreTimeDedup:
         mock_recall_result.text = "User prefers dark mode"
         mock_recall_result.embedding = [1.0, 0.0, 0.0]
 
-        async def mock_recall(query, top_k=50):
+        async def mock_recall(query, top_k=50, **kwargs):
             return [mock_recall_result]
 
         async def mock_forget(fact_id):
@@ -636,6 +636,12 @@ class TestStoreTimeDedup:
 
         mock_client.recall = mock_recall
         mock_client.forget = mock_forget
+
+        # PRD-04 DEP-5: the pin guard reads the UPDATE target's pin state.
+        async def mock_get_fact_pin_status(fact_id):
+            return False
+
+        mock_client.get_fact_pin_status = mock_get_fact_pin_status
 
         state.add_message("user", "I like dark mode")
         state.add_message("assistant", "OK")
@@ -662,7 +668,7 @@ class TestStoreTimeDedup:
              patch("totalreclaw.agent.lifecycle.extract_facts_heuristic"), \
              patch("totalreclaw.embedding.get_embedding", return_value=[1.0, 0.0, 0.0]):
 
-            async def llm_extract(messages, mode, existing_memories, llm_config=None):
+            async def llm_extract(messages, mode, existing_memories, llm_config=None, **kwargs):
                 return [add_fact, update_fact]
 
             mock_llm.side_effect = llm_extract

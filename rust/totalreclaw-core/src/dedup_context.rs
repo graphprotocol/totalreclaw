@@ -12,8 +12,9 @@
 //!
 //! ```text
 //! Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):
-//! [ID: p1] User is allergic to penicillin
+//! [ID: p1] [pinned, read-only] User is allergic to penicillin
 //! [ID: t1] User lives in Lisbon
+//! Memories marked [pinned, read-only] were pinned by the user. Never UPDATE or DELETE them: if a new fact only restates one, use NOOP; if it adds or changes information, ADD it as a new fact.
 //! ```
 //!
 //! The header is byte-identical to the block the Hermes and OpenClaw
@@ -35,6 +36,12 @@
 //! 4. The first occurrence of an `id` wins (dedupe by fact id).
 //! 5. At most `cap` lines are kept ([`DEFAULT_DEDUP_CONTEXT_CAP`] = 30).
 //! 6. No surviving line → empty string (the caller appends nothing).
+//! 7. A line taken from the pinned section carries [`DEDUP_CONTEXT_PINNED_TAG`]
+//!    after its id, and when at least one such line survives the block ends
+//!    with [`DEDUP_CONTEXT_PINNED_NOTE`] (not counted against `cap`). Pinned
+//!    facts are read-only for extraction: core and the clients' pin guards
+//!    drop an UPDATE / DELETE aimed at a pin, so an LLM that answered UPDATE
+//!    would lose the new information. The note steers it to ADD instead.
 //!
 //! # Caller contract
 //!
@@ -62,6 +69,12 @@ pub const DEFAULT_DEDUP_CONTEXT_CAP: usize = 30;
 /// `skill/plugin/extraction/extractor.ts` and `mcp/src/extraction/extractor.ts`.
 pub const DEDUP_CONTEXT_HEADER: &str =
     "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):";
+
+/// Marker placed after the id of every line from the pinned section (rule 7).
+pub const DEDUP_CONTEXT_PINNED_TAG: &str = "[pinned, read-only]";
+
+/// Last line of the block when it shows at least one pinned memory (rule 7).
+pub const DEDUP_CONTEXT_PINNED_NOTE: &str = "Memories marked [pinned, read-only] were pinned by the user. Never UPDATE or DELETE them: if a new fact only restates one, use NOOP; if it adds or changes information, ADD it as a new fact.";
 
 /// One existing memory offered to the extraction LLM.
 ///
@@ -111,19 +124,25 @@ fn single_line(s: &str) -> String {
         .join(" ")
 }
 
-/// The `[ID: <id>] <text>` lines the block will contain, after rules 1–5.
-pub fn dedup_context_lines(
+/// The `[ID: <id>] <text>` lines plus how many came from the pinned section.
+fn collect_lines(
     topical: &[DedupContextItem],
     pinned: &[DedupContextItem],
     recent: &[DedupContextItem],
     cap: usize,
-) -> Vec<String> {
+) -> (Vec<String>, usize) {
     let mut lines: Vec<String> = Vec::new();
+    let mut pinned_lines = 0usize;
     if cap == 0 {
-        return lines;
+        return (lines, 0);
     }
     let mut seen: HashSet<String> = HashSet::new();
-    for item in pinned.iter().chain(topical.iter()).chain(recent.iter()) {
+    let sections = pinned
+        .iter()
+        .map(|i| (i, true))
+        .chain(topical.iter().map(|i| (i, false)))
+        .chain(recent.iter().map(|i| (i, false)));
+    for (item, is_pinned) in sections {
         let id = single_line(&item.id);
         let text = single_line(&item.text);
         if id.is_empty() || text.is_empty() {
@@ -132,12 +151,28 @@ pub fn dedup_context_lines(
         if !seen.insert(id.clone()) {
             continue;
         }
-        lines.push(format!("[ID: {id}] {text}"));
+        if is_pinned {
+            pinned_lines += 1;
+            lines.push(format!("[ID: {id}] {DEDUP_CONTEXT_PINNED_TAG} {text}"));
+        } else {
+            lines.push(format!("[ID: {id}] {text}"));
+        }
         if lines.len() >= cap {
             break;
         }
     }
-    lines
+    (lines, pinned_lines)
+}
+
+/// The `[ID: <id>] <text>` lines the block will contain, after rules 1–5 and
+/// the pinned tag of rule 7 (the closing note is not a memory line).
+pub fn dedup_context_lines(
+    topical: &[DedupContextItem],
+    pinned: &[DedupContextItem],
+    recent: &[DedupContextItem],
+    cap: usize,
+) -> Vec<String> {
+    collect_lines(topical, pinned, recent, cap).0
 }
 
 /// Render the "Existing memories" block for the extraction user prompt.
@@ -149,11 +184,16 @@ pub fn build_dedup_context(
     recent: &[DedupContextItem],
     cap: usize,
 ) -> String {
-    let lines = dedup_context_lines(topical, pinned, recent, cap);
+    let (lines, pinned_lines) = collect_lines(topical, pinned, recent, cap);
     if lines.is_empty() {
         return String::new();
     }
-    format!("{}\n{}", DEDUP_CONTEXT_HEADER, lines.join("\n"))
+    let mut out = format!("{}\n{}", DEDUP_CONTEXT_HEADER, lines.join("\n"));
+    if pinned_lines > 0 {
+        out.push('\n');
+        out.push_str(DEDUP_CONTEXT_PINNED_NOTE);
+    }
+    out
 }
 
 fn parse_items(section: &str, json: &str) -> crate::Result<Vec<DedupContextItem>> {
@@ -220,7 +260,7 @@ mod tests {
         assert_eq!(
             out,
             format!(
-                "{DEDUP_CONTEXT_HEADER}\n[ID: p1] User is allergic to penicillin\n[ID: t1] User lives in Lisbon\n[ID: r1] User booked a flight to Porto"
+                "{DEDUP_CONTEXT_HEADER}\n[ID: p1] [pinned, read-only] User is allergic to penicillin\n[ID: t1] User lives in Lisbon\n[ID: r1] User booked a flight to Porto\n{DEDUP_CONTEXT_PINNED_NOTE}"
             )
         );
     }
@@ -233,7 +273,10 @@ mod tests {
             &[item("p1", "recent copy of the pinned fact")],
             DEFAULT_DEDUP_CONTEXT_CAP,
         );
-        assert_eq!(out, format!("{DEDUP_CONTEXT_HEADER}\n[ID: p1] User is allergic to penicillin"));
+        assert_eq!(
+            out,
+            format!("{DEDUP_CONTEXT_HEADER}\n[ID: p1] [pinned, read-only] User is allergic to penicillin\n{DEDUP_CONTEXT_PINNED_NOTE}")
+        );
     }
 
     #[test]
@@ -294,7 +337,7 @@ mod tests {
             (0..5_000).map(|n| item(&format!("p{n}"), &format!("pinned {n}"))).collect();
         let lines = dedup_context_lines(&[item("t1", "topical")], &pinned, &[], 30);
         assert_eq!(lines.len(), 30);
-        assert_eq!(lines[29], "[ID: p29] pinned 29");
+        assert_eq!(lines[29], "[ID: p29] [pinned, read-only] pinned 29");
     }
 
     #[test]
@@ -305,14 +348,37 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                "[ID: p1] User is allergic to penicillin".to_string(),
+                "[ID: p1] [pinned, read-only] User is allergic to penicillin".to_string(),
                 "[ID: t1] User lives in Lisbon".to_string(),
                 "[ID: t2] User works at Acme".to_string(),
             ]
         );
         assert_eq!(
             build_dedup_context(&topical, &pinned, &[], DEFAULT_DEDUP_CONTEXT_CAP),
-            format!("{DEDUP_CONTEXT_HEADER}\n{}", lines.join("\n"))
+            format!("{DEDUP_CONTEXT_HEADER}\n{}\n{DEDUP_CONTEXT_PINNED_NOTE}", lines.join("\n"))
+        );
+    }
+
+    #[test]
+    fn no_pinned_line_means_no_note() {
+        let out = build_dedup_context(&[item("t1", "a fact")], &[item("p1", "\n")], &[], 30);
+        assert_eq!(out, format!("{DEDUP_CONTEXT_HEADER}\n[ID: t1] a fact"));
+        assert!(!out.contains(DEDUP_CONTEXT_PINNED_NOTE));
+    }
+
+    #[test]
+    fn pinned_id_repeated_in_topical_is_still_tagged_once() {
+        let out = build_dedup_context(&[item("p1", "copy")], &[item("p1", "pinned")], &[], 30);
+        assert_eq!(out.matches(DEDUP_CONTEXT_PINNED_TAG).count(), 2); // line + note
+        assert_eq!(out.lines().count(), 3);
+    }
+
+    #[test]
+    fn pinned_note_is_not_counted_against_cap() {
+        let out = build_dedup_context(&[item("t1", "t")], &[item("p1", "p")], &[], 1);
+        assert_eq!(
+            out,
+            format!("{DEDUP_CONTEXT_HEADER}\n[ID: p1] [pinned, read-only] p\n{DEDUP_CONTEXT_PINNED_NOTE}")
         );
     }
 
@@ -365,12 +431,14 @@ mod tests {
         ))
         .expect("tests/parity/fixtures/dedup-context-v1.json must parse");
         assert_eq!(fixture["header"].as_str().unwrap(), DEDUP_CONTEXT_HEADER);
+        assert_eq!(fixture["pinned_tag"].as_str().unwrap(), DEDUP_CONTEXT_PINNED_TAG);
+        assert_eq!(fixture["pinned_note"].as_str().unwrap(), DEDUP_CONTEXT_PINNED_NOTE);
         assert_eq!(
             fixture["default_cap"].as_u64().unwrap() as usize,
             DEFAULT_DEDUP_CONTEXT_CAP
         );
         let cases = fixture["cases"].as_array().expect("cases must be an array");
-        assert_eq!(cases.len(), 16, "fixture case count changed");
+        assert_eq!(cases.len(), 17, "fixture case count changed");
         for case in cases {
             let name = case["name"].as_str().unwrap();
             let out = build_dedup_context_json(

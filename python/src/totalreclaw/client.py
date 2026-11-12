@@ -44,7 +44,9 @@ from .operations import (
     export_facts,
     pin_fact,
     unpin_fact,
+    get_fact_pin_status,
     find_existing_content_fps,
+    fetch_recent_facts as _fetch_recent_facts,
     # internal#448 — byte-capped batching + halve-on-simfail hoisted into the
     # shared write path so EVERY remember_batch caller inherits it.
     group_and_store_adaptive,
@@ -52,6 +54,7 @@ from .operations import (
     MAX_BATCH_GROUP_COUNT,
 )
 from .retype_setscope import execute_retype, execute_set_scope
+from .write_gate import ledger_for
 from .userop import DATA_EDGE_ADDRESS as _PROD_DATA_EDGE_ADDRESS_DEFAULT
 
 logger = logging.getLogger(__name__)
@@ -172,6 +175,17 @@ class BundleDataEdgeUnresolvedError(RuntimeError):
     warning) since retained back-compat outweighs the risk for that
     population.
     """
+
+
+def _ledger_rename(client, fact_id: str, result, pinned) -> None:
+    """Keep the store-time write gate's ledger in step with a rewrite
+    (pin / unpin / retype / set_scope tombstone ``fact_id`` and write a new
+    id with the same text)."""
+    try:
+        if isinstance(result, dict) and result.get("success") and result.get("new_fact_id"):
+            ledger_for(client).rename(fact_id, str(result["new_fact_id"]), pinned=pinned)
+    except Exception:  # never fail a mutation over the ledger
+        pass
 
 
 def _get_eoa_account(mnemonic: str):
@@ -1168,6 +1182,10 @@ class TotalReclaw:
             chain_id=chain_id,
             data_edge_address=self._data_edge_address,
         )
+        if success:
+            # Store-time write gate: the subgraph keeps listing this fact until
+            # it indexes the tombstone; the ledger knows it is gone.
+            ledger_for(self).forget(fact_id)
         if success and snapshot:
             try:
                 self.forget_ledger.record(
@@ -1194,7 +1212,7 @@ class TotalReclaw:
         await self._ensure_address()
         await self._ensure_registered()
         chain_id = await self._ensure_chain_id()
-        return await pin_fact(
+        result = await pin_fact(
             fact_id=fact_id,
             keys=self._keys,
             owner=self._wallet_address,
@@ -1205,6 +1223,8 @@ class TotalReclaw:
             chain_id=chain_id,
             data_edge_address=self._data_edge_address,
         )
+        _ledger_rename(self, fact_id, result, pinned=True)
+        return result
 
     async def unpin_fact(self, fact_id: str) -> dict:
         """Move a pinned claim back to ``active`` status.
@@ -1215,7 +1235,7 @@ class TotalReclaw:
         await self._ensure_address()
         await self._ensure_registered()
         chain_id = await self._ensure_chain_id()
-        return await unpin_fact(
+        result = await unpin_fact(
             fact_id=fact_id,
             keys=self._keys,
             owner=self._wallet_address,
@@ -1225,6 +1245,23 @@ class TotalReclaw:
             sender=self._wallet_address,
             chain_id=chain_id,
             data_edge_address=self._data_edge_address,
+        )
+        _ledger_rename(self, fact_id, result, pinned=False)
+        return result
+
+    async def get_fact_pin_status(self, fact_id: str) -> bool:
+        """Whether ``fact_id`` is pinned (PRD-04 F1 / DEP-5).
+
+        Delegates to :func:`totalreclaw.operations.get_fact_pin_status`.
+        Raises when the state cannot be read -- callers fail closed.
+        """
+        await self._ensure_address()
+        await self._ensure_registered()
+        return await get_fact_pin_status(
+            fact_id=fact_id,
+            keys=self._keys,
+            owner=self._wallet_address,
+            relay=self._relay,
         )
 
     async def retype(self, fact_id: str, new_type: str) -> dict:
@@ -1244,7 +1281,7 @@ class TotalReclaw:
         await self._ensure_address()
         await self._ensure_registered()
         chain_id = await self._ensure_chain_id()
-        return await execute_retype(
+        result = await execute_retype(
             fact_id=fact_id,
             new_type=new_type,
             keys=self._keys,
@@ -1256,6 +1293,8 @@ class TotalReclaw:
             chain_id=chain_id,
             data_edge_address=self._data_edge_address,
         )
+        _ledger_rename(self, fact_id, result, pinned=None)
+        return result
 
     async def set_scope(self, fact_id: str, new_scope: str) -> dict:
         """Re-scope an existing memory (work → health, etc.).
@@ -1267,7 +1306,7 @@ class TotalReclaw:
         await self._ensure_address()
         await self._ensure_registered()
         chain_id = await self._ensure_chain_id()
-        return await execute_set_scope(
+        result = await execute_set_scope(
             fact_id=fact_id,
             new_scope=new_scope,
             keys=self._keys,
@@ -1279,12 +1318,26 @@ class TotalReclaw:
             chain_id=chain_id,
             data_edge_address=self._data_edge_address,
         )
+        _ledger_rename(self, fact_id, result, pinned=None)
+        return result
 
     async def export_all(self) -> list[dict]:
         """Export all active facts, decrypted."""
         await self._ensure_address()
         await self._ensure_registered()
         return await export_facts(self._keys, self._wallet_address, self._relay)
+
+    async def fetch_recent_facts(self, limit: int = 10) -> list[dict]:
+        """The ``limit`` newest active facts, decrypted, newest first.
+
+        Returns ``[{"id", "text", "embedding", "pinned"}]``. Feeds the
+        extraction dedup context (PRD-04 DEP-3).
+        """
+        await self._ensure_address()
+        await self._ensure_registered()
+        return await _fetch_recent_facts(
+            self._keys, self._wallet_address, self._relay, limit=limit
+        )
 
     async def find_duplicate_texts(self, texts: list[str]) -> list[bool]:
         """Per-text flags: True where the text's content fingerprint already

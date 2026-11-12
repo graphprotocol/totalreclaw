@@ -125,6 +125,14 @@ New fact: "User prefers dark mode for all editors"
 - **Fail-open** -- If embedding generation fails (model unavailable, context too short), the fact is stored normally. Better to have a duplicate than to lose a memory.
 - **Importance-aware** -- A more detailed or more important version of a fact supersedes a less important one. A vague restatement of a high-importance fact is skipped.
 
+### Hermes: one gate for every write
+
+In the Python client (Hermes), auto-extraction, `totalreclaw_remember`, the USER.md mirror and reconcile all pass the same check before they store a fact. It compares the new fact with the facts the vault returns for it and with the facts written in the last 15 minutes, which the vault may not list yet.
+
+- **Same text** (ignoring case, spacing and trailing punctuation): never stored twice. `totalreclaw_remember` answers `already_stored`.
+- **Very similar text** (cosine >= 0.85): auto-extraction skips it. `totalreclaw_remember` answers `possible_duplicate` with the stored text, and the agent stores it with `force=true` only if it adds or changes information. The USER.md mirror stores it, because a changed value ("lives in Porto" after "lives in Lisbon") scores as similar as a paraphrase.
+- **Pinned facts** are never replaced by this check.
+
 ---
 
 ## Bulk Consolidation

@@ -118,7 +118,7 @@ def env(tmp_path, monkeypatch):
         patch("totalreclaw.agent.lifecycle.detect_and_resolve_contradictions", new=passthrough),
         patch(
             "totalreclaw.agent.lifecycle._fetch_recent_memories",
-            new=lambda st: [
+            new=lambda st, *a, **k: [
                 {"id": fid, "text": f["text"], "embedding": fake_embedding(f["text"])}
                 for fid, f in vault.facts.items()
                 if f["active"]
@@ -238,9 +238,12 @@ def test_explicit_remember_brings_a_forgotten_fact_back(env):
     state.add_message("user", "Yes, I'm vegetarian again.")
     state.add_message("assistant", "Got it.")
     # The fake embedder makes every "vegetarian" text identical, so switch off
-    # the (unrelated) near-duplicate check against the fact just remembered.
+    # the (unrelated) store-time write gate against the fact just remembered.
+    from totalreclaw.write_gate import GateDecision
+
     with _extract_returning([("User has been vegetarian since 2019", "claim")]), \
-         patch("totalreclaw.agent.lifecycle._is_near_duplicate", return_value=False):
+         patch("totalreclaw.agent.lifecycle.decide_write",
+               return_value=GateDecision(action="store", match=None)):
         assert auto_extract(state) == ["User has been vegetarian since 2019"]
 
 

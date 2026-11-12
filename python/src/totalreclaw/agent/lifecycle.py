@@ -21,8 +21,15 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from .state import AgentState
 
-from .extraction import ExtractedFact, extract_facts_llm, extract_facts_heuristic
+from .extraction import (
+    TURN_MODE_WINDOW_MESSAGES,
+    ExtractedFact,
+    build_dedup_context_block,
+    extract_facts_heuristic,
+    extract_facts_llm,
+)
 from .contradiction import detect_and_resolve_contradictions
+from .pin_guard import apply_pin_guard, fail_closed_actions
 from .debrief import generate_crystal
 from .loop_runner import (
     run_sync,
@@ -33,6 +40,13 @@ from .pending_drain import enqueue_messages
 from ..forget_guard import ForgetLedger, is_forget_request
 from ..pii import auto_storable, drop_sensitive_facts
 from ..relay import RelayReadBlocked
+from ..write_gate import (
+    decide_write,
+    ledger_for,
+    merge_candidates,
+    record_write,
+    results_to_candidates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -120,36 +134,198 @@ STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity for near-duplicate detection
 _LIFECYCLE_MAX_BATCH = 15
 
 
-def _fetch_recent_memories(state: "AgentState") -> list[dict]:
-    """Fetch recent memories from the vault for dedup context.
+# ---------------------------------------------------------------------------
+# Topical dedup context (PRD-04 DEP-3 / F2)
+#
+# Before extraction the LLM is shown the existing memories it should compare
+# the new facts against, so it can answer UPDATE / DELETE / NOOP instead of
+# storing a duplicate. Pre-DEP-3 this was ``recall("recent context",
+# top_k=50)`` with no embedding: a keyword search for "recent" / "context"
+# plus the newest facts, which only covered vaults of about 50 facts or less.
+# ---------------------------------------------------------------------------
 
-    Returns dicts with id, text, and embedding for both LLM dedup context and
-    cosine-based near-duplicate detection.
+#: Topical candidates, fetched through the same path as ``totalreclaw_recall``.
+DEDUP_TOPICAL_TOP_K = 20
 
-    Re-raises ``InterpreterShutdownError`` so the outer ``auto_extract``
-    handler can persist unprocessed messages to the drain queue (issue
-    #148). Other failures are swallowed and surface as an empty list —
-    dedup is best-effort.
+#: Newest active facts by block time, regardless of topic.
+DEDUP_RECENT_LIMIT = 10
+
+#: Max memory lines in the prompt block (core ``DEFAULT_DEDUP_CONTEXT_CAP``).
+DEDUP_CONTEXT_CAP = 30
+
+#: Lexical recall query = the last 4 window messages joined by one space, cut
+#: to 500 characters (the OpenClaw plugin's numbers). The cut bounds the
+#: word-trapdoor fan-out against the relay's per-user read limit.
+DEDUP_QUERY_LAST_MESSAGES = 4
+DEDUP_QUERY_MAX_CHARS = 500
+
+#: Candidate pool used when the state cannot report the server-tuned one.
+_DEFAULT_CANDIDATE_POOL = 250
+
+
+def _extraction_window(messages: list[dict], mode: str) -> list[dict]:
+    """The messages the extraction LLM sees (same slice as ``extract_facts_llm``)."""
+    if mode == "turn":
+        return messages[-TURN_MODE_WINDOW_MESSAGES:]
+    return list(messages)
+
+
+def _window_contents(window: list[dict]) -> list[str]:
+    out: list[str] = []
+    for m in window:
+        text = str(m.get("content") or "").strip() if isinstance(m, dict) else ""
+        if text:
+            out.append(text)
+    return out
+
+
+def _dedup_query_text(window: list[dict]) -> str:
+    """Lexical recall query for the topical fetch (see ``DEDUP_QUERY_*``)."""
+    joined = " ".join(_window_contents(window[-DEDUP_QUERY_LAST_MESSAGES:]))
+    return joined[:DEDUP_QUERY_MAX_CHARS]
+
+
+def _embed_extraction_window(window: list[dict]) -> Optional[list[float]]:
+    """Embedding of the whole extraction window, or ``None``.
+
+    Never starts the one-time model download: when the model is neither
+    loaded nor cached, topical recall runs lexically only.
     """
-    client = state.get_client()
-    if not client:
-        return []
+    text = "\n".join(_window_contents(window))
+    if not text:
+        return None
+    from totalreclaw import embedding as _embedding
+
+    if not _embedding.is_model_available_locally():
+        logger.debug("Dedup context: embedding model not local; topical recall is lexical-only")
+        return None
     try:
-        # Use a generic query to get recent memories for dedup
-        results = run_sync(client.recall("recent context", top_k=50))
-        return [{"id": r.id, "text": r.text, "embedding": r.embedding} for r in results]
+        vector = _embedding.get_embedding(text)
+    except InterpreterShutdownError:
+        raise
+    except Exception as e:
+        if is_interpreter_shutdown_error(e):
+            raise InterpreterShutdownError(str(e)) from e
+        logger.debug("Dedup context: window embedding failed: %s", e)
+        return None
+    return list(vector) if vector else None
+
+
+def _best_effort(label: str, fetch) -> list:
+    """Run one dedup-context sub-fetch; any failure gives ``[]``.
+
+    Interpreter shutdown must reach ``auto_extract``'s drain-queue handler
+    (issue #148), so it is re-raised.
+    """
+    try:
+        out = fetch()
+        return out if isinstance(out, list) else []
     except InterpreterShutdownError:
         raise
     except RelayReadBlocked as e:
-        # Reads are paused (quota / rate limit) — dedup context is
-        # best-effort; degrade quietly rather than at WARNING level (#662).
-        logger.debug("Recent-memories fetch skipped: reads paused (%s)", e)
+        # Reads are paused (quota / rate limit): best-effort, stay quiet (#662).
+        logger.debug("Dedup context: %s skipped, reads paused (%s)", label, e)
         return []
     except Exception as e:
         if is_interpreter_shutdown_error(e):
             raise InterpreterShutdownError(str(e)) from e
-        logger.debug("Failed to fetch recent memories for dedup: %s", e)
+        logger.debug("Dedup context: %s failed: %s", label, e)
         return []
+
+
+def _tag(items: list, section: str) -> list[dict]:
+    out: list[dict] = []
+    for m in items or []:
+        if isinstance(m, dict) and m.get("id") and m.get("text"):
+            out.append({
+                "id": str(m["id"]),
+                "text": str(m["text"]),
+                "embedding": m.get("embedding"),
+                "pinned": bool(m.get("pinned")),
+                "section": section,
+            })
+    return out
+
+
+def _fetch_recent_memories(
+    state: "AgentState",
+    messages: Optional[list[dict]] = None,
+    mode: str = "turn",
+) -> list[dict]:
+    """Existing memories for the extraction dedup context and the store gate.
+
+    (The name predates PRD-04 DEP-3 and is kept: ``hermes.hooks`` and tests
+    import it.) Returns ``{"id", "text", "embedding", "pinned", "section"}``
+    dicts, deduplicated by id, in this order:
+
+    * ``topical`` — top ``DEDUP_TOPICAL_TOP_K`` of ``client.recall`` on the
+      extraction window (query embedding + word / LSH / entity trapdoors),
+      with candidate embeddings for the cosine gate;
+    * ``ledger`` — facts this process wrote in the last few minutes, which the
+      subgraph may not have indexed yet (#501);
+    * ``recent`` — the newest ``DEDUP_RECENT_LIMIT`` facts.
+
+    ``pinned`` comes from the decrypted blob (search results carry it since
+    DEP-5). Each fetch is best-effort: a failure leaves its section empty.
+    ``InterpreterShutdownError`` is re-raised (issue #148).
+    """
+    client = state.get_client()
+    if not client:
+        return []
+
+    window = _extraction_window(messages or [], mode)
+    query = _dedup_query_text(window)
+
+    def _topical() -> list:
+        if not query:
+            return []
+        query_embedding = _embed_extraction_window(window)
+        try:
+            pool = int(state.get_max_candidate_pool())
+        except Exception:
+            pool = _DEFAULT_CANDIDATE_POOL
+        results = run_sync(
+            client.recall(
+                query,
+                query_embedding=query_embedding,
+                max_candidates=pool,
+                top_k=DEDUP_TOPICAL_TOP_K,
+                include_embeddings=True,
+            )
+        )
+        return results_to_candidates(results)
+
+    def _recent() -> list:
+        fetch = getattr(client, "fetch_recent_facts", None)
+        if fetch is None:
+            return []
+        return run_sync(fetch(limit=DEDUP_RECENT_LIMIT))
+
+    topical = _tag(_best_effort("topical recall", _topical), "topical")
+    ledger = _tag(ledger_for(client).candidates(), "ledger")
+    recent = _tag(_best_effort("recent fetch", _recent), "recent")
+    memories = merge_candidates(client, topical, ledger, recent)
+    logger.info(
+        "dedup_context topical=%d ledger=%d recent=%d union=%d pinned=%d",
+        len(topical), len(ledger), len(recent), len(memories),
+        sum(1 for m in memories if m.get("pinned")),
+    )
+    return memories
+
+
+def _dedup_context_block(memories: list[dict]) -> str:
+    """The "Existing memories" prompt block for ``memories`` (core
+    ``build_dedup_context``): pinned facts first and marked read-only, then
+    topical, then just-written and newest; at most ``DEDUP_CONTEXT_CAP``
+    lines; ``""`` when empty."""
+    pinned = [m for m in memories if m.get("pinned")]
+    topical = [m for m in memories if not m.get("pinned") and m.get("section", "topical") == "topical"]
+    recent = [m for m in memories if not m.get("pinned") and m.get("section") in ("ledger", "recent")]
+    try:
+        return build_dedup_context_block(topical, pinned, recent, DEDUP_CONTEXT_CAP)
+    except Exception as e:
+        logger.warning("Dedup context formatting failed; extracting without it: %s", e)
+        return ""
 
 
 def _is_near_duplicate(
@@ -366,14 +542,22 @@ def _auto_extract_inner(
     """Inner auto_extract body — kept separate so the outer wrapper can
     catch ``InterpreterShutdownError`` from any nested ``run_sync``."""
 
-    # Fetch existing memories for both LLM dedup context and cosine dedup
-    existing_memories = _fetch_recent_memories(state)
+    # Existing memories for the LLM dedup context (PRD-04 DEP-3) and the
+    # store-time write gate: topical + just-written (ledger) + newest.
+    existing_memories = _fetch_recent_memories(state, messages, mode)
+    dedup_context = _dedup_context_block(existing_memories)
 
     # Try LLM extraction first
     facts: list[ExtractedFact] = []
     try:
         facts = run_sync(
-            extract_facts_llm(messages, mode=mode, existing_memories=existing_memories, llm_config=llm_config)
+            extract_facts_llm(
+                messages,
+                mode=mode,
+                existing_memories=existing_memories,
+                llm_config=llm_config,
+                dedup_context=dedup_context,
+            )
         )
     except InterpreterShutdownError:
         raise
@@ -407,6 +591,22 @@ def _auto_extract_inner(
         if is_interpreter_shutdown_error(exc):
             raise InterpreterShutdownError(str(exc)) from exc
         logger.debug("Contradiction detection failed (proceeding with all facts): %s", exc)
+
+    # Pin contract (PRD-04 F1 / DEP-5): an LLM UPDATE/DELETE never tombstones
+    # a pinned fact. Must run before the action loop below, which is the only
+    # place auto-extraction issues tombstones.
+    try:
+        facts = run_sync(apply_pin_guard(facts, client, logger))
+    except InterpreterShutdownError:
+        raise
+    except Exception as exc:
+        if is_interpreter_shutdown_error(exc):
+            raise InterpreterShutdownError(str(exc)) from exc
+        logger.warning(
+            "Pin guard failed (%s); no UPDATE/DELETE tombstones this cycle",
+            type(exc).__name__,
+        )
+        facts = fail_closed_actions(facts, logger)
 
     # -----------------------------------------------------------------------
     # Two-pass approach:
@@ -465,11 +665,29 @@ def _auto_extract_inner(
                 logger.info("Skipping extracted %s: %s", fact.action, why)
                 continue
 
-            # Store-time near-duplicate detection (skip if cosine sim >= threshold)
-            # UPDATE actions always store (they supersede the old fact)
-            if fact.action != "UPDATE" and embedding and existing_memories:
-                if _is_near_duplicate(embedding, existing_memories):
-                    logger.debug("Skipping near-duplicate fact: %s", fact.text[:80])
+            # Store-time write gate (internal #632 / #501): normalized exact
+            # match + cosine >= 0.85 against the fetched memories, facts this
+            # process wrote in the last few minutes (not yet indexed), and
+            # facts already accepted from this batch. UPDATE actions always
+            # store (they supersede the old fact). A near duplicate of a
+            # pinned fact is stored: the prompt asks the LLM to ADD new
+            # information about a pin; the pin itself is never touched.
+            if fact.action != "UPDATE":
+                in_batch = [
+                    {"id": f"pending-{i}", "text": pf.text, "embedding": pe}
+                    for i, (pf, pe, _) in enumerate(pending_store)
+                ]
+                decision = decide_write(
+                    fact.text,
+                    embedding,
+                    merge_candidates(client, existing_memories, in_batch),
+                    mode="auto",
+                )
+                if not decision.store:
+                    logger.info(
+                        "Skipping %s duplicate of %s",
+                        decision.match.kind, decision.match.fact_id,
+                    )
                     continue
 
             # Build the fact dict — mirrors the kwargs passed to remember() so
@@ -546,11 +764,14 @@ def _auto_extract_inner(
 
         # fact_ids is a list[str] in the same order as chunk_dicts.
         # Process per-fact results: log stored facts and issue UPDATE tombstones.
-        for i, (fact, _, _) in enumerate(chunk):
+        for i, (fact, fact_embedding, _) in enumerate(chunk):
             try:
                 fact_id = fact_ids[i] if i < len(fact_ids) else None
                 if fact_id:
                     stored_texts.append(fact.text)
+                    # The next gate check (any path) sees this fact before
+                    # the subgraph indexes it (#501).
+                    record_write(client, fact_id, fact.text, fact_embedding)
                     # For UPDATE: tombstone the old fact after the replacement
                     # has been successfully stored.
                     if fact.action == "UPDATE" and fact.existing_fact_id:

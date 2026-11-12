@@ -2,6 +2,8 @@
   "_generator": "tests/parity/fixtures/generate-dedup-context-v1.py (PRD-04 DEP-3). Expected values come from an independent Python reference implementation, not from the Rust code under test.",
   "version": 1,
   "header": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):",
+  "pinned_tag": "[pinned, read-only]",
+  "pinned_note": "Memories marked [pinned, read-only] were pinned by the user. Never UPDATE or DELETE them: if a new fact only restates one, use NOOP; if it adds or changes information, ADD it as a new fact.",
   "default_cap": 30,
   "cases": [
     {
@@ -54,7 +56,7 @@
         }
       ],
       "cap": 30,
-      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p1] User is allergic to penicillin\n[ID: t1] User lives in Lisbon\n[ID: r1] User booked a flight to Porto"
+      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p1] [pinned, read-only] User is allergic to penicillin\n[ID: t1] User lives in Lisbon\n[ID: r1] User booked a flight to Porto\nMemories marked [pinned, read-only] were pinned by the user. Never UPDATE or DELETE them: if a new fact only restates one, use NOOP; if it adds or changes information, ADD it as a new fact."
     },
     {
       "name": "dedupe_by_id_first_section_wins",
@@ -85,7 +87,7 @@
         }
       ],
       "cap": 30,
-      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p1] User is allergic to penicillin\n[ID: t1] User lives in Lisbon\n[ID: r1] User booked a flight to Porto"
+      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p1] [pinned, read-only] User is allergic to penicillin\n[ID: t1] User lives in Lisbon\n[ID: r1] User booked a flight to Porto\nMemories marked [pinned, read-only] were pinned by the user. Never UPDATE or DELETE them: if a new fact only restates one, use NOOP; if it adds or changes information, ADD it as a new fact."
     },
     {
       "name": "same_text_different_ids_both_kept",
@@ -141,7 +143,7 @@
         }
       ],
       "cap": 4,
-      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p1] Pinned one\n[ID: p2] Pinned two\n[ID: t1] Topical one\n[ID: t2] Topical two"
+      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p1] [pinned, read-only] Pinned one\n[ID: p2] [pinned, read-only] Pinned two\n[ID: t1] Topical one\n[ID: t2] Topical two\nMemories marked [pinned, read-only] were pinned by the user. Never UPDATE or DELETE them: if a new fact only restates one, use NOOP; if it adds or changes information, ADD it as a new fact."
     },
     {
       "name": "pinned_exceeding_cap_fill_every_line",
@@ -172,7 +174,7 @@
         }
       ],
       "cap": 2,
-      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p1] Pinned one\n[ID: p2] Pinned two"
+      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p1] [pinned, read-only] Pinned one\n[ID: p2] [pinned, read-only] Pinned two\nMemories marked [pinned, read-only] were pinned by the user. Never UPDATE or DELETE them: if a new fact only restates one, use NOOP; if it adds or changes information, ADD it as a new fact."
     },
     {
       "name": "cap_zero_returns_empty",
@@ -336,7 +338,25 @@
       ],
       "recent": [],
       "cap": 30,
-      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p1] User is allergic to penicillin\n[ID: t1] User lives in Lisbon"
+      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p1] [pinned, read-only] User is allergic to penicillin\n[ID: t1] User lives in Lisbon\nMemories marked [pinned, read-only] were pinned by the user. Never UPDATE or DELETE them: if a new fact only restates one, use NOOP; if it adds or changes information, ADD it as a new fact."
+    },
+    {
+      "name": "pinned_note_not_counted_against_cap",
+      "topical": [
+        {
+          "id": "t1",
+          "text": "Topical one"
+        }
+      ],
+      "pinned": [
+        {
+          "id": "p1",
+          "text": "Pinned one"
+        }
+      ],
+      "recent": [],
+      "cap": 1,
+      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p1] [pinned, read-only] Pinned one\nMemories marked [pinned, read-only] were pinned by the user. Never UPDATE or DELETE them: if a new fact only restates one, use NOOP; if it adds or changes information, ADD it as a new fact."
     },
     {
       "name": "production_shape_default_cap_30",
@@ -475,7 +495,7 @@
         }
       ],
       "cap": 30,
-      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p01] Pinned fact 01\n[ID: p02] Pinned fact 02\n[ID: t01] Topical fact 01\n[ID: t02] Topical fact 02\n[ID: t03] Topical fact 03\n[ID: t04] Topical fact 04\n[ID: t05] Topical fact 05\n[ID: t06] Topical fact 06\n[ID: t07] Topical fact 07\n[ID: t08] Topical fact 08\n[ID: t09] Topical fact 09\n[ID: t10] Topical fact 10\n[ID: t11] Topical fact 11\n[ID: t12] Topical fact 12\n[ID: t13] Topical fact 13\n[ID: t14] Topical fact 14\n[ID: t15] Topical fact 15\n[ID: t16] Topical fact 16\n[ID: t17] Topical fact 17\n[ID: t18] Topical fact 18\n[ID: t19] Topical fact 19\n[ID: t20] Topical fact 20\n[ID: r01] Recent fact 01\n[ID: r02] Recent fact 02\n[ID: r03] Recent fact 03\n[ID: r04] Recent fact 04\n[ID: r05] Recent fact 05\n[ID: r06] Recent fact 06\n[ID: r07] Recent fact 07\n[ID: r08] Recent fact 08"
+      "expected": "Existing memories (use these for dedup — classify as UPDATE/DELETE/NOOP if they conflict or overlap):\n[ID: p01] [pinned, read-only] Pinned fact 01\n[ID: p02] [pinned, read-only] Pinned fact 02\n[ID: t01] Topical fact 01\n[ID: t02] Topical fact 02\n[ID: t03] Topical fact 03\n[ID: t04] Topical fact 04\n[ID: t05] Topical fact 05\n[ID: t06] Topical fact 06\n[ID: t07] Topical fact 07\n[ID: t08] Topical fact 08\n[ID: t09] Topical fact 09\n[ID: t10] Topical fact 10\n[ID: t11] Topical fact 11\n[ID: t12] Topical fact 12\n[ID: t13] Topical fact 13\n[ID: t14] Topical fact 14\n[ID: t15] Topical fact 15\n[ID: t16] Topical fact 16\n[ID: t17] Topical fact 17\n[ID: t18] Topical fact 18\n[ID: t19] Topical fact 19\n[ID: t20] Topical fact 20\n[ID: r01] Recent fact 01\n[ID: r02] Recent fact 02\n[ID: r03] Recent fact 03\n[ID: r04] Recent fact 04\n[ID: r05] Recent fact 05\n[ID: r06] Recent fact 06\n[ID: r07] Recent fact 07\n[ID: r08] Recent fact 08\nMemories marked [pinned, read-only] were pinned by the user. Never UPDATE or DELETE them: if a new fact only restates one, use NOOP; if it adds or changes information, ADD it as a new fact."
     }
   ]
 }

@@ -14,7 +14,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 from ..relay import ReadBlockState, RelayReadBlocked
 from ..agent.read_block import read_block_tool_payload
@@ -129,7 +129,46 @@ def _is_likely_agent_self_directive(text: str) -> bool:
     return has_agent_voice and has_tool_name
 
 
-async def remember(args: dict, state: "PluginState", **kwargs) -> str:
+def _gate_response(decision) -> Optional[str]:
+    """Tool result for a write the store-time gate stopped, or ``None``."""
+    m = decision.match
+    if decision.action == "store" or m is None:
+        return None
+    base = {
+        "stored": False,
+        "fact_id": m.fact_id,
+        "existing_text": m.text,
+        "match": m.kind,
+        "similarity": round(m.similarity, 3),
+        "pinned": m.pinned,
+    }
+    pinned_note = " The existing memory is pinned and was not changed." if m.pinned else ""
+    if decision.action == "skip":
+        return json.dumps({
+            **base,
+            "already_stored": True,
+            "reason": "This memory is already stored. Nothing was written." + pinned_note,
+        })
+    return json.dumps({
+        **base,
+        "possible_duplicate": True,
+        "reason": (
+            "A very similar memory is already stored (existing_text). Nothing "
+            "was written. If the new text says the same thing, do nothing. If "
+            "it adds or changes information, call totalreclaw_remember again "
+            "with force=true." + pinned_note
+        ),
+    })
+
+
+async def remember(
+    args: dict,
+    state: "PluginState",
+    *,
+    gate_mode: Optional[str] = None,
+    gate_exclude_ids: Iterable[str] = (),
+    **kwargs,
+) -> str:
     """Store a memory in TotalReclaw (v1 taxonomy).
 
     Accepts v1 taxonomy fields: ``type`` (claim | preference | directive |
@@ -137,6 +176,14 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
     ``reasoning`` for decision-style claims, plus the legacy ``importance``
     slider. Legacy v0 tokens (fact, decision, episodic, goal, context,
     rule) are coerced transparently via :func:`normalize_to_v1_type`.
+
+    Every write passes the store-time gate (``totalreclaw.write_gate``,
+    internal #632 / #501): an exact duplicate (after normalization) of a
+    stored or just-written fact is never written again, and a near duplicate
+    (cosine >= 0.85) asks the agent to confirm with ``force=true``.
+    ``gate_mode="exact_only"`` (the USER.md mirror and reconcile, which have
+    no agent to confirm) only skips exact duplicates. ``gate_exclude_ids``
+    leaves out facts the caller is about to replace.
     """
     from totalreclaw.agent.extraction import (
         VALID_MEMORY_TYPES,
@@ -233,6 +280,20 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
             logger.debug("embed failed for remember %r: %s", log_label(text, pii_result, 40), e)
             # degrade: store without embedding (search falls back to blind indices)
 
+        from totalreclaw.write_gate import check_store, record_write
+
+        mode = gate_mode or ("exact_only" if force_write else "explicit")
+        decision = await check_store(
+            client, text, embedding, mode=mode, exclude_ids=gate_exclude_ids,
+        )
+        stopped = _gate_response(decision)
+        if stopped is not None:
+            logger.info(
+                "totalreclaw_remember not written (%s duplicate of %s)",
+                decision.match.kind, decision.match.fact_id,
+            )
+            return stopped
+
         if kwargs.get("_from_mirror"):
             # A copy of a Hermes built-in memory write (its memory tool or
             # background review, which can re-add a line from an old
@@ -259,6 +320,7 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
             reasoning=reasoning,
             confidence=1.0,  # explicit remember = highest confidence
         )
+        record_write(client, fact_id, text, embedding)
         return json.dumps({
             "stored": True,
             "fact_id": fact_id,

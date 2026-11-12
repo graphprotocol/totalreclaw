@@ -45,7 +45,7 @@ def test_fixture_header_matches_pre_dep3_python_header():
 
 
 def test_fixture_has_all_cases():
-    assert len(FIXTURE["cases"]) == 16
+    assert len(FIXTURE["cases"]) == 17
 
 
 @pytest.mark.parametrize(
@@ -93,3 +93,26 @@ def test_cap_defaults_to_30():
     out = totalreclaw_core.build_dedup_context(items, "[]", "[]")
     assert out.count("\n") == 30
     assert out.endswith("[ID: t29] fact 29")
+
+
+@pytest.mark.parametrize(
+    "case", FIXTURE["cases"], ids=[c["name"] for c in FIXTURE["cases"]]
+)
+def test_python_fallback_matches_fixture(case):
+    """``agent.extraction._py_build_dedup_context`` (used when the installed
+    core predates ``build_dedup_context``) gives the same bytes."""
+    from totalreclaw.agent.extraction import _dedup_items, _py_build_dedup_context
+
+    out = _py_build_dedup_context(
+        _dedup_items(case["topical"]), _dedup_items(case["pinned"]),
+        _dedup_items(case["recent"]), case["cap"],
+    )
+    assert out == case["expected"]
+
+
+def test_python_fallback_constants_match_fixture():
+    from totalreclaw.agent import extraction
+
+    assert extraction.DEDUP_CONTEXT_HEADER == FIXTURE["header"]
+    assert extraction.DEDUP_CONTEXT_PINNED_TAG == FIXTURE["pinned_tag"]
+    assert extraction.DEDUP_CONTEXT_PINNED_NOTE == FIXTURE["pinned_note"]

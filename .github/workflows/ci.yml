@@ -459,6 +459,8 @@ jobs:
         run: cd tests/parity && npx tsx forget-guard-parity.test.ts
       - name: Topical dedup-context parity (TS/WASM side, PRD-04 DEP-3)
         run: cd tests/parity && npx tsx dedup-context-parity.test.ts
+      - name: Store-time write gate parity (TS/WASM side)
+        run: cd tests/parity && npx tsx write-gate-parity.test.ts
 
   # NOTE: Relay unit tests run in the private totalreclaw-relay repo CI.
   # This job runs the E2E smoke test against a real relay + PostgreSQL

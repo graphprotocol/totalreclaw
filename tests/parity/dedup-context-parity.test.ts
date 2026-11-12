@@ -74,7 +74,7 @@ function check(ok: boolean, label: string, detail = ''): void {
 }
 
 check(fixture.header === HEADER, 'fixture header is the pre-DEP-3 header');
-check(fixture.cases.length === 16, 'fixture carries 16 cases', ` — got ${fixture.cases.length}`);
+check(fixture.cases.length === 17, 'fixture carries 17 cases', ` — got ${fixture.cases.length}`);
 
 for (const c of fixture.cases) {
   const actual = wasm.buildDedupContext(
