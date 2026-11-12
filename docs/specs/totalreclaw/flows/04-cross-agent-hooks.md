@@ -169,12 +169,12 @@ sequenceDiagram
     Plugin->>Plugin: fetch billing cache<br/>update extraction_interval
 
     Hermes->>Plugin: pre_llm_call(is_first_turn=True,<br/>user_message=...)
-    Plugin->>Client: auto_recall(user_message, state, top_k=8)
+    Plugin->>Client: auto_recall(user_message, state, top_k=16)
     Client->>Core: generate trapdoors + embedding
     Client->>Relay: search subgraph
     Relay-->>Client: candidates
     Client->>Core: decrypt + rerank
-    Core-->>Client: top 8
+    Core-->>Client: top 16
     Client-->>Plugin: context string
     Plugin-->>Hermes: {context: "..."}
 

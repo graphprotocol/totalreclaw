@@ -85,7 +85,7 @@ When you query:
 3. The relay returns up to several thousand encrypted candidates matching the trapdoors.
 4. The plugin / MCP server / Hermes client decrypts every candidate locally.
 5. Tier 1 source-weighted reranker scores: BM25 (lexical) + cosine (semantic) + RRF fusion + source weights (user > assistant) + scope bonus + pin override.
-6. The top-N (default 8) are returned to the host LLM as context.
+6. The top-N (default 16) are returned to the host LLM as context.
 
 The relay never sees plaintext and never holds an encryption key. Query words reach it only as blind hashes, which have limits (see below).
 

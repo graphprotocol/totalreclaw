@@ -229,8 +229,10 @@ export const FACT_PATH_PREFIX = 'totalreclaw://facts/';
 /** Maximum snippet length surfaced in search() hits. Keeps tool payloads small. */
 const SNIPPET_MAX = 500;
 
-/** Default search cap when the caller doesn't pass maxResults. */
-const DEFAULT_MAX_RESULTS = 8;
+// No default search cap here: when the caller passes no maxResults, the
+// recall closure resolves it (env TOTALRECLAW_RECALL_TOP_K > relay
+// features.recall_top_k > 16 — see getRecallTopK in index.ts), so the relay
+// knob also reaches memory_search.
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -259,16 +261,16 @@ export function createTrMemorySearchManager(deps: TrMemorySearchManagerDeps) {
     query: string,
     opts?: { maxResults?: number; minScore?: number; signal?: AbortSignal; sessionKey?: string },
   ) {
-    const max = opts?.maxResults ?? DEFAULT_MAX_RESULTS;
+    const max = opts?.maxResults;
     const minScore = opts?.minScore;
     const facts = await deps.recall(query, {
-      maxResults: max,
+      ...(max !== undefined ? { maxResults: max } : {}),
       signal: opts?.signal,
       sessionKey: opts?.sessionKey,
     });
     facts.sort((a, b) => b.score - a.score);
     const filtered = minScore === undefined ? facts : facts.filter((f) => f.score >= minScore!);
-    return filtered.slice(0, max).map((f) => ({
+    return (max !== undefined ? filtered.slice(0, max) : filtered).map((f) => ({
       path: `${FACT_PATH_PREFIX}${f.id}`,
       startLine: 1,
       endLine: toLineCount(f.plaintext),

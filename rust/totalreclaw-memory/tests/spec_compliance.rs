@@ -322,10 +322,10 @@ fn test_importance_clamping() {
 // ===========================================================================
 
 #[test]
-fn test_auto_recall_top_k_is_8() {
-    // Spec: Auto-recall top_k = 8
+fn test_auto_recall_top_k_is_16() {
+    // Spec: Auto-recall top_k = 16 (public #365)
     // We can't test the private constant directly, but we can verify
-    // it via the reranker's behavior: rerank with top_k=8 should return 8
+    // it via the reranker's behavior: rerank with top_k=16 should return 16
     let candidates: Vec<reranker::Candidate> = (0..20)
         .map(|i| reranker::Candidate {
             id: format!("fact_{}", i),
@@ -337,8 +337,8 @@ fn test_auto_recall_top_k_is_8() {
         .collect();
 
     let query_embedding = vec![0.5f32; 4];
-    let results = reranker::rerank("dark mode", &query_embedding, &candidates, 8).unwrap();
-    assert_eq!(results.len(), 8, "Auto-recall should return exactly 8 results");
+    let results = reranker::rerank("dark mode", &query_embedding, &candidates, 16).unwrap();
+    assert_eq!(results.len(), 16, "Auto-recall should return exactly 16 results");
 }
 
 // ===========================================================================

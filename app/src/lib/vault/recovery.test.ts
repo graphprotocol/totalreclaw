@@ -127,7 +127,10 @@ describe("restoreFromEscrowCore", () => {
   it("propagates an AEAD failure (tampered ciphertext) as a rejection, not a silent unlock", async () => {
     stubNavigator(PRF.buffer);
     const sealed = sealEscrow(MNEMONIC, PRF);
-    const tamperedCiphertext = "00" + sealed.ciphertextHex.slice(2);
+    // Flip every bit of the first byte so the tamper always changes the
+    // ciphertext (overwriting with "00" was a no-op 1 run in 256).
+    const firstByte = parseInt(sealed.ciphertextHex.slice(0, 2), 16) ^ 0xff;
+    const tamperedCiphertext = firstByte.toString(16).padStart(2, "0") + sealed.ciphertextHex.slice(2);
     stubFetch({ escrowBlob: { ciphertext: tamperedCiphertext, nonce: sealed.nonceHex, aad_version: 1 } });
     await expect(restoreFromEscrowCore(SERVER_URL, CHAIN_ID)).rejects.toThrow();
     expect(await hasAnyVault()).toBe(false);

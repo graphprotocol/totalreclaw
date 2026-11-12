@@ -2,6 +2,9 @@ import { TotalReclaw, RerankedResult } from '@totalreclaw/client';
 import type { ToolContext } from './types.js';
 import { RECALL_TOOL_DESCRIPTION } from '../prompts.js';
 import { readBlobUnified } from '../claims-helper.js';
+import { DEFAULT_RECALL_TOP_K, getRecallTopK } from '../recall-top-k.js';
+import { buildRecallResponse } from '../recall-format.js';
+import type { ToolResponse } from './types.js';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 let _wasm: typeof import('@totalreclaw/core') | null = null;
@@ -20,6 +23,8 @@ export interface RecallInput {
 export interface RecallOutput {
   memories: Array<{
     fact_id: string;
+    /** Same value as fact_id; the name the write tools document (memory_id). */
+    memory_id: string;
     fact_text: string;
     score: number;
     importance: number;
@@ -41,7 +46,7 @@ export const recallToolDefinition = {
       },
       k: {
         type: 'number',
-        default: 8,
+        default: DEFAULT_RECALL_TOP_K,
         description: 'Number of results to return',
       },
       min_importance: {
@@ -68,7 +73,7 @@ export const recallToolDefinition = {
 export async function handleRecall(
   ctx: ToolContext,
   args: unknown,
-): Promise<{ content: Array<{ type: string; text: string }> }> {
+): Promise<ToolResponse> {
   const client = ctx.client as TotalReclaw;
   const input = args as RecallInput;
   const startTime = Date.now();
@@ -87,8 +92,9 @@ export async function handleRecall(
   }
 
   try {
-    let k = input.k ?? 8;
-    if (k < 1) k = 8;
+    const defaultK = getRecallTopK();
+    let k = input.k ?? defaultK;
+    if (k < 1) k = defaultK;
     if (k > 50) k = 50;
 
     const results = await client.recall(input.query.trim(), k);
@@ -111,6 +117,7 @@ export async function handleRecall(
       return {
         r,
         category: doc.category ?? 'fact',
+        text: doc.text,
         source: doc.v1?.source,
         scope: doc.v1?.scope,
       };
@@ -121,9 +128,9 @@ export async function handleRecall(
     // multiply into the ranking score.
     const core = getWasm();
     const weighted = parsedMap
-      .map(({ r, category, source, scope }) => {
+      .map(({ r, category, text, source, scope }) => {
         const sourceWeight = source ? core.sourceWeight(source) : core.legacyClaimFallbackWeight();
-        return { r, category, source, scope, weightedScore: r.score, sourceWeight };
+        return { r, category, text, source, scope, weightedScore: r.score, sourceWeight };
       })
       .sort((a, b) => b.weightedScore - a.weightedScore);
 
@@ -133,6 +140,7 @@ export async function handleRecall(
       const createdAtUnix = BigInt(Math.floor(r.fact.createdAt.getTime() / 1000));
       return {
         fact_id: r.fact.id,
+        memory_id: r.fact.id,
         fact_text: r.fact.text,
         type: category,
         source,
@@ -152,12 +160,14 @@ export async function handleRecall(
       latency_ms: Date.now() - startTime,
     };
 
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify(result),
-      }],
-    };
+    return buildRecallResponse(
+      result as unknown as Record<string, unknown>,
+      weighted.map(({ r, category, text }) => ({
+        type: category,
+        text,
+        createdAtUnix: Math.floor(r.fact.createdAt.getTime() / 1000),
+      })),
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error occurred';
     return {

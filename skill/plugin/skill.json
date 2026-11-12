@@ -78,7 +78,7 @@
         "k": {
           "type": "integer",
           "required": false,
-          "default": 8,
+          "default": 16,
           "max": 20,
           "description": "Number of results to return"
         }
@@ -121,7 +121,7 @@
     },
     {
       "name": "totalreclaw_upgrade",
-      "description": "Get a checkout URL to upgrade to TotalReclaw Pro (1,500 memories/month on Gnosis mainnet)",
+      "description": "Get a checkout URL to upgrade to TotalReclaw Pro (3,000 memories/month on Gnosis mainnet)",
       "handler": "./dist/index.js",
       "parameters": {}
     },
@@ -231,7 +231,7 @@
           "k": {
             "type": "integer",
             "required": false,
-            "default": 8,
+            "default": 16,
             "max": 20,
             "description": "Number of results to return"
           }
@@ -271,7 +271,7 @@
       },
       {
         "name": "totalreclaw_upgrade",
-        "description": "Get a checkout URL to upgrade to TotalReclaw Pro (1,500 memories/month on Gnosis mainnet)",
+        "description": "Get a checkout URL to upgrade to TotalReclaw Pro (3,000 memories/month on Gnosis mainnet)",
         "parameters": {}
       },
       {
@@ -368,7 +368,7 @@
       },
       "maxMemoriesInContext": {
         "type": "number",
-        "default": 8,
+        "default": 16,
         "description": "Maximum memories to inject into context"
       },
       "forgetThreshold": {

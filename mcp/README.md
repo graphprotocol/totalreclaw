@@ -87,7 +87,7 @@ Restart your MCP client, then ask your agent: *"Set up TotalReclaw."* It calls `
 
 > **Note:** The first run downloads a ~600MB embedding model for local inference. This is cached locally and only happens once.
 
-If another TotalReclaw client on this computer (OpenClaw, Hermes) already saved your account in `~/.totalreclaw/credentials.json`, the server uses it and you can skip this step. Pairing never replaces that file. The server can't yet read a phrase that Hermes keeps in the system keychain; in that case it tells you so and leaves the Hermes account untouched.
+If another TotalReclaw client on this computer (OpenClaw, Hermes) already saved your account in `~/.totalreclaw/credentials.json`, the server uses it and you can skip this step. Pairing does not replace that file unless you ask to replace your account and confirm it on the pairing page (your old file is kept as a copy). The server can't yet read a phrase that Hermes keeps in the system keychain; in that case it tells you so and leaves the Hermes account untouched.
 
 <details>
 <summary>Advanced: terminal wizard or phrase in the config (not recommended)</summary>
@@ -134,7 +134,7 @@ All 18 tools are invoked by the host agent from natural language context. Tool s
 | `totalreclaw_consolidate` | Merge duplicate and related memories |
 | `totalreclaw_debrief` | End-of-conversation summary to capture broader context |
 | `totalreclaw_upgrade` | Get a link to upgrade to Pro |
-| `totalreclaw_account` | View account details (wallet, tier, quota, phrase hint) |
+| `totalreclaw_account` | View account details (wallet, tier, quota, credential kind) |
 | `totalreclaw_pair` | Set up the account via a browser pair flow — the browser generates/imports a recovery phrase out-of-band (never through chat) |
 | `totalreclaw_support` | Troubleshooting help + contact links |
 
@@ -201,7 +201,13 @@ explicitly, not silently unsupported:
 - **No OS-keychain unwrap.** MCP only reads the plaintext ("headless / no
   keychain") bundle storage form. A `version: 2` file with
   `"keychain_wrapped": true` (the desktop-keychain storage form Hermes
-  writes) is a loud, actionable error, not a silent skip.
+  writes), or Hermes' older `__keychain__:v1:` marker file, is not read. The
+  server starts unconfigured and every tool call returns `not_configured`
+  with `reason: "keychain_wrapped"` and an explanation (before 3.5.1 the
+  server exited at startup, so the host showed no tools). `totalreclaw_pair`
+  refuses to overwrite the file. The same applies to an unknown `version`
+  (`reason: "unknown_version"`). A `version: 2` bundle that fails validation
+  is still fatal at startup.
 - **No `TOTALRECLAW_CREDENTIALS_PROVIDER` / external-secret-manager
   transport.** MCP always reads `credentials.json` from disk (or
   `TOTALRECLAW_CREDENTIALS_PATH`) — it has no `file` / `external` provider
@@ -233,7 +239,7 @@ keeps a stale-install downgrade loud rather than a crash.
 ## Free Tier & Pricing
 
 - **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
-- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>.
+- **Pro tier** — 3,000 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>.
 
 Pay with card via Stripe. Use `totalreclaw_status` to check current pricing. Counter resets monthly.
 
