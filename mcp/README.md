@@ -90,9 +90,9 @@ Restart your MCP client, then ask your agent: *"Set up TotalReclaw."* It calls `
 If another TotalReclaw client on this computer (OpenClaw, Hermes) already saved your account in `~/.totalreclaw/credentials.json`, the server uses it and you can skip this step. Pairing does not replace that file unless you ask to replace your account and confirm it on the pairing page (your old file is kept as a copy). The server can't yet read a phrase that Hermes keeps in the system keychain; in that case it tells you so and leaves the Hermes account untouched.
 
 <details>
-<summary>Advanced: terminal wizard or phrase in the config (not recommended)</summary>
+<summary>Legacy: manual setup (discouraged): terminal wizard or phrase in the config</summary>
 
-`npx @totalreclaw/mcp-server setup` generates a phrase in your own terminal and prints a config snippet that contains it. Run it yourself, never through your AI agent. Putting the phrase into the config as `TOTALRECLAW_RECOVERY_PHRASE` stores it in plaintext: anything that can read that file gets full access to your memories, and the server does not convert it to derived keys. If your client supports a credential vault, store the variable there instead. See the [setup guide](../docs/guides/claude-desktop-setup.md#advanced-recovery-phrase-in-the-config-not-recommended).
+`npx @totalreclaw/mcp-server setup` generates a phrase in your own terminal and prints a config snippet that contains it. Run it yourself, never through your AI agent. Putting the phrase into the config as `TOTALRECLAW_RECOVERY_PHRASE` stores it in plain text in a config file: anything that can read that file gets full access to your memories, and the server does not convert it to derived keys. If your client supports a credential vault, store the variable there instead. See the [setup guide](../docs/guides/claude-desktop-setup.md#advanced-recovery-phrase-in-the-config-not-recommended).
 
 </details>
 
