@@ -94,7 +94,7 @@ describe('SERVER_GUIDE keeps the detail', () => {
     ['never echo a phrase', /NEVER echo, print or summarize a phrase/],
     ['phrase-touching CLIs', /show-phrase/],
     ['compromised', /compromised/],
-    ['credential vault tip', /credential vault/],
+    ['setup only via pair, never config/env/secret store', /never in chat, in a config file, in an env var or in a secret store/],
     ['remember triggers', /I prefer\.\.\./],
     ['do not store credentials', /credentials \(passwords, API keys, tokens\)/],
     ['importance scale', /7-9 for core identity/],
