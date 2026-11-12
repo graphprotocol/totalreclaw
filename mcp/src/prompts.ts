@@ -49,10 +49,10 @@ TotalReclaw uses a 12-word BIP-39 recovery phrase as the user's identity. The ph
 - NEVER ask the user to paste their phrase into chat. NEVER echo, print or summarize a phrase.
 - NEVER invoke a phrase-touching CLI (e.g. "npx @totalreclaw/mcp-server setup", "npx @totalreclaw/mcp-server show-phrase") via a shell tool: its stdout enters your context.
 - If the user pastes a phrase in chat anyway, tell them it is compromised and they need a fresh one from the browser pair flow (totalreclaw_pair).
-- If your agent has a credential vault or secret store, the user's TOTALRECLAW_RECOVERY_PHRASE belongs there, not in a plaintext environment variable.
+- Setup is totalreclaw_pair (link + PIN). The phrase is created or entered in the browser during totalreclaw_pair, never in chat, in a config file, in an env var or in a secret store, and never through you.
 
 ## Setup
-If a tool returns "not_configured", offer totalreclaw_pair. It returns a URL and a PIN. The user opens the URL in a browser, the browser creates or imports the phrase, and only ciphertext reaches this server. When the page says "You're all set", ask the user to fully quit and reopen this app (or start a new session); credentials load at startup, so until then every tool still returns not_configured. The link lasts about 10 minutes. On an install that is already set up, totalreclaw_pair refuses; only the user can confirm replacing an account, on the pairing page.
+If a tool returns "not_configured", offer totalreclaw_pair. It returns a URL and a PIN. The user opens the URL in a browser, the browser creates or imports the phrase, and only ciphertext reaches this server. When the page says "You're all set", ask the user to fully quit and reopen this app (or start a new session); credentials load at startup, so until then every tool still returns not_configured. The link lasts about 10 minutes. If the install is already set up, totalreclaw_pair refuses with already_configured and opens nothing: tell the user they are set up. Only if the user explicitly asks to switch to a different account, call it again with replace=true; that opens a replace session, and the user confirms the replacement on the pairing page (you cannot confirm it for them).
 Manual setup is documented at https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md. The totalreclaw_setup tool was removed in 3.2.1 because it returned the phrase through tool output.
 
 ## Recall
