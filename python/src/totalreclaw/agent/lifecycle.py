@@ -37,9 +37,16 @@ from .loop_runner import (
     is_interpreter_shutdown_error,
 )
 from .pending_drain import enqueue_messages
+from .pending_store import PendingStoreQueue
+from .write_quota import (
+    fill_write_quota_details,
+    format_write_quota_notice,
+    format_write_recovered_notice,
+    lookup_write_quota_details,
+)
 from ..forget_guard import ForgetLedger, is_forget_request
 from ..pii import auto_storable, drop_sensitive_facts
-from ..relay import RelayReadBlocked
+from ..relay import RelayReadBlocked, RelayWriteQuotaExceeded
 from ..write_gate import (
     decide_write,
     ledger_for,
@@ -66,11 +73,14 @@ _SESSION_OVERRIDE_UNSET = object()
 def _is_write_quota_error(exc: BaseException) -> bool:
     """True when a write failed because the relay refused it for quota.
 
-    The bundler path keeps ``raise_for_status()`` (client-consistency spec:
-    the write-path 403 is its own contract), so a refusal surfaces as an
-    ``httpx.HTTPStatusError`` with status 403. Mirrors the plugin's check,
-    which also treats a message mentioning "quota" as a quota refusal.
+    The bundler path raises the typed ``RelayWriteQuotaExceeded`` (#747).
+    The looser checks (any 403, or a message mentioning "quota") are kept
+    for other callers and older relays; they only drive the billing-cache
+    invalidation, never the user notice or the retry queue, which need the
+    typed error.
     """
+    if isinstance(exc, RelayWriteQuotaExceeded):
+        return True
     response = getattr(exc, "response", None)
     if getattr(response, "status_code", None) == 403:
         return True
@@ -716,6 +726,7 @@ def _auto_extract_inner(
             logger.warning("Failed to prepare extracted fact for batch: %s", e)
 
     # Submit pending ADD/UPDATE facts in chunks of _LIFECYCLE_MAX_BATCH.
+    wrote_ok = False
     for chunk_start in range(0, len(pending_store), _LIFECYCLE_MAX_BATCH):
         chunk = pending_store[chunk_start : chunk_start + _LIFECYCLE_MAX_BATCH]
         chunk_dicts = [fd for (_, _, fd) in chunk]
@@ -740,6 +751,19 @@ def _auto_extract_inner(
             )
         except InterpreterShutdownError:
             raise
+        except RelayWriteQuotaExceeded as e:
+            # #747: the relay refused the batch for quota. Keep what landed
+            # before the refusal, queue the rest of this chunk AND every later
+            # chunk (they would be refused too) for a retry, and tell the user.
+            results = list(e.batch_results or [])
+            results += [None] * (len(chunk) - len(results))
+            _process_batch_results(client, chunk, results, stored_texts, log_missing=False)
+            refused = [fd for (_, _, fd), fid in zip(chunk, results) if not fid]
+            refused += [
+                fd for (_, _, fd) in pending_store[chunk_start + _LIFECYCLE_MAX_BATCH:]
+            ]
+            _handle_write_quota(state, client, e, refused)
+            break
         except Exception as e:
             if is_interpreter_shutdown_error(e):
                 raise InterpreterShutdownError(str(e)) from e
@@ -762,45 +786,270 @@ def _auto_extract_inner(
                 )
             continue
 
+        wrote_ok = True
         # fact_ids is a list[str] in the same order as chunk_dicts.
-        # Process per-fact results: log stored facts and issue UPDATE tombstones.
-        for i, (fact, fact_embedding, _) in enumerate(chunk):
-            try:
-                fact_id = fact_ids[i] if i < len(fact_ids) else None
-                if fact_id:
-                    stored_texts.append(fact.text)
-                    # The next gate check (any path) sees this fact before
-                    # the subgraph indexes it (#501).
-                    record_write(client, fact_id, fact.text, fact_embedding)
-                    # For UPDATE: tombstone the old fact after the replacement
-                    # has been successfully stored.
-                    if fact.action == "UPDATE" and fact.existing_fact_id:
-                        try:
-                            run_sync(client.forget(fact.existing_fact_id))
-                        except InterpreterShutdownError:
-                            raise
-                        except Exception as fe:
-                            if is_interpreter_shutdown_error(fe):
-                                raise InterpreterShutdownError(str(fe)) from fe
-                            logger.warning(
-                                "Failed to tombstone old fact %s after UPDATE: %s",
-                                fact.existing_fact_id, fe,
-                            )
-                else:
-                    # remember_batch returned a short list — treat as failure.
-                    logger.warning(
-                        "Fact not stored (no id returned by batch): %s",
-                        fact.text[:80],
-                    )
-            except InterpreterShutdownError:
-                raise
-            except Exception as e:
-                if is_interpreter_shutdown_error(e):
-                    raise InterpreterShutdownError(str(e)) from e
-                logger.warning("Failed to process batch result for fact: %s", e)
+        _process_batch_results(client, chunk, fact_ids, stored_texts, log_missing=True)
 
     state.mark_messages_processed()
+    if wrote_ok:
+        # A write just went through, so the quota allows writes again: store
+        # facts an earlier refusal queued (#747). Never raises.
+        _after_successful_write(state, client)
     return stored_texts
+
+
+def _process_batch_results(
+    client,
+    chunk: list,
+    fact_ids: list,
+    stored_texts: list[str],
+    *,
+    log_missing: bool,
+) -> None:
+    """Per-fact bookkeeping after a batch: record stored facts and issue the
+    UPDATE tombstones for replacements that landed. ``fact_ids[i]`` is the id
+    of ``chunk[i]`` or falsy when it was not stored."""
+    for i, (fact, fact_embedding, _) in enumerate(chunk):
+        try:
+            fact_id = fact_ids[i] if i < len(fact_ids) else None
+            if fact_id:
+                stored_texts.append(fact.text)
+                # The next gate check (any path) sees this fact before
+                # the subgraph indexes it (#501).
+                record_write(client, fact_id, fact.text, fact_embedding)
+                # For UPDATE: tombstone the old fact after the replacement
+                # has been successfully stored.
+                if fact.action == "UPDATE" and fact.existing_fact_id:
+                    try:
+                        run_sync(client.forget(fact.existing_fact_id))
+                    except InterpreterShutdownError:
+                        raise
+                    except Exception as fe:
+                        if is_interpreter_shutdown_error(fe):
+                            raise InterpreterShutdownError(str(fe)) from fe
+                        logger.warning(
+                            "Failed to tombstone old fact %s after UPDATE: %s",
+                            fact.existing_fact_id, fe,
+                        )
+            elif log_missing:
+                # remember_batch returned a short list — treat as failure.
+                logger.warning(
+                    "Fact not stored (no id returned by batch): %s",
+                    fact.text[:80],
+                )
+        except InterpreterShutdownError:
+            raise
+        except Exception as e:
+            if is_interpreter_shutdown_error(e):
+                raise InterpreterShutdownError(str(e)) from e
+            logger.warning("Failed to process batch result for fact: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Write-quota refusal: keep, tell, retry (#747)
+#
+# A refusal used to drop the facts with a log line and tell nobody. Now the
+# refused facts go to an encrypted per-account queue (``agent.pending_store``),
+# the user is told once per session through the quota-warning slot, and the
+# queue is stored once a write succeeds again. Drained facts are stored as
+# plain ADDs: a queued UPDATE does not tombstone its old fact weeks later,
+# when that fact may have been pinned or changed.
+# ---------------------------------------------------------------------------
+
+#: Facts stored per drain call: one batch, so a drain never stalls a turn or
+#: a session start for long. The rest wait for the next trigger.
+DRAIN_MAX_FACTS = _LIFECYCLE_MAX_BATCH
+
+#: Newest facts the drain checks queued facts against (one query per drain).
+DRAIN_RECENT_LIMIT = 50
+
+#: A queued fact that fails this many drains for a non-quota reason is dropped.
+_DRAIN_MAX_ATTEMPTS = 5
+
+
+def _pending_store(client) -> Optional[PendingStoreQueue]:
+    """The client's retry queue, or ``None`` (unconfigured, mocks, errors)."""
+    try:
+        queue = getattr(client, "pending_store", None)
+    except Exception:
+        return None
+    return queue if isinstance(queue, PendingStoreQueue) else None
+
+
+def _announce_write_quota(
+    state: "AgentState", client, err: RelayWriteQuotaExceeded, *, queued: int, lost: int,
+) -> None:
+    """Queue the refusal notice for the next turn, once per session."""
+    if getattr(state, "write_quota_announced", False) is True:
+        return
+    try:
+        run_sync(lookup_write_quota_details(err, client))
+    except Exception:  # incl. InterpreterShutdownError: word it without numbers
+        fill_write_quota_details(err, None)
+    notice = format_write_quota_notice(err, queued=queued, lost=lost)
+    announce = getattr(state, "announce_write_quota", None)
+    try:
+        if callable(announce):
+            announce(notice)
+        else:
+            state.set_quota_warning(notice)
+    except Exception as e:
+        logger.debug("write quota notice not queued: %s", e)
+
+
+def _handle_write_quota(
+    state: "AgentState", client, err: RelayWriteQuotaExceeded, refused: list[dict],
+) -> None:
+    try:
+        state.invalidate_billing_cache()
+    except Exception:
+        pass
+    queued = 0
+    queue = _pending_store(client)
+    if queue is not None and refused:
+        try:
+            queued = queue.add(refused, reason="write_quota")
+        except Exception as e:
+            logger.warning("pending store: could not queue refused facts: %s", e)
+    lost = max(0, len(refused) - queued)
+    logger.warning(
+        "TotalReclaw: relay refused auto-extracted facts (write quota used up); "
+        "%d queued for retry, %d lost",
+        queued, lost,
+    )
+    _announce_write_quota(state, client, err, queued=queued, lost=lost)
+
+
+def _after_successful_write(state: "AgentState", client) -> None:
+    saved = drain_pending_stores(state, client)
+    if getattr(state, "write_quota_announced", False) is True:
+        try:
+            state.push_quota_notice(format_write_recovered_notice(saved))
+            state.reset_write_quota_announcement()
+        except Exception as e:
+            logger.debug("write recovered notice not queued: %s", e)
+
+
+def drain_pending_stores(
+    state: "AgentState", client=None, *, max_facts: int = DRAIN_MAX_FACTS,
+) -> int:
+    """Store up to *max_facts* queued facts (oldest first). Returns how many
+    were stored. Never raises.
+
+    Each queued fact is re-embedded and checked before it is written: a fact
+    the user has since forgotten (#605) or one already in the vault (the
+    newest :data:`DRAIN_RECENT_LIMIT` facts plus this process's recent
+    writes, e.g. the same fact re-extracted after saving resumed) is dropped.
+    Facts the relay still refuses go back to the front of the queue.
+    """
+    client = client if client is not None else state.get_client()
+    queue = _pending_store(client)
+    if queue is None:
+        return 0
+    try:
+        entries = queue.take(max_facts)
+    except Exception as e:
+        logger.warning("pending store: cannot read the queue: %s", e)
+        return 0
+    if not entries:
+        return 0
+    try:
+        return _drain_entries(state, client, queue, entries)
+    except Exception as e:  # incl. InterpreterShutdownError before any write
+        logger.warning("pending store: drain failed before writing (%s); facts kept", e)
+        queue.put_back(entries)
+        return 0
+
+
+def _drain_entries(state: "AgentState", client, queue: PendingStoreQueue, entries: list[dict]) -> int:
+    recent: list[dict] = []
+    fetch = getattr(client, "fetch_recent_facts", None)
+    if fetch is not None:
+        recent = _tag(
+            _best_effort("recent fetch", lambda: run_sync(fetch(limit=DRAIN_RECENT_LIMIT))),
+            "recent",
+        )
+    ledger = _forget_ledger(client)
+
+    to_store: list[dict] = []
+    to_store_entries: list[dict] = []
+    for entry in entries:
+        fact = dict(entry["fact"])
+        text = fact.get("text") or ""
+        embedding = None
+        try:
+            from totalreclaw.embedding import get_embedding
+            embedding = get_embedding(text)
+        except Exception as e:
+            logger.debug("embed failed for queued fact: %s", e)
+        why = _restates_forgotten(text, embedding, ledger)
+        if why:
+            logger.info("pending store: dropping queued fact: %s", why)
+            continue
+        in_batch = [
+            {"id": f"pending-{i}", "text": f["text"], "embedding": f.get("embedding")}
+            for i, f in enumerate(to_store)
+        ]
+        decision = decide_write(text, embedding, merge_candidates(client, recent, in_batch), mode="auto")
+        if not decision.store:
+            logger.info(
+                "pending store: dropping queued %s duplicate of %s",
+                decision.match.kind, decision.match.fact_id,
+            )
+            continue
+        if embedding is not None:
+            fact["embedding"] = embedding
+        to_store.append(fact)
+        to_store_entries.append(entry)
+
+    if not to_store:
+        return 0
+
+    try:
+        ids = run_sync(client.remember_batch(to_store, source="hermes-auto"))
+    except RelayWriteQuotaExceeded as e:
+        results = list(e.batch_results or [])
+        results += [None] * (len(to_store) - len(results))
+        stored = 0
+        back = []
+        for fact, entry, fact_id in zip(to_store, to_store_entries, results):
+            if fact_id:
+                record_write(client, fact_id, fact["text"], fact.get("embedding"))
+                stored += 1
+            else:
+                back.append(entry)
+        queue.put_back(back)
+        try:
+            state.invalidate_billing_cache()
+        except Exception:
+            pass
+        _announce_write_quota(state, client, e, queued=len(back), lost=0)
+        logger.info("pending store: relay still refuses writes; %d fact(s) stay queued", len(back))
+        return stored
+    except Exception as e:
+        if isinstance(e, InterpreterShutdownError) or is_interpreter_shutdown_error(e):
+            queue.put_back(to_store_entries)
+            return 0
+        retry = []
+        for entry in to_store_entries:
+            entry["attempts"] = int(entry.get("attempts") or 0) + 1
+            if entry["attempts"] < _DRAIN_MAX_ATTEMPTS:
+                retry.append(entry)
+        dropped = len(to_store_entries) - len(retry)
+        queue.put_back(retry)
+        logger.warning(
+            "pending store: queued facts not stored yet (%s); %d kept, %d dropped after %d attempts",
+            e, len(retry), dropped, _DRAIN_MAX_ATTEMPTS,
+        )
+        return 0
+
+    stored = 0
+    for fact, fact_id in zip(to_store, ids):
+        if fact_id:
+            record_write(client, fact_id, fact["text"], fact.get("embedding"))
+            stored += 1
+    logger.info("pending store: saved %d queued fact(s)", stored)
+    return stored
 
 
 def crystal_gate_passes(n_messages: int, n_stored_facts: int) -> bool:

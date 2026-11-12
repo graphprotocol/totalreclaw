@@ -16,8 +16,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Optional
 
-from ..relay import ReadBlockState, RelayReadBlocked
+from ..relay import ReadBlockState, RelayReadBlocked, RelayWriteQuotaExceeded
 from ..agent.read_block import read_block_tool_payload
+from ..agent.write_quota import (
+    format_write_quota_notice,
+    lookup_write_quota_details,
+    write_quota_tool_payload,
+)
 from ..pii import log_label, parse_allow_sensitive, screen_explicit
 
 if TYPE_CHECKING:
@@ -328,6 +333,22 @@ async def remember(
             "scope": scope,
             "importance": importance_val,
         })
+    except RelayWriteQuotaExceeded as e:
+        # #747: a structured refusal, not the raw httpx string.
+        logger.warning("totalreclaw_remember refused: monthly write quota used up")
+        await lookup_write_quota_details(e, client)
+        try:
+            state.invalidate_billing_cache()
+        except Exception:
+            pass
+        if kwargs.get("_from_mirror"):
+            # The built-in memory mirror runs in the background; nobody reads
+            # this result, so tell the user on the next turn.
+            state.announce_write_quota(format_write_quota_notice(e))
+        else:
+            # The agent reads this result now; don't repeat it next turn.
+            state.mark_write_quota_announced()
+        return json.dumps(write_quota_tool_payload(e))
     except Exception as e:
         logger.error("totalreclaw_remember failed: %s", e)
         return json.dumps({"error": str(e)})

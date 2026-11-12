@@ -223,6 +223,8 @@ class AgentState:
         # to env override then DEFAULT_MAX_CANDIDATE_POOL.
         self._max_candidate_pool_server: Optional[int] = None
         self._quota_warning: Optional[str] = None
+        # A write refused for quota was announced this session (#747).
+        self._write_quota_announced = False
         self._server_url = server_url
         self._session_id: Optional[str] = None
         # True when the current session id was derived from a host-provided id
@@ -1098,6 +1100,42 @@ class AgentState:
     def clear_quota_warning(self) -> None:
         """Clear the quota warning after it has been shown."""
         self._quota_warning = None
+
+    def push_quota_notice(self, notice: str) -> None:
+        """Queue *notice* for the next ``pre_llm_call`` without discarding a
+        warning that is already pending (``set_quota_warning`` replaces it).
+        The newer notice goes first."""
+        existing = self._quota_warning
+        if not existing:
+            self._quota_warning = notice
+        elif notice not in existing:
+            self._quota_warning = f"{notice}\n\n{existing}"
+
+    # ------------------------------------------------------------------
+    # Write-quota refusal (#747). Announced through the quota-warning slot
+    # (``push_quota_notice``), once per session: ``on_session_start`` resets
+    # the latch, and so does the first successful write after a refusal.
+    # ------------------------------------------------------------------
+    @property
+    def write_quota_announced(self) -> bool:
+        return bool(getattr(self, "_write_quota_announced", False))
+
+    def announce_write_quota(self, notice: str) -> bool:
+        """Queue a write-quota *notice* unless one was already announced this
+        session. Returns ``True`` when it was queued."""
+        if self.write_quota_announced:
+            return False
+        self._write_quota_announced = True
+        self.push_quota_notice(notice)
+        return True
+
+    def mark_write_quota_announced(self) -> None:
+        """Latch the refusal as announced without queueing a notice — for a
+        tool whose own result already told the agent."""
+        self._write_quota_announced = True
+
+    def reset_write_quota_announcement(self) -> None:
+        self._write_quota_announced = False
 
     # ------------------------------------------------------------------
     # Relay read pause (#662) — see

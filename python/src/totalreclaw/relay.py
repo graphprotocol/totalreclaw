@@ -356,6 +356,112 @@ def _classify_subgraph_error(resp: httpx.Response) -> RelayReadError:
     return RelayReadError(resp, error_code=code, relay_message=message)
 
 
+# ---------------------------------------------------------------------------
+# Write-quota refusal (#747) — POST /v1/bundler.
+#
+# The relay answers an ``eth_sendUserOperation`` that would take the account
+# over its monthly cap with ``403 {"error": "quota_exceeded", "message",
+# "upgrade_url"}`` (totalreclaw-relay ``src/routes/proxy.ts``). It is a
+# separate contract from the read denials above: it is NOT a
+# ``RelayReadError`` and never touches the read pause. It still subclasses
+# ``httpx.HTTPStatusError`` so every existing ``except HTTPStatusError`` /
+# ``.response.status_code == 403`` check keeps matching.
+# ---------------------------------------------------------------------------
+
+
+class RelayWriteQuotaExceeded(httpx.HTTPStatusError):
+    """The relay refused a write: the monthly write quota is used up.
+
+    ``tier`` / ``used`` / ``limit`` / ``resets_at`` are ``None`` unless the
+    relay sends them (today it does not) or a caller fills them from
+    ``/v1/billing/status`` (``agent.write_quota.fill_write_quota_details``).
+
+    ``batch_results`` is set by :meth:`TotalReclaw.remember_batch` when the
+    refusal interrupted a batch: one entry per input fact, in input order —
+    the fact id if that fact was stored before the refusal, else ``None``.
+    """
+
+    kind: ClassVar[str] = "write_quota"
+
+    def __init__(
+        self,
+        response: httpx.Response,
+        *,
+        error_code: Optional[str] = None,
+        relay_message: Optional[str] = None,
+        upgrade_url: Optional[str] = None,
+        tier: Optional[str] = None,
+        limit: Optional[int] = None,
+        used: Optional[int] = None,
+        resets_at: Optional[datetime] = None,
+    ):
+        self.status_code: int = response.status_code
+        self.error_code: Optional[str] = error_code
+        self.relay_message: Optional[str] = _truncate_message(relay_message)
+        self.upgrade_url = upgrade_url
+        self.tier = tier
+        self.limit = limit
+        self.used = used
+        self.resets_at = resets_at
+        self.batch_results: Optional[list[Optional[str]]] = None
+        detail = self.relay_message or "monthly write limit reached"
+        # Keep "quota" + the status in the text: string-matching callers
+        # (``crystals.recrystallize._is_quota_exhausted_error``, lifecycle's
+        # legacy check) still recognise it after it has been stringified.
+        super().__init__(
+            f"TotalReclaw write refused (HTTP {self.status_code} quota_exceeded): {detail}",
+            request=response.request,
+            response=response,
+        )
+
+
+def _classify_bundler_error(resp: httpx.Response) -> Optional[RelayWriteQuotaExceeded]:
+    """The typed write-quota error for a non-2xx ``/v1/bundler`` response, or
+    ``None`` when it is anything else.
+
+    Matches ``error_code`` first, then ``error``, by string equality, and only
+    on a 403 (the relay's write-quota status). A non-JSON body, another 403
+    (``call_target_not_allowed``) or a 5xx is not a quota refusal.
+    """
+    if resp.status_code != 403:
+        return None
+    try:
+        body: Any = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    code = body.get("error_code") or body.get("error")
+    if code != "quota_exceeded":
+        return None
+    return RelayWriteQuotaExceeded(
+        resp,
+        error_code=code,
+        relay_message=_body_str(body, "message"),
+        upgrade_url=_body_str(body, "upgrade_url"),
+        tier=_body_str(body, "tier"),
+        limit=_body_int(body, "limit"),
+        used=_body_int(body, "used"),
+        resets_at=_parse_resets_at(body.get("resets_at")),
+    )
+
+
+def raise_for_bundler_status(resp: httpx.Response) -> None:
+    """``raise_for_status()`` for ``/v1/bundler`` responses.
+
+    Identical to ``resp.raise_for_status()`` except that a write-quota refusal
+    raises :class:`RelayWriteQuotaExceeded` instead of a bare
+    ``httpx.HTTPStatusError``. Used by ``RelayClient.submit_userop`` and
+    ``userop._relay_rpc`` (the path every UserOp submission takes).
+    """
+    if resp.is_success:
+        return
+    err = _classify_bundler_error(resp)
+    if err is not None:
+        raise err
+    resp.raise_for_status()
+
+
 # Floor + ceiling + default for the read-pause re-probe cadence. The floor
 # exists so a test/E2E env override can shorten the window without allowing
 # a hot loop. The ceiling exists so a pathological override (``1e12``,
@@ -462,6 +568,8 @@ class BillingStatus:
     free_writes_limit: int
     expires_at: Optional[str] = None
     features: Optional[BillingFeatures] = None
+    # Next monthly quota reset (ISO 8601, UTC), as the relay reports it.
+    resets_at: Optional[str] = None
 
 
 @dataclass
@@ -826,7 +934,7 @@ class RelayClient:
             headers=headers,
             json=json_rpc_body,
         )
-        resp.raise_for_status()
+        raise_for_bundler_status(resp)
         return resp.json()
 
     async def get_billing_status(self) -> BillingStatus:
@@ -860,6 +968,7 @@ class RelayClient:
             free_writes_limit=data.get("free_writes_limit", 0),
             expires_at=data.get("expires_at"),
             features=features,
+            resets_at=data.get("resets_at") if isinstance(data.get("resets_at"), str) else None,
         )
 
     async def create_checkout(self) -> CheckoutResponse:

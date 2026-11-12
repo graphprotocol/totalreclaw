@@ -18,7 +18,7 @@ backwards compatibility but are deprecated.
 from __future__ import annotations
 import logging
 import os
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import httpx as _httpx
 
@@ -30,7 +30,13 @@ from .crypto import (
     DerivedKeys,
 )
 from .lsh import LSHHasher
-from .relay import RelayClient, BillingStatus, _default_relay_url, _client_header_value
+from .relay import (
+    RelayClient,
+    BillingStatus,
+    RelayWriteQuotaExceeded,
+    _default_relay_url,
+    _client_header_value,
+)
 from .reranker import RerankerResult
 from .forget_guard import ForgetLedger
 from .operations import (
@@ -56,6 +62,9 @@ from .operations import (
 from .retype_setscope import execute_retype, execute_set_scope
 from .write_gate import ledger_for
 from .userop import DATA_EDGE_ADDRESS as _PROD_DATA_EDGE_ADDRESS_DEFAULT
+
+if TYPE_CHECKING:
+    from .agent.pending_store import PendingStoreQueue
 
 logger = logging.getLogger(__name__)
 
@@ -1051,6 +1060,11 @@ class TotalReclaw:
         ------
         ValueError
             If ``facts`` is empty, or if any entry is missing ``text``.
+        RelayWriteQuotaExceeded
+            If the relay refused a group because the monthly write quota is
+            used up (#747). Its ``batch_results`` lists, per input fact in
+            input order, the fact id when that fact was stored before the
+            refusal and ``None`` when it was not.
         RuntimeError
             If one or more groups fail to store for a non-duplicate reason
             (the bundler / paymaster error is aggregated). AA25/AA10 are
@@ -1080,15 +1094,31 @@ class TotalReclaw:
         lsh = self._get_lsh_hasher() if needs_lsh else None
         wallet = self._wallet_context(chain_id)
 
+        # #747: which input facts landed, and the first write-quota refusal.
+        # The adaptive helper reduces failures to strings, and a group can be
+        # refused after an earlier group already stored (the relay refuses a
+        # batch whole when it does not fit), so record outcomes per fact here.
+        position = {id(f): i for i, f in reversed(list(enumerate(facts)))}
+        stored_at: dict[int, str] = {}
+        quota_refusals: list[RelayWriteQuotaExceeded] = []
+
         async def _store_group(group: list[dict]) -> list[str]:
-            return await store_fact_batch(
-                facts=group,
-                wallet=wallet,
-                relay=self._relay,
-                lsh_hasher=lsh,
-                data_edge_address=self._data_edge_address,
-                source=source,
-            )
+            try:
+                group_ids = await store_fact_batch(
+                    facts=group,
+                    wallet=wallet,
+                    relay=self._relay,
+                    lsh_hasher=lsh,
+                    data_edge_address=self._data_edge_address,
+                    source=source,
+                )
+            except RelayWriteQuotaExceeded as e:
+                quota_refusals.append(e)
+                raise
+            for fact, fact_id in zip(group, group_ids):
+                if id(fact) in position:
+                    stored_at[position[id(fact)]] = fact_id
+            return group_ids
 
         # internal#448: dual-cap group + adaptive halve-on-simfail. A floor-1
         # group that still fails surfaces here as a non-empty error list → we
@@ -1097,6 +1127,10 @@ class TotalReclaw:
         ids, errors = await group_and_store_adaptive(
             _store_group, facts, MAX_BATCH_GROUP_COUNT, MAX_BATCH_BYTES
         )
+        if errors and quota_refusals:
+            err = quota_refusals[0]
+            err.batch_results = [stored_at.get(i) for i in range(len(facts))]
+            raise err
         if errors:
             raise RuntimeError(
                 f"remember_batch: {len(errors)} store group(s) failed: "
@@ -1144,6 +1178,19 @@ class TotalReclaw:
             ledger = ForgetLedger.for_owner(self._eoa_address, self._keys.encryption_key)
             self._forget_ledger = ledger
         return ledger
+
+    @property
+    def pending_store(self) -> "PendingStoreQueue":
+        """The encrypted, machine-local queue of auto-extracted facts the
+        relay refused for quota (#747). They are stored once writes succeed
+        again (``agent.lifecycle.drain_pending_stores``)."""
+        from .agent.pending_store import PendingStoreQueue
+
+        queue = getattr(self, "_pending_store", None)
+        if queue is None:
+            queue = PendingStoreQueue.for_owner(self._eoa_address, self._keys.encryption_key)
+            self._pending_store = queue
+        return queue
 
     async def forget(
         self, fact_id: str, *, suppress_reextraction: bool = False
