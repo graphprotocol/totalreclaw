@@ -1,0 +1,552 @@
+{
+  "description": "Cross-language fixture for totalreclaw-core forget_guard (internal#605/#640). Hand-written; checked by rust/totalreclaw-core/src/forget_guard.rs (tests::parity_fixture_vectors), python/tests/test_forget_guard.py (core binding + pure-Python fallback) and tests/parity/forget-guard-parity.test.ts (WASM). Embeddings are 2-d unit vectors [c, sqrt(1-c^2)] against an entry at [1, 0], so the cosine is c. Anchor tokens: kept words with an uppercase first letter or a digit.",
+  "subset_min_cosine": 0.7,
+  "superset_min_cosine": 0.8,
+  "anchor_min_cosine": 0.8,
+  "match_cases": [
+    {
+      "name": "exact_without_embedding",
+      "text": "User is vegetarian",
+      "embedding": null,
+      "entries": [
+        {
+          "id": "f1",
+          "text": "user is   VEGETARIAN"
+        }
+      ],
+      "expected": {
+        "id": "f1",
+        "reason": "exact"
+      }
+    },
+    {
+      "name": "accent_difference_is_not_exact",
+      "text": "Ines proposed PgBouncer",
+      "embedding": null,
+      "entries": [
+        {
+          "id": "f1",
+          "text": "Inês proposed PgBouncer"
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "subset_restatement_605",
+      "text": "Ines proposed PgBouncer but this is now considered outdated",
+      "embedding": [
+        0.75,
+        0.6614378277661477
+      ],
+      "entries": [
+        {
+          "id": "f1",
+          "text": "Inês proposed using PgBouncer for connection pooling on the Postgres database",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": {
+        "id": "f1",
+        "reason": "subset"
+      }
+    },
+    {
+      "name": "subset_below_threshold",
+      "text": "Ines proposed PgBouncer but this is now considered outdated",
+      "embedding": [
+        0.65,
+        0.7599342076785331
+      ],
+      "entries": [
+        {
+          "id": "f1",
+          "text": "Inês proposed using PgBouncer for connection pooling on the Postgres database",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "superset_adds_detail",
+      "text": "User has been vegetarian since 2019",
+      "embedding": [
+        0.85,
+        0.526782687642637
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": {
+        "id": "v",
+        "reason": "superset"
+      }
+    },
+    {
+      "name": "superset_below_threshold",
+      "text": "User has been vegetarian since 2019",
+      "embedding": [
+        0.79,
+        0.6131068422387732
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "negated_restatement_640",
+      "text": "User is not vegetarian",
+      "embedding": [
+        0.96,
+        0.28
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": {
+        "id": "v",
+        "reason": "subset"
+      }
+    },
+    {
+      "name": "anchor_reworded_restatement_605",
+      "text": "Inês proposed putting PgBouncer in front of Postgres",
+      "embedding": [
+        0.85,
+        0.526782687642637
+      ],
+      "entries": [
+        {
+          "id": "f1",
+          "text": "Inês proposed using PgBouncer for connection pooling on the Postgres database",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": {
+        "id": "f1",
+        "reason": "anchor"
+      }
+    },
+    {
+      "name": "anchor_below_threshold",
+      "text": "Inês proposed putting PgBouncer in front of Postgres",
+      "embedding": [
+        0.79,
+        0.6131068422387732
+      ],
+      "entries": [
+        {
+          "id": "f1",
+          "text": "Inês proposed using PgBouncer for connection pooling on the Postgres database",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "one_shared_anchor_is_not_enough",
+      "text": "User's brother Rui lives in Berlin",
+      "embedding": [
+        0.9,
+        0.4358898943540673
+      ],
+      "entries": [
+        {
+          "id": "s",
+          "text": "User's sister Ana lives in Berlin",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "anchor_needs_half_of_the_anchors",
+      "text": "Inês set up Hetzner",
+      "embedding": [
+        0.85,
+        0.526782687642637
+      ],
+      "entries": [
+        {
+          "id": "h",
+          "text": "Inês and Rui moved the Postgres cluster to Hetzner",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": {
+        "id": "h",
+        "reason": "anchor"
+      }
+    },
+    {
+      "name": "anchor_two_of_five_is_not_half",
+      "text": "Inês set up Hetzner",
+      "embedding": [
+        0.85,
+        0.526782687642637
+      ],
+      "entries": [
+        {
+          "id": "h",
+          "text": "Inês and Rui moved the Postgres cluster from AWS to Hetzner",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "value_swap_never_matches",
+      "text": "User's favorite color is green",
+      "embedding": [
+        1.0,
+        0.0
+      ],
+      "entries": [
+        {
+          "id": "c",
+          "text": "User's favorite color is blue",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "new_city_is_not_the_forgotten_city",
+      "text": "User lives in Porto",
+      "embedding": [
+        0.9,
+        0.4358898943540673
+      ],
+      "entries": [
+        {
+          "id": "l",
+          "text": "User lives in Lisbon",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "paraphrase_without_shared_tokens",
+      "text": "User does not eat meat",
+      "embedding": [
+        0.84,
+        0.5425863986500216
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "deletion_note_is_left_to_is_forget_request",
+      "text": "User previously identified as vegetarian and asked for that record to be removed",
+      "embedding": [
+        0.75,
+        0.6614378277661477
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "first_matching_entry_wins",
+      "text": "User is vegetarian",
+      "embedding": [
+        1.0,
+        0.0
+      ],
+      "entries": [
+        {
+          "id": "a",
+          "text": "User likes jazz",
+          "embedding": [
+            0.0,
+            1.0
+          ]
+        },
+        {
+          "id": "b",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "id": "c",
+          "text": "user is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": {
+        "id": "b",
+        "reason": "exact"
+      }
+    },
+    {
+      "name": "dimension_mismatch_skips_semantic_rules",
+      "text": "User is not vegetarian",
+      "embedding": [
+        1.0,
+        0.0
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "entry_without_embedding_only_matches_exact",
+      "text": "User is not vegetarian",
+      "embedding": [
+        1.0,
+        0.0
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian"
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "empty_candidate",
+      "text": "   ",
+      "embedding": null,
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian"
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "no_entries",
+      "text": "User is vegetarian",
+      "embedding": [
+        1.0,
+        0.0
+      ],
+      "entries": [],
+      "expected": null
+    }
+  ],
+  "request_cases": [
+    {
+      "text": "User asked the assistant to forget that Inês proposed PgBouncer",
+      "expected": true
+    },
+    {
+      "text": "User wants to forget that they are vegetarian",
+      "expected": true
+    },
+    {
+      "text": "User previously identified as vegetarian and asked for that record to be removed",
+      "expected": true
+    },
+    {
+      "text": "User removed the PgBouncer note from memory",
+      "expected": true
+    },
+    {
+      "text": "User no longer wants their dietary preference stored",
+      "expected": true
+    },
+    {
+      "text": "User doesn’t want this remembered",
+      "expected": true
+    },
+    {
+      "text": "User requested deletion of the vegetarian record",
+      "expected": true
+    },
+    {
+      "text": "USER ASKED TO FORGET HIS ADDRESS",
+      "expected": true
+    },
+    {
+      "text": "User tends to forget appointments",
+      "expected": false
+    },
+    {
+      "text": "User wants to delete their Facebook account",
+      "expected": false
+    },
+    {
+      "text": "User removed old records from the database",
+      "expected": false
+    },
+    {
+      "text": "User is vegetarian",
+      "expected": false
+    },
+    {
+      "text": "Inês proposed PgBouncer",
+      "expected": false
+    },
+    {
+      "text": "",
+      "expected": false
+    }
+  ],
+  "token_cases": [
+    {
+      "text": "Inês proposed using PgBouncer — the user's idea!",
+      "expected": [
+        "idea",
+        "ines",
+        "pgbouncer",
+        "proposed"
+      ]
+    },
+    {
+      "text": "User is vegetarian",
+      "expected": [
+        "vegetarian"
+      ]
+    },
+    {
+      "text": "User has been vegetarian since 2019",
+      "expected": [
+        "2019",
+        "since",
+        "vegetarian"
+      ]
+    },
+    {
+      "text": "Ines proposed PgBouncer but this is now considered outdated",
+      "expected": [
+        "ines",
+        "pgbouncer",
+        "proposed"
+      ]
+    },
+    {
+      "text": "Café São Paulo, 2nd floor",
+      "expected": [
+        "2nd",
+        "cafe",
+        "floor",
+        "paulo",
+        "sao"
+      ]
+    },
+    {
+      "text": "",
+      "expected": []
+    }
+  ],
+  "anchor_cases": [
+    {
+      "text": "Inês proposed using PgBouncer for connection pooling on the Postgres database",
+      "expected": [
+        "ines",
+        "pgbouncer",
+        "postgres"
+      ]
+    },
+    {
+      "text": "User is vegetarian",
+      "expected": []
+    },
+    {
+      "text": "User has been vegetarian since 2019",
+      "expected": [
+        "2019"
+      ]
+    },
+    {
+      "text": "USER LIVES IN LISBON",
+      "expected": [
+        "lisbon",
+        "lives"
+      ]
+    },
+    {
+      "text": "Café São Paulo, 2nd floor",
+      "expected": [
+        "2nd",
+        "cafe",
+        "paulo",
+        "sao"
+      ]
+    }
+  ]
+}

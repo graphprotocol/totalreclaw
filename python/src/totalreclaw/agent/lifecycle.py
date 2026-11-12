@@ -15,6 +15,7 @@ closed" bug).
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,6 +30,7 @@ from .loop_runner import (
     is_interpreter_shutdown_error,
 )
 from .pending_drain import enqueue_messages
+from ..forget_guard import ForgetLedger, is_forget_request
 from ..pii import auto_storable, drop_sensitive_facts
 from ..relay import RelayReadBlocked
 
@@ -196,6 +198,41 @@ def _is_near_duplicate(
             )
             return True
     return False
+
+
+def _forget_ledger(client) -> Optional[ForgetLedger]:
+    """The client's forget ledger, or ``None`` (unconfigured, mocks, errors)."""
+    try:
+        ledger = getattr(client, "forget_ledger", None)
+    except Exception:
+        return None
+    return ledger if isinstance(ledger, ForgetLedger) else None
+
+
+def _restates_forgotten(
+    text: str,
+    embedding: Optional[list[float]],
+    ledger: Optional[ForgetLedger],
+) -> Optional[str]:
+    """Why *text* must not be stored, or ``None`` (internal#605 / #640).
+
+    Two cases: a note about a deletion ("User asked to forget that ..."),
+    which restates the forgotten content and is never a useful memory; and a
+    restatement of a fact the user explicitly forgot (see
+    :mod:`totalreclaw.forget_guard`). Write-time, client-side only.
+    """
+    if is_forget_request(text):
+        return "forget-request note"
+    if ledger is None:
+        return None
+    try:
+        match = ledger.match(text, embedding)
+    except Exception as e:
+        logger.debug("forget ledger match failed: %s", type(e).__name__)
+        return None
+    if match:
+        return f"restates forgotten fact {match.get('id', '?')} ({match.get('reason', '?')})"
+    return None
 
 
 def auto_extract(
@@ -376,6 +413,9 @@ def _auto_extract_inner(
     # when there's no active conversation (unconfigured / pre-session).
     active_session_id = state.session_id
 
+    # Facts the user explicitly forgot (#605).
+    forget_ledger = _forget_ledger(client)
+
     for fact in facts:
         try:
             if fact.action == "NOOP":
@@ -400,6 +440,16 @@ def _auto_extract_inner(
             except Exception as e:
                 logger.debug("embed failed for fact %r: %s", fact.text[:40], e)
                 # degrade: store without embedding, skip near-dup detection below
+
+            # Never re-create what the user asked to forget (#605 / #640).
+            # The extractor still reads text that restates it: the original
+            # turn, the forget turn, or an answer built from the host's own
+            # session search. An UPDATE is dropped whole, so its target is
+            # not tombstoned either.
+            why = _restates_forgotten(fact.text, embedding, forget_ledger)
+            if why:
+                logger.info("Skipping extracted %s: %s", fact.action, why)
+                continue
 
             # Store-time near-duplicate detection (skip if cosine sim >= threshold)
             # UPDATE actions always store (they supersede the old fact)
@@ -526,6 +576,44 @@ def crystal_gate_passes(n_messages: int, n_stored_facts: int) -> bool:
     return True
 
 
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _scrub_crystal(crystal, ledger: Optional[ForgetLedger]):
+    """Remove the parts of a session Crystal that restate a forgotten fact or
+    note a deletion. Returns the Crystal, or ``None`` when its narrative has
+    nothing left (internal#605 / #640)."""
+    has_entries = ledger is not None and len(ledger) > 0
+
+    def _keep(text: str) -> bool:
+        if is_forget_request(text):
+            return False
+        if not has_entries:
+            return True
+        embedding = None
+        try:
+            from totalreclaw.embedding import get_embedding
+            embedding = get_embedding(text)
+        except Exception:
+            embedding = None
+        return _restates_forgotten(text, embedding, ledger) is None
+
+    sentences = [s for s in _SENTENCE_SPLIT.split(crystal.narrative.strip()) if s]
+    kept = [s for s in sentences if _keep(s)]
+    dropped = len(sentences) - len(kept)
+    for name in ("key_outcomes", "open_threads", "lessons", "topics_discussed"):
+        items = getattr(crystal, name, None) or []
+        survivors = [i for i in items if _keep(i)]
+        dropped += len(items) - len(survivors)
+        setattr(crystal, name, survivors)
+    if dropped:
+        logger.info("Session Crystal: dropped %d part(s) about forgotten facts", dropped)
+    if not kept:
+        return None
+    crystal.narrative = " ".join(kept)
+    return crystal
+
+
 def session_debrief(
     state: "AgentState",
     stored_fact_texts: Optional[list[str]] = None,
@@ -571,6 +659,10 @@ def session_debrief(
             # the auto-extraction rule — skip it if any part is not ``allow``.
             logger.info("Session Crystal skipped: sensitive content (see pii log)")
             crystal = None
+        if crystal:
+            # The Crystal reads the whole conversation, including a fact the
+            # user forgot mid-session (#605 / #640). Drop those parts.
+            crystal = _scrub_crystal(crystal, _forget_ledger(client))
         if crystal:
             # Tag the Crystal with the active conversation's session_id so it
             # groups with the same conversation's atomic facts in a vault reader
