@@ -1,7 +1,7 @@
 {
   "name": "totalreclaw",
   "displayName": "TotalReclaw",
-  "version": "3.5.2",
+  "version": "3.5.3",
   "description": "End-to-end encrypted memory for Claude. A skill that teaches Claude when to recall and store, plus the TotalReclaw memory server.",
   "author": {
     "name": "TotalReclaw Team",
