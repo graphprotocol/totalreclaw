@@ -8,9 +8,9 @@ on:
         required: false
         type: choice
         options:
-          - stable
           - rc
-        default: stable
+          - stable
+        default: rc
       rc-number:
         description: 'RC increment (1, 2, 3...) — only used when release-type=rc'
         required: false
@@ -83,6 +83,10 @@ jobs:
               print('\n'.join(new_text.splitlines()[:10]))
           PY
 
+      # One `cp310-abi3` wheel per platform: the `python-extension` feature
+      # turns on pyo3/abi3-py310 (see Cargo.toml), so the 3.12 interpreter
+      # below is only the build host, and the wheel installs on every CPython
+      # >= 3.10. `wheel-install-check` proves that before publishing.
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -228,9 +232,104 @@ jobs:
           print('OK: built-wheel surface matches source-derived expected exports')
           PY
 
+  wheel-url-check:
+    # Environment-binding guard (internal#706), the same contract as the
+    # plugin / MCP / Python-client guards: rc AND stable default to
+    # production. totalreclaw-core is pure computation and binds no relay URL
+    # at all, so this fails on ANY relay URL in a built wheel (including the
+    # staging host inside the compiled extension) or in the sdist's Rust
+    # source. Runs on dry-run too.
+    name: Built-wheel URL guard
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist-check
+          merge-multiple: true
+
+      - name: Stable / RC URL guard (core binds no relay URL)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          wheels=(dist-check/*.whl)
+          sdists=(dist-check/*.tar.gz)
+          if [ ${#wheels[@]} -eq 0 ] || [ ${#sdists[@]} -eq 0 ]; then
+            echo "::error::expected built wheels and an sdist in dist-check/"
+            exit 1
+          fi
+          for whl in "${wheels[@]}"; do
+            out=$(mktemp -d)
+            python3 -m zipfile -e "$whl" "$out"
+            echo "== $whl"
+            node scripts/check-url-binding.cjs --profile=core-wheel --root="$out" --release-type=${{ inputs.release-type }}
+          done
+          for sdist in "${sdists[@]}"; do
+            out=$(mktemp -d)
+            tar -xzf "$sdist" -C "$out"
+            echo "== $sdist"
+            node scripts/check-url-binding.cjs --profile=core-crate --root="$(echo "$out"/*/)" --release-type=${{ inputs.release-type }}
+          done
+
+  wheel-install-check:
+    # 2.6.0 shipped cp312-only wheels, so on any other Python, pip silently fell
+    # back to the sdist and needed Rust + a C toolchain (current Hermes bundles
+    # its own Python 3.14). This installs each natively-runnable built wheel on
+    # every supported CPython with --only-binary/--no-index, so a wheel that
+    # is not abi3, or carries the wrong tag, fails here instead of on a
+    # user's machine. Runs on dry-run too.
+    name: Wheel install (${{ matrix.os }} py${{ matrix.python }})
+    needs: build-wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        include:
+          - os: ubuntu-latest
+            artifact: wheels-ubuntu-latest-x86_64
+          - os: macos-latest
+            artifact: wheels-macos-latest-aarch64
+          - os: windows-latest
+            artifact: wheels-windows-latest-x86_64
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: wheel-artifact
+
+      - name: Install wheel (binary only) and smoke-test
+        shell: bash
+        run: |
+          set -e
+          python -m venv venv
+          if [ -x venv/Scripts/python.exe ]; then PY=venv/Scripts/python.exe; else PY=venv/bin/python; fi
+          "$PY" -m pip install --only-binary :all: --no-index --find-links wheel-artifact totalreclaw-core
+          "$PY" - <<'PY'
+          import sys
+          import totalreclaw_core as c
+          # Public BIP-39 test vector; no real key material.
+          keys = c.derive_keys_from_mnemonic("abandon " * 11 + "about")
+          ct = c.encrypt("smoke", keys["encryption_key"])
+          assert c.decrypt(ct, keys["encryption_key"]) == "smoke"
+          assert len(c.decode_embedding_universal(c.encode_embedding_canonical([0.25] * 640))) == 640
+          print(f"OK: totalreclaw_core on Python {sys.version.split()[0]}")
+          PY
+
   publish:
     name: Publish to PyPI
-    needs: [build-wheels, build-sdist, wheel-surface-check]
+    needs: [build-wheels, build-sdist, wheel-surface-check, wheel-url-check, wheel-install-check]
     runs-on: ubuntu-latest
     if: inputs.dry-run == false
     permissions:

@@ -118,15 +118,16 @@ function privateKeyFromB64(skB64: PrivateKeyB64): ReturnType<typeof createPrivat
   if (raw.length !== X25519_KEY_BYTES) {
     throw new Error(`pair-crypto: private key must be ${X25519_KEY_BYTES} bytes (got ${raw.length})`);
   }
-  const tempPriv = createPrivateKey({
-    key: { kty: 'OKP', crv: 'X25519', d: raw.toString('base64url'), x: '' },
-    format: 'jwk',
-  });
-  const pubObj = createPublicKey(tempPriv);
-  const pubJwk = pubObj.export({ format: 'jwk' }) as { x: string };
+  // Wrap the raw 32-byte scalar in the fixed RFC 8410 PKCS#8 envelope for
+  // X25519 instead of building a JWK with an empty `x`. Node 26 rejects that
+  // JWK (ERR_CRYPTO_INVALID_JWK); Node 22 tolerated it. The scalar is
+  // carried verbatim, so ECDH output is identical on every Node version.
+  // Same construction as the OpenClaw plugin (a192ea5d).
+  const PKCS8_X25519_PREFIX = Buffer.from('302e020100300506032b656e04220420', 'hex');
   return createPrivateKey({
-    key: { kty: 'OKP', crv: 'X25519', d: raw.toString('base64url'), x: pubJwk.x },
-    format: 'jwk',
+    key: Buffer.concat([PKCS8_X25519_PREFIX, raw]),
+    format: 'der',
+    type: 'pkcs8',
   });
 }
 

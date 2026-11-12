@@ -31,9 +31,9 @@ import { Buffer } from 'node:buffer';
 
 /** GitHub Releases is the canonical CDN for embedder bundles. */
 export const DEFAULT_BUNDLE_URL_TEMPLATE =
-  'https://github.com/p-diogo/totalreclaw/releases/download/v{rcTag}/embedder-{bundleVersion}.tar.gz';
+  'https://github.com/graphprotocol/totalreclaw/releases/download/v{rcTag}/embedder-{bundleVersion}.tar.gz';
 export const DEFAULT_MANIFEST_URL_TEMPLATE =
-  'https://github.com/p-diogo/totalreclaw/releases/download/v{rcTag}/embedder-{bundleVersion}.manifest.json';
+  'https://github.com/graphprotocol/totalreclaw/releases/download/v{rcTag}/embedder-{bundleVersion}.manifest.json';
 
 export interface FetchUrlInput {
   /** RC tag in the GitHub release tag form, e.g. `"3.3.1-rc.22"`. */

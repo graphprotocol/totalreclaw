@@ -390,32 +390,33 @@ class TestDetectLLMConfig:
             assert config is not None
             assert "groq.com" in config.base_url
 
-    def test_extraction_model_env_has_no_effect(self):
-        """TOTALRECLAW_EXTRACTION_MODEL was removed in v1 — env var ignored."""
+    def test_extraction_model_env_has_no_effect_on_chat_config(self):
+        """detect_llm_config resolves the CHAT model; TOTALRECLAW_EXTRACTION_MODEL
+        only overrides the extraction model (llm_client.extraction_model_plan)."""
         with patch.dict(os.environ, {
             "OPENAI_API_KEY": "sk-test",
-            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",  # removed env var
+            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",  # extraction-only
         }, clear=True):
             config = detect_llm_config(configured_model="test-model")
             assert config is not None
-            # configured_model wins now that the override env var is gone.
             assert config.model == "test-model"
 
-    def test_configured_model_wins_over_removed_env(self):
-        """configured_model is the canonical source in v1 (no env override)."""
+    def test_configured_model_wins_over_extraction_env(self):
+        """configured_model is the canonical CHAT model source."""
         with patch.dict(os.environ, {
             "OPENAI_API_KEY": "sk-test",
-            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",  # removed env var
+            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",  # extraction-only
         }, clear=True):
             config = detect_llm_config(configured_model="agent-default-model")
             assert config is not None
             assert config.model == "agent-default-model"
 
     def test_openai_model_env_used_when_configured_is_none(self):
-        """With TOTALRECLAW_EXTRACTION_MODEL removed, OPENAI_MODEL is the env fallback."""
+        """OPENAI_MODEL is the chat-model env fallback; the extraction override
+        does not leak into the chat config."""
         with patch.dict(os.environ, {
             "OPENAI_API_KEY": "sk-test",
-            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",  # removed — ignored
+            "TOTALRECLAW_EXTRACTION_MODEL": "gpt-4.1-nano",  # extraction-only
             "OPENAI_MODEL": "gpt-4o",
         }, clear=True):
             config = detect_llm_config()

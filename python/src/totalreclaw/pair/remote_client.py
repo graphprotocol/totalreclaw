@@ -51,8 +51,9 @@ logger = logging.getLogger(__name__)
 # Python clients install + pair against ``api.totalreclaw.xyz`` unless the
 # user opts into staging via env. This mirrors the documented contract in
 # ``docs/guides/hermes-setup.md`` (default = prod; staging = QA-only opt-in
-# via ``TOTALRECLAW_SERVER_URL`` / ``TOTALRECLAW_RELAY_URL`` /
-# ``TOTALRECLAW_PAIR_RELAY_URL``).
+# via ``TOTALRECLAW_SERVER_URL``). ``TOTALRECLAW_PAIR_RELAY_URL`` and
+# ``TOTALRECLAW_RELAY_URL`` can also move the pairing URL (see
+# ``_resolve_relay_url``), but they do not move reads and writes.
 #
 # History: prior to 2.3.6rc5 this constant was hardcoded to the staging
 # relay, which silently routed real-user pair sessions through staging
@@ -73,6 +74,15 @@ class RemotePairSession:
     expires_at: str
     keypair: GatewayKeypair
     _ws: Any  # websockets.WebSocketClientProtocol — typed Any to avoid hard import
+    #: Replace-mode session: the page makes the user confirm that this pairing
+    #: replaces the account already on this agent, and the upload is refused
+    #: unless the relay forwards that confirmation.
+    replace: bool = False
+
+
+class ReplaceNotSupportedError(RuntimeError):
+    """The relay did not acknowledge a replace-mode session (an older relay
+    whose page cannot ask the user to confirm a replacement)."""
 
 
 def _default_pin() -> str:
@@ -88,9 +98,9 @@ def _default_client_id() -> str:
 def _http_to_ws(url: str) -> str:
     """Convert ``https://`` → ``wss://`` and ``http://`` → ``ws://``.
 
-    The canonical server-URL env vars (``TOTALRECLAW_SERVER_URL``,
-    ``TOTALRECLAW_RELAY_URL``) are documented in ``hermes-setup.md`` with
-    ``https://`` prefixes (matching the relay's HTTP entrypoint), but
+    The server-URL env vars (``TOTALRECLAW_SERVER_URL``, and the
+    pairing-only ``TOTALRECLAW_RELAY_URL``) take ``https://`` URLs
+    (matching the relay's HTTP entrypoint), but
     ``open_remote_pair_session`` needs a WebSocket-shape URL to dial.
     Strip + replace the scheme so users don't have to remember which
     env var takes which prefix.
@@ -115,17 +125,19 @@ def _resolve_relay_url() -> str:
        ``hermes/hooks.py``, ``hermes/pair_tool.py``). Honoured here so
        pair behaviour matches the rest of the client. Auto-converted
        from ``https://``/``http://`` to ``wss://``/``ws://``.
-    3. ``TOTALRECLAW_RELAY_URL`` — alias documented in
-       ``hermes-setup.md`` for clarity ("relay" vs "server"). Some
-       managed Hermes deployments set this instead of (or in addition
-       to) ``TOTALRECLAW_SERVER_URL``. Auto-scheme-converted.
+    3. ``TOTALRECLAW_RELAY_URL`` — pairing-only fallback. It is NOT an
+       alias for ``TOTALRECLAW_SERVER_URL``: ``relay.py`` (reads and
+       writes) never reads it, so a deployment that sets only this
+       variable pairs against that relay but stores and recalls on the
+       production default. Kept for deployments that already set it.
+       Auto-scheme-converted.
     4. ``DEFAULT_RELAY_URL`` — production (``wss://api.totalreclaw.xyz``).
 
     Why the cascade exists (2.3.6rc5): the F1 finding in auto-QA on
     2026-05-11 was that this function silently fell through to staging
-    even when the user / guide expected prod. The new cascade honours
-    every relay-URL env the rest of the client honours, in priority
-    order, before falling back to the prod default.
+    even when the user / guide expected prod. The cascade honours the
+    pairing overrides and ``TOTALRECLAW_SERVER_URL``, in priority order,
+    before falling back to the prod default.
     """
     v = os.environ.get("TOTALRECLAW_PAIR_RELAY_URL")
     if v:
@@ -160,6 +172,7 @@ async def open_remote_pair_session(
     pin: Optional[str] = None,
     client_id: Optional[str] = None,
     mode: Optional[str] = None,
+    replace: bool = False,
 ) -> RemotePairSession:
     """Open a pair session on the relay. Returns handle with URL + PIN.
 
@@ -168,6 +181,13 @@ async def open_remote_pair_session(
       - ``"import"``   — pair page shows only the "paste existing phrase" panel.
       - ``"either"``   — pair page shows both with a tab switcher (user picks).
       - ``None``       — omit from the open frame; relay defaults to ``either``.
+
+    ``replace`` — open the session in replace mode: the relay's page warns
+    that this pairing replaces the account already on this agent and only
+    submits once the user ticks a confirmation box. Raises
+    :class:`ReplaceNotSupportedError` when the relay's ``opened`` reply does
+    not echo ``replace: true`` (it predates replace mode, so its page would
+    not ask the user).
 
     The caller is expected to:
       - Relay ``session.url`` + ``session.pin`` to the user via chat.
@@ -192,6 +212,8 @@ async def open_remote_pair_session(
         }
         if mode in ("generate", "import", "either"):
             open_frame["mode"] = mode
+        if replace:
+            open_frame["replace"] = True
         await ws.send(json.dumps(open_frame))
         raw = await asyncio.wait_for(ws.recv(), timeout=10)
         msg = json.loads(raw if isinstance(raw, str) else raw.decode("utf-8"))
@@ -219,6 +241,16 @@ async def open_remote_pair_session(
             f"pair.relay: unexpected response type '{msg.get('type')}'"
         )
 
+    if replace and msg.get("replace") is not True:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+        raise ReplaceNotSupportedError(
+            "pair.relay: this relay does not support confirmed account "
+            "replacement yet"
+        )
+
     token = str(msg["token"])
     expires_at = str(msg["expires_at"])
     user_url = _build_user_url(base, token, keypair.pk_b64)
@@ -236,6 +268,7 @@ async def open_remote_pair_session(
         expires_at=expires_at,
         keypair=keypair,
         _ws=ws,
+        replace=replace,
     )
 
 
@@ -330,6 +363,21 @@ async def await_phrase_upload(
             except Exception:
                 pass
         raise RuntimeError(f"pair.relay: unexpected frame '{msg.get('type')}'")
+
+    # Replace-mode sessions only proceed on the user's confirmation from the
+    # pairing page, forwarded by the relay. Checked before decrypting, so an
+    # unconfirmed upload is never even opened.
+    if session.replace and msg.get("replace_confirmed") is not True:
+        try:
+            await ws.send(json.dumps({"type": "nack", "error": "replace_not_confirmed"}))
+        finally:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        raise RuntimeError(
+            "pair.relay: replacement was not confirmed on the pairing page"
+        )
 
     client_pubkey = msg.get("client_pubkey")
     nonce = msg.get("nonce")

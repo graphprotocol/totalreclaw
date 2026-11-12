@@ -22,7 +22,7 @@
   <a href="https://www.npmjs.com/package/@totalreclaw/totalreclaw"><img src="https://img.shields.io/npm/v/@totalreclaw/totalreclaw?label=OpenClaw%20Plugin&color=7B5CFF" alt="npm Plugin" /></a>
   <a href="https://pypi.org/project/totalreclaw/"><img src="https://img.shields.io/pypi/v/totalreclaw?label=Python&color=7B5CFF" alt="PyPI" /></a>
   <a href="https://crates.io/crates/totalreclaw-memory"><img src="https://img.shields.io/crates/v/totalreclaw-memory?label=Rust&color=7B5CFF" alt="crates.io" /></a>
-  <a href="https://github.com/p-diogo/totalreclaw/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/p-diogo/totalreclaw/ci.yml?branch=main&label=CI" alt="CI" /></a>
+  <a href="https://github.com/graphprotocol/totalreclaw/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/graphprotocol/totalreclaw/ci.yml?branch=main&label=CI" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20(server%3A%20AGPL--3.0)-7B5CFF" alt="License" /></a>
 </p>
 
@@ -57,7 +57,8 @@ One command per client. v1 is the default — no env toggles, no feature flags.
 | Client | Install |
 |---|---|
 | **OpenClaw** | `openclaw plugins install @totalreclaw/totalreclaw` |
-| **Claude Desktop / Cursor / Windsurf** | `npx @totalreclaw/mcp-server setup` — run it yourself in a terminal, never via your AI agent (the wizard prints your recovery phrase, which must not enter the agent's context) |
+| **Claude Desktop** (and other MCP chat apps) | Add `npx -y @totalreclaw/mcp-server` to the app's MCP config, restart, then ask *"Set up TotalReclaw"* — see the [Claude Desktop guide](docs/guides/claude-desktop-setup.md) |
+| **Claude Code / Cursor / Windsurf** | `claude mcp add -s user totalreclaw -- npx -y @totalreclaw/mcp-server` (or the JSON config), then ask *"Set up TotalReclaw"* — see the [coding-tools guide](docs/guides/claude-code-setup.md) |
 | **NanoClaw** | `@totalreclaw/skill-nanoclaw` (bundled via NanoClaw) + set `TOTALRECLAW_RECOVERY_PHRASE` in deployment env — see the [NanoClaw guide](docs/guides/nanoclaw-getting-started.md) |
 | **Python / Hermes** | `pip install totalreclaw` |
 | **Rust / ZeroClaw** | `cargo add totalreclaw-memory` |
@@ -123,7 +124,7 @@ View and curate your memories at [app.totalreclaw.xyz](https://app.totalreclaw.x
 
 ## Pricing
 
-**Free**: 250 memories/month, permanently stored on Gnosis mainnet, end-to-end encrypted — no credit card required. **Pro**: 1,500 memories/month, plus LLM-guided dedup and custom extraction intervals. [See pricing →](https://totalreclaw.xyz/pricing)
+**Free**: 250 memories/month, permanently stored on Gnosis mainnet, end-to-end encrypted — no credit card required. **Pro**: 3,000 memories/month, plus LLM-guided dedup and custom extraction intervals. [See pricing →](https://totalreclaw.xyz/pricing)
 
 ## Self-Hosting
 
@@ -167,7 +168,8 @@ totalreclaw/
 ### Per-client setup
 
 - [OpenClaw](docs/guides/openclaw-setup.md)
-- [Claude Desktop / Cursor / Windsurf](docs/guides/claude-code-setup.md)
+- [Claude Desktop](docs/guides/claude-desktop-setup.md)
+- [Claude Code / Cursor / Windsurf](docs/guides/claude-code-setup.md)
 - [NanoClaw](docs/guides/nanoclaw-getting-started.md)
 - [Hermes (Python)](docs/guides/hermes-setup.md)
 - [IronClaw (NEAR AI)](docs/guides/ironclaw-setup.md) (first-class integration paused — works via the generic MCP server)

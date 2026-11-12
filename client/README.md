@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../docs/assets/logo.png" alt="TotalReclaw" width="80" />
+  <img src="https://raw.githubusercontent.com/graphprotocol/totalreclaw/main/docs/assets/logo.png" alt="TotalReclaw" width="80" />
 </p>
 
 <h1 align="center">@totalreclaw/client</h1>
@@ -11,19 +11,19 @@
 <p align="center">
   <a href="https://totalreclaw.xyz">Website</a> &middot;
   <a href="https://www.npmjs.com/package/@totalreclaw/client">npm</a> &middot;
-  <a href="https://github.com/p-diogo/totalreclaw">Repository</a>
+  <a href="https://github.com/graphprotocol/totalreclaw">Repository</a>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@totalreclaw/client"><img src="https://img.shields.io/npm/v/@totalreclaw/client?color=7B5CFF" alt="npm version"></a>
-  <a href="../LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
+  <a href="https://github.com/graphprotocol/totalreclaw/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
 </p>
 
 ---
 
 Build encrypted memory into any AI agent. All encryption happens client-side -- the server never sees plaintext.
 
-This is the core cryptographic library used by [@totalreclaw/totalreclaw](https://www.npmjs.com/package/@totalreclaw/totalreclaw) (OpenClaw plugin) and [@totalreclaw/mcp-server](https://www.npmjs.com/package/@totalreclaw/mcp-server). Most users should install one of those packages instead.
+This is the TypeScript library used by [@totalreclaw/totalreclaw](https://www.npmjs.com/package/@totalreclaw/totalreclaw) (OpenClaw plugin), [@totalreclaw/mcp-server](https://www.npmjs.com/package/@totalreclaw/mcp-server) and [@totalreclaw/skill-nanoclaw](https://www.npmjs.com/package/@totalreclaw/skill-nanoclaw). **Most users should install an agent integration instead:** [@totalreclaw/totalreclaw](https://www.npmjs.com/package/@totalreclaw/totalreclaw) for OpenClaw, [@totalreclaw/mcp-server](https://www.npmjs.com/package/@totalreclaw/mcp-server) for Claude Code, Claude Desktop, Cursor and other MCP hosts, or [`totalreclaw`](https://pypi.org/project/totalreclaw/) on PyPI for Hermes.
 
 **Requirements:** Node.js 18+
 
@@ -43,22 +43,30 @@ npm install @totalreclaw/client
 - **Blind index search** -- LSH-based blind indices for searching encrypted data
 - **Local embeddings** -- Harrier-OSS-v1-270M for semantic similarity (no API keys)
 - **BM25 + cosine reranking** -- Reciprocal rank fusion for high-quality retrieval
-- **Smart Account derivation** -- BIP-39 mnemonic to ERC-4337 Smart Account address
 - **Memory decay** -- Importance-based lifecycle management
 
 ## Quick Start
 
+The `TotalReclaw` class speaks the HTTP storage protocol (`/v1/register`, `/v1/store`, `/v1/search`) of a [self-hosted TotalReclaw server](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/self-hosted-deployment.md). The managed service at `api.totalreclaw.xyz` uses a different, on-chain protocol; to use it, install one of the agent integrations above.
+
 ```typescript
 import { TotalReclaw } from '@totalreclaw/client';
 
-const client = new TotalReclaw({ serverUrl: 'https://api.totalreclaw.xyz' });
-await client.init();
+const client = new TotalReclaw({ serverUrl: 'http://127.0.0.1:8080' }); // your server
+await client.init(); // loads the local embedding model
 
-const userId = await client.register('your twelve word recovery phrase');
+// masterPassword: a secret you load from your own secret store. Never hard-code it.
+const userId = await client.register(masterPassword);
+const salt = client.getSalt(); // keep userId + salt to log in later: client.login(userId, masterPassword, salt)
+
+// LSH bucketing needs a secret seed of at least 16 bytes. Reuse the same seed
+// on every session, or earlier memories will not be found.
+client.initLshFromSeed(lshSeed);
 
 await client.remember('I prefer coffee over tea in the morning');
 
-const results = await client.recall('what do I like to drink?');
+const results = await client.recall('what do I like to drink?'); // RerankedResult[]
+console.log(results[0]?.fact.text);
 ```
 
 ## Crypto Primitives
@@ -76,15 +84,16 @@ const results = await client.recall('what do I like to drink?');
 
 ```bash
 npm install     # Install dependencies
-npm test        # Run tests (217 tests)
+npm test        # Run tests
 npm run build   # Build
 ```
 
 ## Learn More
 
-- [Architecture Spec](../docs/specs/totalreclaw/architecture.md) -- E2EE design with LSH + blind buckets
+- [Architecture Spec](https://github.com/graphprotocol/totalreclaw/blob/main/docs/specs/totalreclaw/architecture.md) -- E2EE design with LSH + blind buckets
+- [Self-hosted deployment](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/self-hosted-deployment.md)
 - [totalreclaw.xyz](https://totalreclaw.xyz)
-- [Main Repository](https://github.com/p-diogo/totalreclaw)
+- [Main Repository](https://github.com/graphprotocol/totalreclaw)
 
 ## License
 

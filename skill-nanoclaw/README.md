@@ -1,209 +1,65 @@
-<p align="center">
-  <img src="../docs/assets/logo.png" alt="TotalReclaw" width="80" />
-</p>
+# @totalreclaw/skill-nanoclaw
 
-<h1 align="center">TotalReclaw for NanoClaw</h1>
+The TotalReclaw skill for [NanoClaw](https://github.com/qwibitai/nanoclaw). It gives NanoClaw agents end-to-end encrypted memory that persists across sessions and works with your other agents (OpenClaw, Hermes, Claude Code and other MCP hosts).
 
-<p align="center">
-  <strong>End-to-end encrypted memory for NanoClaw agents</strong>
-</p>
+Memories are encrypted inside the NanoClaw container before they leave it. The TotalReclaw relay and the chain only ever see ciphertext and hashed search tokens.
 
-<p align="center">
-  <a href="https://totalreclaw.xyz">Website</a> &middot;
-  <a href="../docs/guides/nanoclaw-getting-started.md">Getting Started</a> &middot;
-  <a href="../docs/guides/beta-tester-guide.md">Beta Guide</a>
-</p>
+## Who should install this
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/@totalreclaw/mcp-server"><img src="https://img.shields.io/npm/v/@totalreclaw/mcp-server?label=MCP%20Server&color=7B5CFF" alt="npm MCP Server"></a>
-  <a href="../LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
-</p>
+NanoClaw operators. If you use a different agent, install its integration instead:
 
----
+- OpenClaw: [`@totalreclaw/totalreclaw`](https://www.npmjs.com/package/@totalreclaw/totalreclaw)
+- Claude Code, Claude Desktop, Cursor, other MCP hosts: [`@totalreclaw/mcp-server`](https://www.npmjs.com/package/@totalreclaw/mcp-server)
+- Hermes: [`totalreclaw`](https://pypi.org/project/totalreclaw/) on PyPI
 
-Automatic encrypted memory + knowledge graph for NanoClaw agents, powered by the `@totalreclaw/mcp-server`. Memories are encrypted inside the container before leaving -- no server, service, or third party can read them.
+## How it works
 
-Once configured, your NanoClaw agent automatically extracts facts from conversations, recalls relevant memories at the start of each session, and preserves context before compaction. No manual action needed from end users.
+The skill swaps NanoClaw's container agent-runner for a TotalReclaw version (`mcp/nanoclaw-agent-runner.ts`). That runner starts [`@totalreclaw/mcp-server`](https://www.npmjs.com/package/@totalreclaw/mcp-server) as a stdio MCP server and allows the agent to call its tools (`mcp__totalreclaw__*`). The agent gets the same tools as any other MCP host: `totalreclaw_remember`, `totalreclaw_recall`, `totalreclaw_forget`, `totalreclaw_export`, `totalreclaw_status`, `totalreclaw_pair` and the rest. The full list is in the [MCP server README](https://github.com/graphprotocol/totalreclaw/blob/main/mcp/README.md#available-tools).
 
-**v3.0.0 ships Memory Taxonomy v1** — every memory is typed (`claim` / `preference` / `directive` / `commitment` / `episode` / `summary`) and tagged with source, scope, and volatility. Inherits the four new MCP tools (`totalreclaw_pin`, `totalreclaw_unpin`, `totalreclaw_retype`, `totalreclaw_set_scope`) from the underlying MCP server. See the [memory types guide](../docs/guides/memory-types-guide.md).
+Each NanoClaw group folder becomes its own TotalReclaw namespace (`main`, `work`, ...), so memories stored in one group are not visible from another.
 
-## Quick Start
-
-### Step 1: Generate a recovery phrase
-
-The **recovery phrase** is a 12-word phrase that derives all encryption keys. TotalReclaw never sends it to any server -- it stays inside the container.
-
-Run the setup wizard on any machine with Node.js installed:
+## Install
 
 ```bash
-npx @totalreclaw/mcp-server setup
+npm install @totalreclaw/skill-nanoclaw
 ```
 
-The wizard will:
-1. Generate a 12-word recovery phrase
-2. Register the phrase with the managed service
-3. Output the phrase to YOUR terminal only — never to the agent transcript (do not paste it into chat)
+NanoClaw's skill loader applies the skill from `manifest.yaml` (skill name `add-totalreclaw`). It replaces `container/agent-runner/src/index.ts` with the TotalReclaw runner and adds `@totalreclaw/mcp-server` to the container. The runner starts the MCP server with `npx @totalreclaw/mcp-server`, or with `node $TOTALRECLAW_MCP_PATH` if you point that variable at an installed copy.
 
-> **Save your recovery phrase somewhere safe.** It is the only way to recover your encrypted memories. If you lose it, your memories are gone permanently.
+The first start of the MCP server downloads a local embedding model, so allow extra time. It is cached after that.
 
-> **Note:** The first run of the MCP server downloads a ~600MB embedding model for local inference. This is cached and only happens once per deployment.
+## Set up your account
 
-If you already have a recovery phrase from a previous TotalReclaw setup (Claude Desktop, OpenClaw, another NanoClaw instance), you can reuse it. The wizard will ask.
+### Recommended: pair from your browser
 
-### Step 2: Set environment variables
+Once the skill is running, ask your agent to set up TotalReclaw. It calls `totalreclaw_pair` and gives you a URL and a PIN. Open the URL in your browser and create a new recovery phrase there, or import one you already use with another TotalReclaw agent. The phrase stays in your browser; it never goes through the chat or the agent.
 
-Add these to your NanoClaw deployment (Docker env, `.env` file, or platform config):
+Pairing saves the account to `~/.totalreclaw/credentials.json` inside the container. Keep that path on a persistent volume, or you will need to pair again whenever the container is recreated.
 
-```bash
-TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
-```
+### Advanced: headless deployments
 
-The NanoClaw agent-runner automatically spawns `@totalreclaw/mcp-server` as a background process with this variable. No further configuration needed.
+For a deployment where nobody can open a pairing link, the runner also passes `TOTALRECLAW_RECOVERY_PHRASE` from the container environment to the MCP server. Get the phrase out-of-band (from another TotalReclaw agent you paired, or by running `npx @totalreclaw/mcp-server setup` yourself in your own terminal, never through an agent), and inject it from your platform's secret store rather than a committed `.env` file. Anyone who can read that variable can decrypt your memories. The runner strips it from the environment of the agent's Bash commands.
 
-> **Note:** The server URL defaults to `https://api.totalreclaw.xyz` (the managed service). You only need to set `TOTALRECLAW_SERVER_URL` if you are running a self-hosted server.
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `TOTALRECLAW_RECOVERY_PHRASE` | Headless only: the account's recovery phrase | unset (use pairing) |
+| `TOTALRECLAW_SERVER_URL` | Relay URL; change it only for a self-hosted server | `https://api.totalreclaw.xyz` |
+| `TOTALRECLAW_MCP_PATH` | Path to an installed `@totalreclaw/mcp-server` entry file | unset (uses `npx`) |
 
-### Step 3: Verify
+## Check that it works
 
-Ask your NanoClaw agent:
+Ask the agent "Do you have access to TotalReclaw memory tools?" and then "What's my TotalReclaw status?". The status answer shows your tier and how much of the monthly quota you have used.
 
-> "Do you have access to TotalReclaw memory tools?"
+## Library exports
 
-It should confirm access to tools like `totalreclaw_remember`, `totalreclaw_recall`, `totalreclaw_forget`, and `totalreclaw_export`.
+The package also exports the building blocks the skill is made of, for custom runners: the lifecycle hooks `beforeAgentStart`, `agentEnd` and `preCompact` (they take a `TotalReclaw` client from [`@totalreclaw/client`](https://www.npmjs.com/package/@totalreclaw/client)), the extraction prompts and validators, and billing and first-run helpers. See the TypeScript declarations in `dist/`.
 
-You can also ask:
+## Links
 
-> "What's my TotalReclaw status?"
-
-The agent will show your tier, usage count, and storage mode.
-
-## How It Works
-
-### Encryption
-
-All encryption happens **inside the MCP server process** running in the NanoClaw container:
-
-- Facts are encrypted with XChaCha20-Poly1305 before leaving the container
-- Search uses blind indices (SHA-256 hashes) -- the server never sees your queries
-- The recovery phrase derives all keys via Argon2id + HKDF
-- With the managed service, encrypted facts are stored on-chain (Gnosis Chain) and indexed by The Graph
-
-The server only ever sees ciphertext and hashed tokens.
-
-### Automatic Memory Hooks
-
-NanoClaw's lifecycle hooks provide fully automatic memory -- no manual action needed from users:
-
-| Hook | What happens |
-|------|-------------|
-| `before-agent-start` | Retrieves relevant memories before processing the user's message |
-| `agent-end` | Extracts and stores new facts periodically after agent turns |
-| `pre-compact` | Full extraction before context truncation to preserve everything |
-
-### Namespace Mapping
-
-The skill maps NanoClaw's `groupFolder` to TotalReclaw's `namespace`:
-
-- `main` group folder maps to `main` namespace
-- `work` group folder maps to `work` namespace
-- Any custom group folder maps to a namespace of the same name
-
-This provides memory isolation between different NanoClaw groups. Memories stored in one namespace are not visible in another.
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TOTALRECLAW_RECOVERY_PHRASE` | 12-word recovery phrase (required) | -- |
-| `TOTALRECLAW_SERVER_URL` | TotalReclaw server URL (only needed for self-hosted) | `https://api.totalreclaw.xyz` |
-| `TOTALRECLAW_SELF_HOSTED` | Set to `true` for self-hosted mode | `false` |
-| `TOTALRECLAW_NAMESPACE` | Default namespace | Group folder name |
-| `TOTALRECLAW_AUTO_EXTRACT` | Enable automatic fact extraction | `true` |
-
-> **v3.0.0 env cleanup:** `TOTALRECLAW_CHAIN_ID` and `TOTALRECLAW_EXTRACT_INTERVAL` were removed. All tiers run on a single chain (Gnosis mainnet, chain 100) surfaced via the relay billing response; extraction interval is server-tuned by the relay. See the [env vars reference](../docs/guides/env-vars-reference.md).
-
-## Available Tools
-
-The NanoClaw agent-runner spawns `@totalreclaw/mcp-server`, so it inherits **all 18 tools** the MCP server exposes. The main ones you'll drive from natural language (full list in the [MCP server README](../mcp/README.md#available-tools)):
-
-| Tool | Description |
-|------|-------------|
-| `totalreclaw_remember` | Store a memory with v1 taxonomy (type, source, scope, reasoning) |
-| `totalreclaw_recall` | Search memories; results reranked by source weight (v1 Tier 1) |
-| `totalreclaw_forget` | Delete a specific memory by ID or query |
-| `totalreclaw_export` | Export all memories decrypted as Markdown or JSON |
-| `totalreclaw_status` | Check billing status and quota usage |
-| `totalreclaw_pin` | **New in v1** — lock a memory against auto-supersession |
-| `totalreclaw_unpin` | **New in v1** — remove pin lock |
-| `totalreclaw_retype` | **New in v1** — change memory type |
-| `totalreclaw_set_scope` | **New in v1** — assign memory to a scope |
-| `totalreclaw_import` | Re-import previously exported memories |
-| `totalreclaw_import_from` | Import from Mem0 or MCP Memory Server |
-| `totalreclaw_upgrade` | Get a link to upgrade to Pro |
-
-## Architecture
-
-The NanoClaw agent-runner spawns `@totalreclaw/mcp-server` as a stdio child process. This gives NanoClaw full feature parity with Claude Desktop, Cursor, and any other MCP client.
-
-```
-NanoClaw Container
-+-------------------------------------------+
-|  Agent Runner                             |
-|  +-------------------------------------+ |
-|  | Lifecycle Hooks                      | |
-|  | (before-agent-start, agent-end,      | |
-|  |  pre-compact)                        | |
-|  +-------------------------------------+ |
-|           |                               |
-|           v                               |
-|  +-------------------------------------+ |
-|  | @totalreclaw/mcp-server (stdio)     | |
-|  | - XChaCha20-Poly1305 encryption            | |
-|  | - Blind index generation            | |
-|  | - Local embedding + re-ranking      | |
-|  +-------------------------------------+ |
-|           |                               |
-+-------------------------------------------+
-            | (only ciphertext leaves)
-            v
-   TotalReclaw Managed Service
-   (relay, on-chain storage, The Graph)
-```
-
-## Shared Memory Across Platforms
-
-Because TotalReclaw uses the same encryption and storage across all platforms, the same recovery phrase gives access to the same memories everywhere:
-
-- Memories stored by a NanoClaw agent can be recalled in Claude Desktop
-- Memories stored in OpenClaw can be recalled by NanoClaw
-- Export from one platform, import into another
-
-This makes TotalReclaw a universal memory layer across all your AI agents.
-
-## Troubleshooting
-
-**"TotalReclaw tools not available"**
-- Verify `TOTALRECLAW_RECOVERY_PHRASE` is set in the container environment
-- Check that `@totalreclaw/mcp-server` is installed in the Docker image (`npm install -g @totalreclaw/mcp-server`)
-- Restart the NanoClaw agent after changing environment variables
-
-**"Registration failed" or network errors**
-- Verify the container can reach `https://api.totalreclaw.xyz`
-- If using a self-hosted server, verify `TOTALRECLAW_SERVER_URL` is set and reachable
-
-**Memories not appearing across sessions**
-- Confirm the same recovery phrase is used across deployments
-- Check the namespace -- memories in the `work` namespace are not visible in `main`
-
-**Quota exceeded (403 errors)**
-- Free tier allows 250 memories per month. Ask the agent: "What's my TotalReclaw status?"
-- Upgrade to Pro: ask the agent "How do I upgrade TotalReclaw?"
-
-## Learn More
-
-- [NanoClaw Getting Started Guide](../docs/guides/nanoclaw-getting-started.md) -- detailed first-time setup walkthrough
-- [Beta Tester Guide](../docs/guides/beta-tester-guide.md) -- full reference for all platforms
-- [Main Repository](https://github.com/p-diogo/totalreclaw)
-- [totalreclaw.xyz](https://totalreclaw.xyz)
+- [NanoClaw getting-started guide](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/nanoclaw-getting-started.md)
+- Repository: <https://github.com/graphprotocol/totalreclaw> (source in `skill-nanoclaw`)
+- Website: <https://totalreclaw.xyz>
+- Issues: <https://github.com/graphprotocol/totalreclaw/issues>
 
 ## License
 

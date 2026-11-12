@@ -4,7 +4,7 @@
 
 TotalReclaw gives your OpenClaw agent encrypted, persistent memory. The fastest path is a single chat message — your agent fetches this guide, you and your agent install the plugin together, and the agent walks you through setting up your TotalReclaw account.
 
-> **Wrong runtime?** This guide is for **OpenClaw** only. If you are a **Hermes** agent, follow [`hermes-setup.md`](./hermes-setup.md); if you are **Claude Desktop / Cursor / Windsurf / any MCP host**, follow [`claude-code-setup.md`](./claude-code-setup.md); if you are unsure which runtime you are, follow the universal dispatcher [`install.md`](./install.md) instead.
+> **Wrong runtime?** This guide is for **OpenClaw** only. If you are a **Hermes** agent, follow [`hermes-setup.md`](./hermes-setup.md); if you are **Claude Desktop**, follow [`claude-desktop-setup.md`](./claude-desktop-setup.md); if you are **Claude Code / Cursor / Windsurf / another MCP coding tool**, follow [`claude-code-setup.md`](./claude-code-setup.md); if you are unsure which runtime you are, follow the universal dispatcher [`install.md`](./install.md) instead.
 
 ## Install prompts
 
@@ -13,7 +13,7 @@ The user pastes one of these three prompts. The shape is fixed; the agent extrac
 ### Stable (default)
 
 ```
-Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md
+Install TotalReclaw. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/openclaw-setup.md
 ```
 
 The agent installs the stable channel (`@totalreclaw/totalreclaw` from npm `latest`) and proceeds to setup.
@@ -23,7 +23,7 @@ To see what the channels currently resolve to: `npm view @totalreclaw/totalrecla
 ### RC (user specifies a version)
 
 ```
-Install TotalReclaw RC <version>. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md
+Install TotalReclaw RC <version>. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/openclaw-setup.md
 ```
 
 `<version>` is a semver RC string the user picks (e.g. `3.3.13-rc.1`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs the **newest release candidate** via `openclaw plugins install @totalreclaw/totalreclaw@rc` (no pin — always the latest cut).
@@ -31,7 +31,7 @@ Install TotalReclaw RC <version>. See https://github.com/p-diogo/totalreclaw/blo
 ### RC against the staging relay (QA only)
 
 ```
-Install TotalReclaw RC <version> against the staging relay (TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz). See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md
+Install TotalReclaw RC <version> against the staging relay (TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz). See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/openclaw-setup.md
 ```
 
 The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` in the install / setup shell before any TotalReclaw command. Without this env var, both stable AND RC installs default to the production relay `api.totalreclaw.xyz`.
@@ -43,7 +43,7 @@ The agent exports `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz` i
 TotalReclaw is open-source memory tooling for OpenClaw. The plugin is published by `p-diogo` (GitHub-verified) at:
 
 - npm: [`@totalreclaw/totalreclaw`](https://www.npmjs.com/package/@totalreclaw/totalreclaw) — the only supported install channel
-- Source code: <https://github.com/p-diogo/totalreclaw>
+- Source code: <https://github.com/graphprotocol/totalreclaw>
 
 > **ClawHub is no longer a TotalReclaw channel** (retired 2026-07-30). Do **not** run `openclaw skills install totalreclaw` — the bare `totalreclaw` slug on ClawHub is ambiguous and can resolve to an unaffiliated third-party copy. The plugin ships its own `SKILL.md` inside the npm tarball.
 
@@ -189,10 +189,10 @@ Notes:
   The `rm -rf` targets only the plugin's npm package project dir. It does **not** touch `~/.totalreclaw/credentials.json` (your keys live there, in a different tree) — never read, list, or delete anything under `~/.totalreclaw*`. Then verify the version in Step 2 — it must match the requested build.
 - If either command fails with `command not found` / ENOENT / "not authorized", **do not immediately jump to "managed service" — a missing `openclaw` CLI is the strongest signal that you may simply be the wrong runtime for this guide.** First run a capability probe to check whether you are actually a different runtime:
   ```bash
-  command -v hermes && command -v pip      # Hermes agent (Python)
+  command -v hermes                         # Hermes agent (no bare pip on Hermes 0.22+)
   command -v claude                         # Claude Code / MCP host
   ```
-  - If that reveals you are a **Hermes** agent or an **MCP host** (Claude Desktop / Cursor / Windsurf), STOP following this guide and consult the universal dispatcher [`install.md`](./install.md), which routes you to [`hermes-setup.md`](./hermes-setup.md) or [`claude-code-setup.md`](./claude-code-setup.md) instead.
+  - If that reveals you are a **Hermes** agent or an **MCP host** (Claude Desktop / Cursor / Windsurf), STOP following this guide and consult the universal dispatcher [`install.md`](./install.md), which routes you to [`hermes-setup.md`](./hermes-setup.md), [`claude-desktop-setup.md`](./claude-desktop-setup.md) or [`claude-code-setup.md`](./claude-code-setup.md) instead.
   - If the runtime is genuinely ambiguous, ask the user one question — *"Are you using OpenClaw, Hermes, or a different agent (Claude Desktop / Cursor)?"* — then follow [`install.md`](./install.md).
   - Only if the probe confirms you really are inside an **OpenClaw** environment that simply doesn't expose host shell to the agent (managed / hosted service, shell-restricted) should you fall back to the plugins-UI path: tell the user verbatim *"Your environment doesn't expose the OpenClaw CLI to me. Please install `totalreclaw` from your service's plugins / skills UI, then reply `done`."* Wait for `done` before continuing to Step 2.
 
@@ -316,7 +316,7 @@ Then in chat: *"Set up TotalReclaw"* — the agent will run `tr pair --json` and
 <summary>From-source install (for plugin development — self-host only)</summary>
 
 ```bash
-git clone https://github.com/p-diogo/totalreclaw.git
+git clone https://github.com/graphprotocol/totalreclaw.git
 openclaw plugins install ./totalreclaw/skill/plugin
 ```
 
@@ -378,7 +378,7 @@ See [Importing Memories](importing-memories.md).
 ## Billing
 
 - **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
-- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `tr upgrade` CLI (e.g. `openclaw totalreclaw status` then follow the upgrade URL it prints, or the standalone `tr upgrade` if exposed) or visit <https://totalreclaw.xyz/pricing>. See `openclaw totalreclaw status` for current pricing.
+- **Pro tier** — 3,000 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `tr upgrade` CLI (e.g. `openclaw totalreclaw status` then follow the upgrade URL it prints, or the standalone `tr upgrade` if exposed) or visit <https://totalreclaw.xyz/pricing>. See `openclaw totalreclaw status` for current pricing.
 
 The plugin warns you automatically when you cross 80% of the monthly free-tier memory limit (injected at conversation start). Check anytime by asking *"what's my TotalReclaw status?"* — that surfaces tier, memories used, memory limit, reset date, and upgrade URL.
 
@@ -413,7 +413,7 @@ Upgrade: *"Upgrade my TotalReclaw subscription."*
 
 The canonical install prompts live in the **Install prompts** section at the top of this guide (Stable / RC / RC-staging). The default stable prompt is:
 
-> **Install TotalReclaw. See <https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/openclaw-setup.md>**
+> **Install TotalReclaw. See <https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/openclaw-setup.md>**
 
 ---
 

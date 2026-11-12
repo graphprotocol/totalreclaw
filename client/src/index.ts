@@ -274,10 +274,10 @@ export class TotalReclaw {
    * Search for memories
    *
    * @param query - Search query
-   * @param k - Number of results to return (default: 8)
+   * @param k - Number of results to return (default: 16)
    * @returns Reranked search results
    */
-  async recall(query: string, k: number = 8): Promise<RerankedResult[]> {
+  async recall(query: string, k: number = 16): Promise<RerankedResult[]> {
     this.ensureReady();
 
     if (!this.lshHasher) {

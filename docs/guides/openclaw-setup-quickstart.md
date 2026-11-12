@@ -20,7 +20,7 @@ openclaw plugins install @totalreclaw/totalreclaw@rc
 
 > **OpenClaw 2026.9.x consent prompts.** Newer OpenClaw releases gate a fresh npm install behind two consent checks (npm-source trust, then per-plugin capabilities) and you confirm each when asked. If you install from a script or other non-interactive shell — where there is no prompt to answer — pass the CLI's own flags instead: `openclaw plugins install --force --accept-capabilities @totalreclaw/totalreclaw`. That `--force` answers the source-trust gate on a fresh install only; the separate never-`--force`-a-reinstall rule in [`openclaw-setup.md`](./openclaw-setup.md) is unchanged.
 
-The plugin is published by `p-diogo` on npm under the `@totalreclaw` scope. Source code: <https://github.com/p-diogo/totalreclaw>.
+The plugin is published by `p-diogo` on npm under the `@totalreclaw` scope. Source code: <https://github.com/graphprotocol/totalreclaw>.
 
 ## Set up your account
 
@@ -30,7 +30,7 @@ After install, ask your agent something like *"set up TotalReclaw"* or just *"re
 2. **Generate or paste a 12-word recovery phrase** — the browser handles this end-to-end encrypted, so the phrase never enters the chat or the relay. Pick *Set up* for a fresh phrase, or *Log in* if you already have one from another device.
 3. **Confirm.** The browser will tell you when you are all set.
 
-You are then on the free tier (250 memories per month on Gnosis mainnet, E2E encrypted, no credit card required). Pro tier raises the cap to 1,500 memories per month — pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>. Self-hosting and custom relays are also documented at that link.
+You are then on the free tier (250 memories per month on Gnosis mainnet, E2E encrypted, no credit card required). Pro tier raises the cap to 3,000 memories per month — pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>. Self-hosting and custom relays are also documented at that link.
 
 ## Write down the recovery phrase
 

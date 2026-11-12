@@ -15,7 +15,9 @@
 import { chromium } from "@playwright/test";
 import fs from "node:fs/promises";
 
-const BASE = "http://localhost:5173";
+// E2E_BASE_URL: point at a Pages preview (staging relay) instead of the dev server.
+const BASE = (process.env.E2E_BASE_URL ?? "http://localhost:5173").replace(/\/$/, "");
+if (/(^|\/\/)(app|api)\.totalreclaw\.xyz/.test(BASE)) throw new Error("e2e: refusing to run against production");
 const out = (m) => console.log(`[e2e] ${m}`);
 let failed = false;
 function check(name, cond) {
@@ -139,6 +141,7 @@ try {
   await wipeLocalStorage();
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForURL("**/unlock", { timeout: 15000 });
+  await page.getByText("I already have one", { exact: true }).click(); // front door → recovery choices
   await page.getByText("Open a backup file", { exact: true }).waitFor({ timeout: 10000 });
 
   const fileChooserPromise = page.waitForEvent("filechooser");
@@ -162,7 +165,8 @@ try {
   out(`EXCEPTION: ${e.message}`);
   failed = true;
   try {
-    await page.screenshot({ path: "e2e/shot-escrow-file-roundtrip-failure.png" });
+    // Never capture /bootstrap: its screens show or ask for the recovery phrase.
+    if (!new URL(page.url()).pathname.startsWith("/bootstrap")) await page.screenshot({ path: "e2e/shot-escrow-file-roundtrip-failure.png" });
   } catch {}
 }
 

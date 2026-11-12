@@ -136,12 +136,12 @@ function makeFetchMock(routes: Map<string, Buffer | string>): typeof fetch {
   console.log('# URL templating');
   const u = buildBundleUrl({ rcTag: '3.3.1-rc.22', bundleVersion: 'v1' });
   assert(
-    u === 'https://github.com/p-diogo/totalreclaw/releases/download/v3.3.1-rc.22/embedder-v1.tar.gz',
+    u === 'https://github.com/graphprotocol/totalreclaw/releases/download/v3.3.1-rc.22/embedder-v1.tar.gz',
     'default bundle URL substitutes rcTag + bundleVersion',
   );
   const m = buildManifestUrl({ rcTag: '3.3.1-rc.22', bundleVersion: 'v1' });
   assert(
-    m === 'https://github.com/p-diogo/totalreclaw/releases/download/v3.3.1-rc.22/embedder-v1.manifest.json',
+    m === 'https://github.com/graphprotocol/totalreclaw/releases/download/v3.3.1-rc.22/embedder-v1.manifest.json',
     'default manifest URL substitutes both placeholders',
   );
   const overridden = buildBundleUrl(

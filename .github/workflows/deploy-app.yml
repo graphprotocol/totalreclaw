@@ -108,8 +108,11 @@ jobs:
             echo "::notice::INTERNAL_DISPATCH_PAT not set — skipping QA autopilot dispatch"
           fi
 
+      # Advisory: a failed dispatch (expired or under-scoped PAT) must not turn
+      # the preview deploy red. It shows as a warning on the run instead.
       - name: Trigger QA autopilot on totalreclaw-internal
         if: steps.dispatch_gate.outputs.ready == 'true'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.INTERNAL_DISPATCH_PAT }}
           PREVIEW_URL: ${{ steps.deploy.outputs.deployment-url }}
@@ -119,4 +122,5 @@ jobs:
             --repo p-diogo/totalreclaw-internal \
             --ref main \
             --field target_url="$PREVIEW_URL" \
-            --field pr_number="$PR_NUMBER"
+            --field pr_number="$PR_NUMBER" \
+            || { echo "::warning::QA autopilot dispatch failed. Check that INTERNAL_DISPATCH_PAT can run workflows on p-diogo/totalreclaw-internal."; exit 1; }

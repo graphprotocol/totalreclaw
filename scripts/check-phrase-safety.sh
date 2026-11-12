@@ -58,6 +58,9 @@ SCOPE_PATHS=(
     "skill-nanoclaw/mcp/SKILL.md"
     "skill-nanoclaw/CHANGELOG.md"
     "skill-nanoclaw/README.md"
+    "client/README.md"
+    "rust/totalreclaw-core/README.md"
+    "rust/totalreclaw-core/README.npm.md"
     "python/src/totalreclaw/hermes/SKILL.md"
 )
 

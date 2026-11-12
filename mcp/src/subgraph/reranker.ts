@@ -127,7 +127,7 @@ interface CoreRankedResult {
  * @param queryEmbedding     Embedding vector for the query.
  * @param candidates         Decrypted candidates with text and optional
  *                           embeddings + v1 source.
- * @param topK               Top-K to return (default 8).
+ * @param topK               Top-K to return (default 16).
  * @param _legacyWeights     IGNORED -- kept for API stability so existing
  *                           callers still compile. Core handles
  *                           intent-weighting internally based on per-candidate
@@ -140,7 +140,7 @@ export function rerank(
   query: string,
   queryEmbedding: number[],
   candidates: RerankerCandidate[],
-  topK: number = 8,
+  topK: number = 16,
   _legacyWeights?: Partial<RankingWeights>,
   applySourceWeights: boolean = false,
 ): RerankerResult[] {

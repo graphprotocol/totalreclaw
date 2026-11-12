@@ -144,7 +144,7 @@
   },
   {
     "name": "totalreclaw_recall",
-    "description": "Search encrypted vault. Top 8 reranked by provenance+semantic+recency.\nINVOKE WHEN USER SAYS:\n- \"what's my [phone/address/doctor]\"\n- \"remember when I...\" / \"what did I say about...\"\n- \"do you know my...\" / \"my preferences for...\"\n- opens convo on a topic (auto-recall first msg)\nWHEN NOT TO USE: world knowledge, small talk.\nDOES: trapdoor search, decrypt, rerank BM25+cosine+source-provenance.\nPARAMS: query (5-15 words), k (def 8, max 50).\nDon't announce \"I found these memories\" — just use them.",
+    "description": "Search encrypted vault. Top 16 reranked by provenance+semantic+recency.\nINVOKE WHEN USER SAYS:\n- \"what's my [phone/address/doctor]\"\n- \"remember when I...\" / \"what did I say about...\"\n- \"do you know my...\" / \"my preferences for...\"\n- opens convo on a topic (auto-recall first msg)\nWHEN NOT TO USE: world knowledge, small talk.\nDOES: trapdoor search, decrypt, rerank BM25+cosine+source-provenance.\nPARAMS: query (5-15 words), k (def 16, max 50).\nDon't announce \"I found these memories\" — just use them.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -154,7 +154,7 @@
         },
         "k": {
           "type": "number",
-          "default": 8,
+          "default": 16,
           "description": "Number of results to return"
         },
         "min_importance": {
@@ -181,7 +181,7 @@
   },
   {
     "name": "totalreclaw_forget",
-    "description": "Permanently remove memory.\nINVOKE WHEN USER SAYS:\n- \"forget what I said about X\" / \"delete that fact\"\n- \"that's wrong/outdated — remove it\"\n- \"I don't want you remembering X\"\n- \"erase that password I pasted\"\nWHEN NOT TO USE:\n- CORRECTING → totalreclaw_remember (dedup auto)\n- changing mind (\"I prefer tea now\") → remember new pref\n- no explicit request — never forget proactively\nDOES: fact_id → tombstone. query → recall ≤50, tombstone all.\nPARAMS: fact_id (pref), query (max 50), scope (hint).",
+    "description": "Permanently remove memory.\nINVOKE WHEN USER SAYS:\n- \"forget what I said about X\" / \"delete that fact\"\n- \"that's wrong/outdated — remove it\"\n- \"I don't want you remembering X\"\nWHEN NOT TO USE:\n- CORRECTING → totalreclaw_remember (dedup auto)\n- never forget proactively\nDOES: memory_id → tombstone. query → recall ≤50, tombstone all (self-hosted only; managed service needs an id).\nPARAMS: memory_id = the fact_id from a recall result (fact_id also accepted), query, scope.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -221,7 +221,7 @@
   },
   {
     "name": "totalreclaw_export",
-    "description": "Export decrypted vault — one-click backup.\nINVOKE WHEN USER SAYS:\n- \"show everything you know about me\" / \"what do you have on me?\"\n- \"export / back up / download my memories\"\n- \"take my memory elsewhere\" / \"portable copy\"\n- \"audit what's stored\" / \"what's in my vault?\"\nWHEN NOT TO USE:\n- one thing → totalreclaw_recall\n- cleanup → totalreclaw_consolidate/forget\nDOES: decrypt all → Markdown or JSON. Surfaces v1 type/source/scope/reasoning.\nPARAMS: format, include_metadata.",
+    "description": "Export decrypted vault — one-click backup. Self-hosted only (refused on the managed service).\nINVOKE WHEN USER SAYS:\n- \"show everything you know about me\" / \"what do you have on me?\"\n- \"export / back up / download my memories\"\n- \"take my memory elsewhere\" / \"portable copy\"\nWHEN NOT TO USE:\n- one thing → totalreclaw_recall\n- cleanup → totalreclaw_consolidate/forget\nDOES: decrypt all → Markdown or JSON. Surfaces v1 type/source/scope/reasoning.\nPARAMS: format, include_metadata.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -249,7 +249,7 @@
   },
   {
     "name": "totalreclaw_import",
-    "description": "Restore from totalreclaw_export backup (JSON/Markdown).\nINVOKE WHEN USER SAYS:\n- \"restore memories from this backup\" / \"import this JSON\"\n- \"I exported from another TotalReclaw account\"\n- \"here's the Markdown export — put it back\"\nWHEN NOT TO USE:\n- Mem0/ChatGPT/Claude → totalreclaw_import_from\n- single fact → totalreclaw_remember\nDOES: parse JSON/Markdown (auto), store via totalreclaw_remember + fingerprint dedup.\nPARAMS: content (req), format, merge_strategy, validate_only.",
+    "description": "Restore from totalreclaw_export backup (JSON/Markdown). Self-hosted only (managed service refuses it).\nINVOKE WHEN USER SAYS:\n- \"restore memories from this backup\" / \"import this JSON\"\n- \"I exported from another TotalReclaw account\"\n- \"put the export back\"\nWHEN NOT TO USE:\n- Mem0/ChatGPT/Claude → totalreclaw_import_from\n- single fact → totalreclaw_remember\nDOES: parse JSON/Markdown (auto), store + fingerprint dedup.\nPARAMS: content (req), format, merge_strategy, validate_only.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -293,7 +293,7 @@
   },
   {
     "name": "totalreclaw_import_from",
-    "description": "Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, JSON/CSV.\nINVOKE WHEN USER SAYS:\n- \"migrate memory from [Mem0/ChatGPT/Claude]\"\n- \"import my ChatGPT memories\" / \"here's my Mem0 export\"\n- \"I pasted my Claude memory — store it\"\nWHEN NOT TO USE: TotalReclaw backup → totalreclaw_import. Single fact → totalreclaw_remember.\nDOES: adapter parses+stores (unless dry_run). Fingerprint dedup. Convo sources return chunks for host LLM.\nALWAYS dry_run=true first → preview → confirm.",
+    "description": "Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, JSON/CSV. Self-hosted only (managed service refuses it, even dry_run).\nINVOKE WHEN USER SAYS:\n- \"migrate memory from [Mem0/ChatGPT/Claude]\"\n- \"import my ChatGPT memories\" / \"here's my Mem0 export\"\n- \"I pasted my Claude memory\"\nWHEN NOT TO USE: TotalReclaw backup → totalreclaw_import. Single fact → totalreclaw_remember.\nDOES: adapter parses+stores (unless dry_run). Fingerprint dedup.\nALWAYS dry_run=true first.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -346,7 +346,7 @@
   },
   {
     "name": "totalreclaw_import_batch",
-    "description": "Internal polling for LARGE imports (Gemini/ChatGPT/Claude 50+ convos). Slice per call.\n\nINVOKE WHEN:\n- totalreclaw_import_from returned total_chunks > 50\n- large Takeout/conversations.json times out\n\nPOLLING: offset=0, batch_size def 25, offset+=batch_size until is_complete. Extract + totalreclaw_remember. Dedup safe.\n\nWHEN NOT TO USE:\n- <50 convos → totalreclaw_import_from\n- pre-structured (Mem0) → totalreclaw_import_from\n- single block → totalreclaw_import_from\n- don't expose tool name",
+    "description": "Internal polling for LARGE imports (Gemini/ChatGPT/Claude 50+ convos). Self-hosted only (refused on the managed service). Slice per call.\n\nINVOKE WHEN:\n- totalreclaw_import_from returned total_chunks > 50\n- large Takeout/conversations.json times out\n\nPOLLING: offset=0, batch_size 25, offset+=batch_size until is_complete. Extract + remember.\n\nWHEN NOT TO USE:\n- <50 convos → totalreclaw_import_from\n- pre-structured (Mem0) → totalreclaw_import_from\n- don't expose tool name",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -430,7 +430,7 @@
   },
   {
     "name": "totalreclaw_upgrade",
-    "description": "Stripe checkout URL for Pro (1,500 memories/month on Gnosis mainnet, permanent on-chain, LLM-guided dedup).\nINVOKE WHEN USER SAYS:\n- \"how do I upgrade?\" / \"I want to go pro\"\n- \"how much does it cost?\" (share pricing from checkout, don't hardcode)\n- after `quota_exceeded` — offer inline\n- \"raise my limit\" / \"I keep hitting the cap\"\nDOES: calls relay checkout, returns one-time Stripe URL.\nWHEN NOT TO USE:\n- user already Pro (check totalreclaw_status)\n- unrelated — don't volunteer upgrades",
+    "description": "Stripe checkout URL for Pro (a higher monthly write limit, permanent on-chain, LLM-guided dedup).\nINVOKE WHEN USER SAYS:\n- \"how do I upgrade?\" / \"I want to go pro\"\n- \"how much does it cost?\" (share pricing from checkout, don't hardcode)\n- after `quota_exceeded` — offer inline\n- \"raise my limit\" / \"I keep hitting the cap\"\nDOES: calls relay checkout, returns one-time Stripe URL.\nWHEN NOT TO USE:\n- user already Pro (check totalreclaw_status)\n- unrelated — don't volunteer upgrades",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -451,104 +451,88 @@
   },
   {
     "name": "totalreclaw_debrief",
-    "description": "Crystal session summary — one structured summary per session.\n\nINVOKE WHEN USER SAYS:\n- \"goodbye\" / \"bye\" / \"thanks\"\n- \"that's all\" / \"I'm done\"\n- \"wrapping up\" / after long debug/plan session\n- before detected compaction/reset\n\nWHEN NOT TO USE:\n- casual chat / Q&A — adds noise\n- no prior totalreclaw_remember — no context\n- unsure → skip; debriefs rare\n\nProvide a Crystal object. narrative is embedded; all other fields go in metadata.",
+    "description": "Crystal session summary — one structured summary per session.\n\nINVOKE WHEN USER SAYS:\n- \"goodbye\" / \"bye\" / \"thanks\"\n- \"that's all\" / \"I'm done\"\n- \"wrapping up\" / after long debug/plan session\n- before detected compaction/reset\n\nWHEN NOT TO USE:\n- casual chat / Q&A — adds noise\n- no prior totalreclaw_remember — no context\n- unsure → skip; debriefs rare\n\nPARAMS: crystal {narrative (req), ...} preferred, or legacy facts[]; one of the two is required.",
     "inputSchema": {
       "type": "object",
-      "oneOf": [
-        {
-          "description": "Crystal-shaped debrief (preferred, am-1)",
+      "properties": {
+        "crystal": {
+          "type": "object",
+          "description": "Preferred. Structured Crystal session summary (narrative required).",
           "properties": {
-            "crystal": {
-              "type": "object",
-              "description": "Structured Crystal session summary",
-              "properties": {
-                "narrative": {
-                  "type": "string",
-                  "description": "1-2 sentence session summary (will be embedded)"
-                },
-                "key_outcomes": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "description": "Decisions made, bugs fixed, conclusions reached"
-                },
-                "files_affected": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "description": "File paths worked on (coding sessions)"
-                },
-                "open_threads": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "description": "Unfinished items needing follow-up"
-                },
-                "lessons": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "description": "Patterns, gotchas, insights worth remembering"
-                },
-                "importance": {
-                  "type": "number",
-                  "description": "Importance 1-10 (default 8)"
-                },
-                "session_id": {
-                  "type": "string",
-                  "description": "Optional session identifier"
-                }
+            "narrative": {
+              "type": "string",
+              "description": "1-2 sentence session summary (will be embedded)"
+            },
+            "key_outcomes": {
+              "type": "array",
+              "items": {
+                "type": "string"
               },
-              "required": [
-                "narrative"
-              ]
+              "description": "Decisions made, bugs fixed, conclusions reached"
+            },
+            "files_affected": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "File paths worked on (coding sessions)"
+            },
+            "open_threads": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Unfinished items needing follow-up"
+            },
+            "lessons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Patterns, gotchas, insights worth remembering"
+            },
+            "importance": {
+              "type": "number",
+              "description": "Importance 1-10 (default 8)"
+            },
+            "session_id": {
+              "type": "string",
+              "description": "Optional session identifier"
             }
           },
           "required": [
-            "crystal"
+            "narrative"
           ]
         },
-        {
-          "description": "Legacy free-form debrief items (backward compat)",
-          "properties": {
-            "facts": {
-              "type": "array",
-              "description": "Array of debrief items to store",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "text": {
-                    "type": "string",
-                    "description": "The debrief summary text (1-3 sentences)"
-                  },
-                  "type": {
-                    "type": "string",
-                    "enum": [
-                      "summary",
-                      "context"
-                    ],
-                    "description": "summary=conclusion/outcome, context=broader project context"
-                  },
-                  "importance": {
-                    "type": "number",
-                    "description": "Importance 1-10 (typically 7-8 for debriefs)"
-                  }
-                },
-                "required": [
-                  "text"
-                ]
+        "facts": {
+          "type": "array",
+          "description": "Legacy (backward compat). Free-form debrief items; used only when `crystal` is absent.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "The debrief summary text (1-3 sentences)"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "summary",
+                  "context"
+                ],
+                "description": "summary=conclusion/outcome, context=broader project context"
+              },
+              "importance": {
+                "type": "number",
+                "description": "Importance 1-10 (typically 7-8 for debriefs)"
               }
-            }
-          },
-          "required": [
-            "facts"
-          ]
+            },
+            "required": [
+              "text"
+            ]
+          }
         }
-      ]
+      }
     },
     "annotations": {
       "readOnlyHint": false,
@@ -571,7 +555,7 @@
   },
   {
     "name": "totalreclaw_account",
-    "description": "Account overview: wallet, tier, usage, memories, features, safe recovery hint.\nINVOKE WHEN USER SAYS:\n- \"show my account\" / \"what's my profile?\"\n- \"how many memories?\" / \"my wallet?\"\n- \"right recovery phrase? hint\"\n- \"summary of my setup\"\nDOES: billing+fact count parallel. Returns wallet, tier, writes_used/limit, total_facts, features, FIRST+LAST recovery words (never full).\nWHEN NOT TO USE:\n- only billing → totalreclaw_status (lighter)\n- FULL recovery phrase → NEVER; password manager.",
+    "description": "Account overview: wallet, tier, usage, memories, features, credential kind.\nINVOKE WHEN USER SAYS:\n- \"show my account\" / \"what's my profile?\"\n- \"how many memories?\" / \"my wallet?\"\n- \"summary of my setup\"\nDOES: billing+fact count parallel. Returns wallet, tier, writes_used/limit, total_facts, features, credential kind. Never any part of the recovery phrase.\nWHEN NOT TO USE:\n- only billing → totalreclaw_status (lighter)\n- recovery phrase (any word) → NEVER available; user checks own backup.",
     "inputSchema": {
       "type": "object",
       "properties": {}
@@ -673,7 +657,7 @@
   },
   {
     "name": "totalreclaw_set_scope",
-    "description": "Re-tag memory under different life-domain scope (work|personal|health|family|creative|finance|misc|unspecified).\n\nINVOKE WHEN USER SAYS:\n- \"actually that's work context, not personal\"\n- \"file that under health\" / \"move to finance\"\n- \"wrong scope — about my kids, not work\"\n\nDOES: builds v1 claim with new scope, links via superseded_by, tombstones original. Idempotent.\n\nWHEN NOT TO USE:\n- memory wrong → totalreclaw_forget + totalreclaw_remember\n- type wrong (not scope) → totalreclaw_retype",
+    "description": "Re-file a memory under a scope (work|personal|health|family|creative|finance|misc|unspecified).\n\nINVOKE WHEN USER SAYS:\n- \"file that under work/health\" / \"categorize as finance\"\n- \"put that in my work/personal memories\"\n- \"that's a work thing\" / \"that's for personal, not work\"\n\nDOES: new claim with the scope, superseded_by link, original tombstoned. Idempotent. Needs memory_id from recall.\n\nWHEN NOT TO USE: memory wrong → forget + remember; type wrong → retype",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -712,7 +696,7 @@
   },
   {
     "name": "totalreclaw_pair",
-    "description": "Set up the user's TotalReclaw account (browser-side recovery-phrase generation or import).\nINVOKE WHEN USER SAYS:\n- \"set up totalreclaw\" / \"set up my account\"\n- \"I don't have a totalreclaw recovery phrase yet\" / \"create a totalreclaw account\"\n- ANY tool returns \"not_configured\" — propose this tool BEFORE asking the user to edit MCP config.\nDOES: opens a brief relay session, returns {url, pin, expires_at_ms}. Hand the URL + PIN to the user — they open the URL in any browser, the BROWSER generates (or imports) a 12-word phrase, encrypts it, uploads ciphertext to this MCP server. Server decrypts in-memory, writes ~/.totalreclaw/credentials.json (mode 0600). Phrase NEVER touches LLM context, chat transcript, stdout, or logs.\nAFTER PAIRING: tell the user to RESTART their MCP host (Claude Desktop / Cursor / Claude Code) so the server re-reads credentials.json and switches out of unconfigured mode.\nWHEN NOT TO USE:\n- user already has TOTALRECLAW_RECOVERY_PHRASE in env → tool will return URL but pairing is unnecessary\n- user explicitly wants terminal-only setup → point them at `npx @totalreclaw/mcp-server setup` (CLI wizard, runs OUTSIDE your shell tool)\n- NEVER ask the user to paste their phrase in chat. NEVER echo or print a phrase from any source.",
+    "description": "Set up the user's TotalReclaw account (browser-side recovery-phrase generation or import).\nINVOKE WHEN USER SAYS:\n- \"set up totalreclaw\" / \"set up my account\"\n- \"I don't have a totalreclaw recovery phrase yet\" / \"create a totalreclaw account\"\n- ANY tool returns \"not_configured\" — propose this tool BEFORE asking the user to edit MCP config.\nDOES: opens a relay pairing session, returns {url, pin, expires_at_ms}. Hand the URL + PIN to the user — they open the URL in any browser, the BROWSER generates (or imports) a 12-word phrase, encrypts it, uploads ciphertext to this MCP server. Server decrypts in-memory, writes ~/.totalreclaw/credentials.json (mode 0600). Phrase NEVER touches LLM context, chat transcript, stdout, or logs.\nAFTER PAIRING: when the page says \"You're all set\", tell the user to fully quit and reopen their MCP host (Claude Desktop / Cursor / Claude Code); the server reads credentials.json only at startup. The link lasts about 10 minutes.\nWHEN NOT TO USE:\n- already set up (credentials.json exists or the server is configured) → the tool refuses with already_configured. Tell the user they are set up. Only if THEY ask to replace their account, call with replace=true; the pairing page asks the user to confirm. You cannot confirm it for them.\n- user explicitly wants terminal-only setup → point them at `npx @totalreclaw/mcp-server setup` (CLI wizard, runs OUTSIDE your shell tool)\n- NEVER ask the user to paste their phrase in chat. NEVER echo or print a phrase from any source.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -724,6 +708,10 @@
           ],
           "description": "\"generate\" = the browser will create a NEW recovery phrase. \"import\" = the browser will accept an EXISTING phrase that the user pastes in their browser (never through chat).",
           "default": "generate"
+        },
+        "replace": {
+          "type": "boolean",
+          "description": "Only for an install that is already set up, and only when the user has asked to replace their current account with a different one. It does not authorise anything: it opens a pairing page that warns the user and asks THEM to confirm the replacement there. You cannot confirm it for them. Without it, the tool refuses to pair over existing credentials."
         }
       },
       "additionalProperties": false

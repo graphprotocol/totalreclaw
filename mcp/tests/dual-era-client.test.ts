@@ -25,6 +25,10 @@ import { PROMPT_DEFINITIONS, SERVER_INSTRUCTIONS } from '../src/prompts';
 import { memoryContextResource } from '../src/resources';
 import type { ToolResponse } from '../src/tools/types';
 
+// serverInfo.version is the package version (#743), not a hard-coded 1.0.0.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const PACKAGE_VERSION: string = require('../package.json').version;
+
 const GOLDEN_TOOLS = JSON.parse(
   fs.readFileSync(path.join(__dirname, 'fixtures', 'tools-list.golden.json'), 'utf8'),
 ) as unknown[];
@@ -85,7 +89,7 @@ describe.each<[string, Mode, 'legacy' | 'modern']>([
     const { tools } = await c.listTools();
     expect(tools).toEqual(GOLDEN_TOOLS);
     expect(c.getInstructions()).toBe(SERVER_INSTRUCTIONS);
-    expect(c.getServerVersion()).toEqual({ name: 'totalreclaw', version: '1.0.0' });
+    expect(c.getServerVersion()).toEqual({ name: 'totalreclaw', version: PACKAGE_VERSION });
   });
 
   it('sees the same prompts and resources as the v1-SDK server advertised', async () => {

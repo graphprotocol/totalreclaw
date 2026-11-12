@@ -43,9 +43,21 @@ import {
   invalidateMemoryContextCache,
 } from './resources/index.js';
 import { setOnRememberCallback } from './tools/remember.js';
+import { createRequire } from 'node:module';
 
-/** Server identity advertised in `initialize` (2025) and `_meta` serverInfo (2026-07-28). Unchanged from the v1-SDK server. */
-export const SERVER_INFO = { name: 'totalreclaw', version: '1.0.0' } as const;
+/** Package version, read from package.json (src/ and dist/ are both one level below it). */
+export const SERVER_VERSION: string = (() => {
+  try {
+    const req = createRequire(__filename);
+    const v = (req('../package.json') as { version?: unknown }).version;
+    return typeof v === 'string' && v ? v : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
+
+/** Server identity advertised in `initialize` (2025) and `_meta` serverInfo (2026-07-28). The version is the package version. */
+export const SERVER_INFO = { name: 'totalreclaw', version: SERVER_VERSION } as const;
 
 /** Capabilities advertised in both eras. Unchanged from the v1-SDK server. */
 export const SERVER_CAPABILITIES = {

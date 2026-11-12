@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from totalreclaw.agent.lifecycle import (
     auto_extract as _auto_extract,
+    crystal_gate_passes,
     session_debrief as _session_debrief,
     _is_near_duplicate,
     _fetch_recent_memories,
@@ -26,43 +27,58 @@ from totalreclaw.agent.pending_drain import drain_pending, has_pending
 from totalreclaw.agent.recall import auto_recall
 from totalreclaw.agent.extraction import extract_facts_llm, extract_facts_heuristic
 from totalreclaw.agent.state import _session_idle_seconds
-from totalreclaw.relay import _HARDCODED_DEFAULT_URL
+from totalreclaw.relay import _default_relay_url
 
 logger = logging.getLogger(__name__)
 
 
-# 2.3.3-rc.1 (PR #165) — RC builds bake the staging URL as default. When
-# a real user installs a stable wheel they should never see this banner;
-# when a QA / maintainer installs an RC wheel they MUST see it so they
-# don't mistake the staging environment for production. Fires exactly
-# once per session via the ``_totalreclaw_rc_banner_shown`` latch.
-_RC_STAGING_BANNER = (
-    "## TotalReclaw — RC / staging build\n"
-    "WARNING: TotalReclaw is running in RC/staging mode against "
-    "api-staging.totalreclaw.xyz.\n"
-    "Staging has no SLA + may be wiped between QA cycles. Do NOT use "
-    "this build for real data.\n"
-    "Install the stable release for production: "
-    "`pip install totalreclaw` (no --pre)."
+# Staging-mode banner. Same condition as the OpenClaw plugin's banner
+# (``skill/plugin/index.ts``, "TotalReclaw is running in staging mode"): it
+# fires whenever the EFFECTIVE relay URL points at staging, whether that URL
+# came from ``TOTALRECLAW_SERVER_URL`` or from a wrongly bound default. Setting
+# the env var does not suppress it.
+#
+# History: PR #165 (2.3.3-rc.1) added this banner for RC wheels that baked the
+# staging URL as their default, and suppressed it whenever
+# ``TOTALRECLAW_SERVER_URL`` was set. Since the F flip (2.3.12-rc.1) every
+# wheel defaults to production, so that condition could never be true and
+# the banner never fired, not even for QA runs pinned to staging.
+#
+# The wording follows the plugin's banner with one deliberate difference: it
+# never spells out the production host. QA runs always pin staging, so this
+# text shows up in every QA session, and the Hermes QA harness treats any
+# mention of the production host in its logs as a production contact.
+#
+# Fires exactly once per process via the ``_totalreclaw_staging_banner_shown``
+# latch.
+_STAGING_HOST = "api-staging.totalreclaw.xyz"
+_STAGING_BANNER = (
+    "## \u26a0\ufe0f TotalReclaw is running in staging mode\n\n"
+    "This session is bound to `api-staging.totalreclaw.xyz`. Staging has "
+    "**no SLA** and may be wiped between QA cycles. Do **NOT** use it for "
+    "real data.\n\n"
+    "The default relay is production. To return to production, unset "
+    "`TOTALRECLAW_SERVER_URL`. To stay on staging, leave it set to "
+    "`https://api-staging.totalreclaw.xyz`."
 )
 
 
-def _rc_staging_banner_active() -> bool:
-    """Return True iff the bundled default URL points at staging AND the
-    user hasn't overridden via ``TOTALRECLAW_SERVER_URL``.
+def _effective_relay_url(state: Optional["PluginState"] = None) -> str:
+    """Return the relay URL this plugin's client talks to.
 
-    Reads ``_HARDCODED_DEFAULT_URL`` directly (not ``_default_relay_url``)
-    so the env-override check is explicit + isolated from the default
-    resolution path. The build-time injection in
-    ``.github/workflows/publish-python-client.yml`` rewrites the
-    constant to the production URL for stable wheels, so this returns
-    False on stable installs even with no env var set.
+    Mirrors ``AgentState``'s own resolution (``state._server_url`` when set,
+    else ``relay._default_relay_url()``, which is ``TOTALRECLAW_SERVER_URL``
+    or the built-in production default). Evaluated at call time so an env
+    change after import takes effect.
     """
-    if "api-staging.totalreclaw.xyz" not in _HARDCODED_DEFAULT_URL:
-        return False
-    if os.environ.get("TOTALRECLAW_SERVER_URL"):
-        return False
-    return True
+    explicit = getattr(state, "_server_url", None) if state is not None else None
+    return explicit or _default_relay_url()
+
+
+def _staging_banner_active(state: Optional["PluginState"] = None) -> bool:
+    """Return True iff the effective relay URL points at the staging relay."""
+    return _STAGING_HOST in _effective_relay_url(state).lower()
+
 
 #: Bug #6 + 2.3.7rc3: when the plugin is installed + enabled but the
 #: user hasn't completed pairing (no ``credentials.json`` on disk),
@@ -427,6 +443,11 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     # that boundary; otherwise a fresh UUIDv7 is minted. Runs before the
     # unconfigured-state early-return so log-only sessions still get an id.
     state.start_session(external_id=(session_id or None))
+    # #630 — a resumed conversation picks up the segment its last finalize
+    # carried over (hosts that pass the id per turn also restore it through
+    # ``activate_conversation``).
+    if hasattr(state, "resume_conversation"):
+        state.resume_conversation(session_id or None)
 
     # 2.3.7rc3 — reset the setup-nudge latch so each new session gets
     # one proactive nudge. Without this, an unconfigured user who
@@ -437,22 +458,23 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     if hasattr(state, "_totalreclaw_setup_nudge_shown"):
         state._totalreclaw_setup_nudge_shown = False
 
-    # 2.3.3-rc.1 (PR #165) — emit the RC/staging banner exactly once per
-    # session when the wheel is RC AND the user hasn't overridden the
-    # server URL. Surfaced via the existing ``quota_warning`` channel so
-    # the next ``pre_llm_call`` injects it as ``context``. Latch lives
-    # on the state instance so the banner is one-shot per process. Runs
-    # BEFORE the configured-only return below so unconfigured RC users
-    # see the banner on their first turn.
-    if _rc_staging_banner_active():
-        already_shown = getattr(state, "_totalreclaw_rc_banner_shown", False)
+    # Staging-mode banner: queued once per process whenever the effective
+    # relay URL points at staging (same condition as the OpenClaw plugin).
+    # Surfaced via the existing ``quota_warning`` channel so the next
+    # ``pre_llm_call`` injects it as ``context``. Latch lives on the state
+    # instance so the banner is one-shot per process. Runs BEFORE the
+    # configured-only return below so unconfigured users see the banner on
+    # their first turn.
+    if _staging_banner_active(state):
+        already_shown = getattr(state, "_totalreclaw_staging_banner_shown", False)
         if not already_shown:
-            state._totalreclaw_rc_banner_shown = True
-            state.set_quota_warning(_RC_STAGING_BANNER)
+            state._totalreclaw_staging_banner_shown = True
+            state.set_quota_warning(_STAGING_BANNER)
+            # Log the staging URL only; see the note above _STAGING_BANNER.
             logger.info(
-                "TotalReclaw: RC/staging banner queued for first turn "
-                "(default URL = %s).",
-                _HARDCODED_DEFAULT_URL,
+                "TotalReclaw: staging banner queued for first turn "
+                "(relay URL = %s).",
+                _effective_relay_url(state),
             )
 
     # Fix #191 — pick up creds written after plugin load. Cheap (one
@@ -507,13 +529,13 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
                 pct = int(used / limit * 100)
                 if tier == "pro":
                     nudge = (
-                        "Pro cap is 1,500 memories/month. The quota resets on "
-                        "the 1st of next month."
+                        f"Pro cap is {limit:,} memories/month. The quota "
+                        "resets on the 1st of next month."
                     )
                 else:
                     nudge = (
                         "Free cap is 250 memories/month. Upgrade to Pro for "
-                        "1,500 memories/month — run "
+                        "3,000 memories/month — run "
                         "totalreclaw_upgrade or visit "
                         "https://totalreclaw.xyz/pricing."
                     )
@@ -969,6 +991,32 @@ def _maybe_crystallize_idle_slots(state: "PluginState") -> None:
         logger.warning("TotalReclaw idle-slot crystallize sweep failed: %s", e)
 
 
+def _maybe_crystallize_idle_active(state: "PluginState") -> None:
+    """Crystallize the LIVE conversation's earlier burst when the incoming turn
+    arrives after the idle timeout, keeping its session id (#630).
+
+    Hermes 0.22 no longer rotates gateway conversations on timers, so a Telegram
+    chat is one endless session and ``on_session_finalize`` rarely fires. The
+    idle sweep above only covers *other* conversations; this covers the one
+    being talked to. Threshold: ``TOTALRECLAW_SESSION_IDLE_MINUTES`` (default
+    60; ``0`` disables). Best-effort — never raises into the turn.
+    """
+    try:
+        if not (hasattr(state, "is_idle") and state.is_configured()):
+            return
+        if state.is_idle(_session_idle_seconds()) is not True:
+            return
+        logger.info(
+            "TotalReclaw: conversation idle > %d min; crystallizing its earlier part",
+            _session_idle_seconds() // 60,
+        )
+        _finalize_one_conversation(state)
+        state.clear_messages()
+        state.reset_turn_counter()
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("TotalReclaw idle-conversation crystallize failed: %s", e)
+
+
 def ingest_turn(
     state: "PluginState",
     user_message: str,
@@ -992,6 +1040,9 @@ def ingest_turn(
     # turn counter + message buffer + session id all belong to the right chat.
     if session_id and hasattr(state, "activate_conversation"):
         state.activate_conversation(session_id)
+    # A turn after a long silence starts a new burst: crystallize the earlier
+    # part of THIS conversation first (#630). Must run before ``note_activity``.
+    _maybe_crystallize_idle_active(state)
     # Always track turns and messages (client may be configured mid-session).
     state.increment_turn()
     state.add_message("user", user_message)
@@ -1030,11 +1081,9 @@ def post_llm_call(state: "PluginState", **kwargs) -> None:
     the reconfigure ahead of the turn bookkeeping is behavior-equivalent — the
     two touch disjoint state (creds vs turn-count/messages).
     """
-    # Record turn time for idle-timeout session rollover (every turn, either
-    # driver). Kept before the provider gate so activity tracks in both modes.
-    # hasattr-guarded to tolerate legacy state subclasses / test mocks.
-    if hasattr(state, "note_activity"):
-        state.note_activity()
+    # Turn time is recorded by ``ingest_turn`` in both driver modes (here below,
+    # or the provider's ``sync_turn``). Refreshing the clock here, ahead of
+    # ``ingest_turn``, would hide the idle gap from the idle Crystal (#630).
 
     # Fix #191 safety net — pick up a mid-session pair before ingest_turn
     # decides whether the user is configured. Always runs (the provider does
@@ -1073,20 +1122,25 @@ def on_session_end(state: "PluginState", **kwargs) -> None:
     return None
 
 
-def _finalize_one_conversation(state: "PluginState") -> None:
+def _finalize_one_conversation(state: "PluginState") -> bool:
     """Flush any unprocessed messages + run the session debrief (Crystal) for
-    the CURRENTLY-ACTIVE conversation slot. Best-effort — never raises."""
+    the CURRENTLY-ACTIVE conversation slot. Best-effort — never raises.
+
+    Returns whether the segment was long enough for a Crystal. ``False`` means
+    the caller may carry the segment over instead of dropping it (#630)."""
     stored_fact_texts: list[str] = []
     if state.has_unprocessed_messages():
         try:
-            stored_fact_texts = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config())
+            stored_fact_texts = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config()) or []
         except Exception as e:
             logger.warning("TotalReclaw on_session_finalize flush failed: %s", e)
 
+    eligible = crystal_gate_passes(len(state.get_all_messages()), len(stored_fact_texts))
     try:
         _session_debrief(state, stored_fact_texts=stored_fact_texts)
     except Exception as e:
         logger.warning("TotalReclaw on_session_finalize debrief failed: %s", e)
+    return eligible
 
 
 def on_session_finalize(state: "PluginState", **kwargs) -> None:
@@ -1101,6 +1155,13 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
     conversation slots exist), crystallize EACH conversation separately — every
     chat gets its own clean Crystal instead of one mixed summary. Falls back to
     a single pass when the host never supplied per-conversation ids.
+
+    Short segments carry over (#630): on Hermes 0.22 the CLI and TUI are
+    gateway viewers, and the last viewer closing finalizes the session, so a
+    one-shot ``hermes chat -Q`` turn finalizes after every turn. A segment too
+    short to crystallize is kept under its host conversation id (its facts are
+    already flushed) so the resumed conversation keeps accumulating, and the
+    first finalize with enough content crystallizes the whole segment.
     """
     if not state.is_configured():
         # memq-3 — still clear the session id we set in on_session_start
@@ -1111,6 +1172,8 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
             state.reset_conversations()
         return
 
+    carried: dict = {}
+    host_session_id = kwargs.get("session_id") or None
     try:
         if hasattr(state, "stash_active_conversation") and hasattr(state, "pop_next_conversation"):
             # Stash the live conversation, then crystallize each stashed
@@ -1118,7 +1181,10 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
             # slot and loops exactly once → byte-identical to the old behavior.
             state.stash_active_conversation()
             while state.pop_next_conversation():
-                _finalize_one_conversation(state)
+                eligible = _finalize_one_conversation(state)
+                key = state.active_conversation_key or host_session_id
+                if not eligible and key and state.get_all_messages():
+                    carried[key] = state.capture_live_conversation()
         else:
             # Legacy state subclass / test mock without slot support.
             _finalize_one_conversation(state)
@@ -1129,6 +1195,8 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
         state.end_session()
         if hasattr(state, "reset_conversations"):
             state.reset_conversations()
+        if carried:
+            state.carry_conversations(carried)
 
 
 def on_session_reset(state: "PluginState", **kwargs) -> None:

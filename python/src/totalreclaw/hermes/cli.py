@@ -554,7 +554,7 @@ the values. The user opens the URL in their browser, enters the PIN,
 and the browser generates the recovery phrase locally. The phrase
 never crosses your context.
 
-Procedure: https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/hermes-setup.md
+Procedure: https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md
 """
 
 
@@ -712,6 +712,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     sp_activate_mp.add_argument("--hermes-home", type=Path, default=None)
     sp_activate_mp.add_argument("--force", action="store_true", default=False)
+    sp_activate_mp.add_argument(
+        "--exclusive",
+        action="store_true",
+        default=False,
+        help="Also turn Hermes' built-in memory off (default: keep it on).",
+    )
 
     sp_memory_status = sub.add_parser(
         "memory-status",
@@ -740,6 +746,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 hermes_home=args.hermes_home,
                 activate=activate,
                 force=args.force,
+                exclusive=getattr(args, "exclusive", False),
             )
         except RuntimeError as exc:
             sys.stderr.write(f"{exc}\n")

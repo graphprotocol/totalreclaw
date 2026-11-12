@@ -417,6 +417,10 @@ class TestHooks:
         from totalreclaw.hermes.hooks import on_session_start
         state = _make_state()
         state._client = MagicMock()
+        # conftest pins TOTALRECLAW_SERVER_URL to staging, which queues the
+        # staging banner on the same channel; that banner has its own tests
+        # (test_env_binding_and_rc_banner.py). Mark it shown to isolate quota.
+        state._totalreclaw_staging_banner_shown = True
         billing = {"free_writes_used": 200, "free_writes_limit": 500, "features": {}}
         state.set_billing_cache(billing)
         on_session_start(state, session_id="test")
@@ -490,7 +494,7 @@ class TestHooks:
         mock_result = MagicMock()
         mock_result.text = "User prefers dark mode"
 
-        async def mock_recall(query, top_k=DEFAULT_RECALL_TOP_K, max_candidates=250):
+        async def mock_recall(query, top_k=DEFAULT_RECALL_TOP_K, max_candidates=250, include_embeddings=True):
             assert top_k == DEFAULT_RECALL_TOP_K, f"Expected top_k={DEFAULT_RECALL_TOP_K}, got top_k={top_k}"
             return [mock_result]
 
@@ -510,7 +514,7 @@ class TestHooks:
         mock_result = MagicMock()
         mock_result.text = "User likes Python"
 
-        async def mock_recall(query, top_k=16, max_candidates=250):
+        async def mock_recall(query, top_k=16, max_candidates=250, include_embeddings=True):
             return [mock_result]
 
         mock_client.recall = mock_recall
@@ -689,9 +693,11 @@ class TestRegister:
         # internal#412 — `totalreclaw_top_up` registered (schema + handler
         # shipped in 2.4.5rc10 but never wired into register(), so the
         # agent could not invoke it). Count → 17 stable, 18 RC.
+        # 2.5.3rc4 — `totalreclaw_set_extraction_model` (user picks the
+        # extraction model in chat). Count → 18 stable, 19 RC.
         from totalreclaw import __version__
         from totalreclaw.hermes.qa_bug_report import is_rc_build
-        expected_tools = 18 if is_rc_build(__version__) else 17
+        expected_tools = 19 if is_rc_build(__version__) else 18
         assert ctx.register_tool.call_count == expected_tools, (
             f"expected {expected_tools} tools for version {__version__!r}, "
             f"got {ctx.register_tool.call_count}"

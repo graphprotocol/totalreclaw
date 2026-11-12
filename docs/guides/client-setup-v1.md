@@ -30,7 +30,7 @@ All clients write to the same vault. If you use multiple clients, use the same 1
 
 Tell your OpenClaw agent:
 
-> "Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/install.md"
+> "Install TotalReclaw. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/install.md"
 
 Or via terminal:
 
@@ -97,7 +97,7 @@ The IronClaw agent config references the MCP server via the same JSON shape. See
 
 Ask the agent: *"What TotalReclaw tools do you have?"* — you should see 18 tools including `totalreclaw_pin`, `totalreclaw_retype`, `totalreclaw_set_scope`.
 
-**Full guide:** [claude-code-setup.md](./claude-code-setup.md)
+**Full guides:** [claude-desktop-setup.md](./claude-desktop-setup.md) (Claude Desktop) · [claude-code-setup.md](./claude-code-setup.md) (Claude Code, Cursor, Windsurf)
 
 ---
 

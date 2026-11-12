@@ -1,7 +1,7 @@
 """rc4 (internal#435) — byte-capped batching + halve-on-sim-revert.
 
 rc3 re-QA NO-GO'd on F3 again. Instrumented staging repro
-(https://github.com/p-diogo/totalreclaw-internal/issues/435#issuecomment-4895421400):
+(https://github.com/graphprotocol/totalreclaw-internal/issues/435#issuecomment-4895421400):
 Pimlico's ``-32500 "Sender does not implement validateUserOp or factory is not
 deployed"`` is a CATCH-ALL for executeBatch simulation failure on oversized
 calldata. Realistic import facts (~600-char text + encrypted 640-dim embedding)

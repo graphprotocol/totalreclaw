@@ -113,7 +113,7 @@ function assertEq<T>(actual: T, expected: T, name: string): void {
     // not just a relative repo path. Operators see this on stderr without the
     // repo cloned; a relative path is useless to them.
     assert(
-      (warned ?? '').includes('https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/env-vars-reference.md'),
+      (warned ?? '').includes('https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/env-vars-reference.md'),
       'warnRemovedEnvVars: warning includes full GitHub URL (rc.22 finding #4)',
     );
     assert(

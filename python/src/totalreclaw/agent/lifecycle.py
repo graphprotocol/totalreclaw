@@ -15,6 +15,7 @@ closed" bug).
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,6 +30,8 @@ from .loop_runner import (
     is_interpreter_shutdown_error,
 )
 from .pending_drain import enqueue_messages
+from ..forget_guard import ForgetLedger, is_forget_request
+from ..pii import auto_storable, drop_sensitive_facts
 from ..relay import RelayReadBlocked
 
 logger = logging.getLogger(__name__)
@@ -197,6 +200,41 @@ def _is_near_duplicate(
     return False
 
 
+def _forget_ledger(client) -> Optional[ForgetLedger]:
+    """The client's forget ledger, or ``None`` (unconfigured, mocks, errors)."""
+    try:
+        ledger = getattr(client, "forget_ledger", None)
+    except Exception:
+        return None
+    return ledger if isinstance(ledger, ForgetLedger) else None
+
+
+def _restates_forgotten(
+    text: str,
+    embedding: Optional[list[float]],
+    ledger: Optional[ForgetLedger],
+) -> Optional[str]:
+    """Why *text* must not be stored, or ``None`` (internal#605 / #640).
+
+    Two cases: a note about a deletion ("User asked to forget that ..."),
+    which restates the forgotten content and is never a useful memory; and a
+    restatement of a fact the user explicitly forgot (see
+    :mod:`totalreclaw.forget_guard`). Write-time, client-side only.
+    """
+    if is_forget_request(text):
+        return "forget-request note"
+    if ledger is None:
+        return None
+    try:
+        match = ledger.match(text, embedding)
+    except Exception as e:
+        logger.debug("forget ledger match failed: %s", type(e).__name__)
+        return None
+    if match:
+        return f"restates forgotten fact {match.get('id', '?')} ({match.get('reason', '?')})"
+    return None
+
+
 def auto_extract(
     state: "AgentState",
     mode: str = "turn",
@@ -334,6 +372,11 @@ def _auto_extract_inner(
     if not facts:
         facts = extract_facts_heuristic(messages, max_facts)
 
+    # PRD-04 DEP-4: automatic extraction stores only facts the core PII
+    # filter allows — block AND flag are dropped (logged by category only).
+    # Runs before every log line below that prints fact text.
+    facts = drop_sensitive_facts(facts)
+
     if not facts:
         state.mark_messages_processed()
         return []
@@ -370,6 +413,9 @@ def _auto_extract_inner(
     # when there's no active conversation (unconfigured / pre-session).
     active_session_id = state.session_id
 
+    # Facts the user explicitly forgot (#605).
+    forget_ledger = _forget_ledger(client)
+
     for fact in facts:
         try:
             if fact.action == "NOOP":
@@ -394,6 +440,16 @@ def _auto_extract_inner(
             except Exception as e:
                 logger.debug("embed failed for fact %r: %s", fact.text[:40], e)
                 # degrade: store without embedding, skip near-dup detection below
+
+            # Never re-create what the user asked to forget (#605 / #640).
+            # The extractor still reads text that restates it: the original
+            # turn, the forget turn, or an answer built from the host's own
+            # session search. An UPDATE is dropped whole, so its target is
+            # not tombstoned either.
+            why = _restates_forgotten(fact.text, embedding, forget_ledger)
+            if why:
+                logger.info("Skipping extracted %s: %s", fact.action, why)
+                continue
 
             # Store-time near-duplicate detection (skip if cosine sim >= threshold)
             # UPDATE actions always store (they supersede the old fact)
@@ -504,6 +560,60 @@ def _auto_extract_inner(
     return stored_texts
 
 
+def crystal_gate_passes(n_messages: int, n_stored_facts: int) -> bool:
+    """Content-aware length gate for a session Crystal.
+
+    Hard floor: < 2 turns (4 messages) is too thin to summarize. Between 4-7
+    messages, still crystallize IF the session produced real content (>= 2
+    stored facts) — a crisp 2-3 turn topical exchange (e.g. "book the Lisbon
+    flight, aisle seat, under $400") deserves its own Crystal, not just loose
+    atomic facts. 4+ turns always qualify.
+    """
+    if n_messages < 4:
+        return False
+    if n_messages < 8 and n_stored_facts < 2:
+        return False
+    return True
+
+
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _scrub_crystal(crystal, ledger: Optional[ForgetLedger]):
+    """Remove the parts of a session Crystal that restate a forgotten fact or
+    note a deletion. Returns the Crystal, or ``None`` when its narrative has
+    nothing left (internal#605 / #640)."""
+    has_entries = ledger is not None and len(ledger) > 0
+
+    def _keep(text: str) -> bool:
+        if is_forget_request(text):
+            return False
+        if not has_entries:
+            return True
+        embedding = None
+        try:
+            from totalreclaw.embedding import get_embedding
+            embedding = get_embedding(text)
+        except Exception:
+            embedding = None
+        return _restates_forgotten(text, embedding, ledger) is None
+
+    sentences = [s for s in _SENTENCE_SPLIT.split(crystal.narrative.strip()) if s]
+    kept = [s for s in sentences if _keep(s)]
+    dropped = len(sentences) - len(kept)
+    for name in ("key_outcomes", "open_threads", "lessons", "topics_discussed"):
+        items = getattr(crystal, name, None) or []
+        survivors = [i for i in items if _keep(i)]
+        dropped += len(items) - len(survivors)
+        setattr(crystal, name, survivors)
+    if dropped:
+        logger.info("Session Crystal: dropped %d part(s) about forgotten facts", dropped)
+    if not kept:
+        return None
+    crystal.narrative = " ".join(kept)
+    return crystal
+
+
 def session_debrief(
     state: "AgentState",
     stored_fact_texts: Optional[list[str]] = None,
@@ -531,14 +641,7 @@ def session_debrief(
     if stored_fact_texts is None:
         stored_fact_texts = []
 
-    # Content-aware length gate. Hard floor: < 2 turns (4 messages) is too thin
-    # to summarize. Between 4-7 messages, still crystallize IF the session
-    # produced real content (>= 2 stored facts) — a crisp 2-3 turn topical
-    # exchange (e.g. "book the Lisbon flight, aisle seat, under $400") deserves
-    # its own Crystal, not just loose atomic facts. 4+ turns always qualify.
-    if len(all_messages) < 4:
-        return []
-    if len(all_messages) < 8 and len(stored_fact_texts) < 2:
+    if not crystal_gate_passes(len(all_messages), len(stored_fact_texts)):
         return []
 
     client = state.get_client()
@@ -548,6 +651,18 @@ def session_debrief(
     stored_fact_ids: list[str] = []
     try:
         crystal = run_sync(generate_crystal(all_messages, stored_fact_texts, host_type=host_type))
+        if crystal and not all(
+            auto_storable(t)
+            for t in [crystal.narrative, *crystal.key_outcomes, *crystal.open_threads, *crystal.lessons]
+        ):
+            # PRD-04 DEP-4: the Crystal is written automatically, so it follows
+            # the auto-extraction rule — skip it if any part is not ``allow``.
+            logger.info("Session Crystal skipped: sensitive content (see pii log)")
+            crystal = None
+        if crystal:
+            # The Crystal reads the whole conversation, including a fact the
+            # user forgot mid-session (#605 / #640). Drop those parts.
+            crystal = _scrub_crystal(crystal, _forget_ledger(client))
         if crystal:
             # Tag the Crystal with the active conversation's session_id so it
             # groups with the same conversation's atomic facts in a vault reader

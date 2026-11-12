@@ -11,7 +11,7 @@ This is the **only** line a user ever needs to paste — the same string works n
 ### Stable (default)
 
 ```
-Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/install.md
+Install TotalReclaw. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/install.md
 ```
 
 > Short form (same destination): `Install TotalReclaw. See https://totalreclaw.xyz/install` — `totalreclaw.xyz/install` redirects here. Either form works; agents that can't follow redirects should use the GitHub URL above. The GitHub URL is canonical and stays primary in these docs (they must not depend on the website being up).
@@ -19,7 +19,7 @@ Install TotalReclaw. See https://github.com/p-diogo/totalreclaw/blob/main/docs/g
 ### RC (user may specify a version)
 
 ```
-Install TotalReclaw RC [<version>]. See https://github.com/p-diogo/totalreclaw/blob/main/docs/guides/install.md
+Install TotalReclaw RC [<version>]. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/install.md
 ```
 
 `<version>` is optional. When the user writes only `Install TotalReclaw RC` with no version, install the **newest release candidate** for your runtime (see [Current channels](#current-channels)). When they give a specific version, pin to it — a semver RC string for npm runtimes (e.g. `3.3.13-rc.1`) or a PEP 440 RC string for Hermes/PyPI (e.g. `2.4.7rc1`).
@@ -42,25 +42,28 @@ If that succeeds → follow **[`openclaw-setup.md`](./openclaw-setup.md)**. Tota
 
 ### You are a Hermes agent
 
-You are a **Hermes agent** if you are a Python runtime with the `hermes` CLI / Hermes plugin system and `pip` available:
+You are a **Hermes agent** if the `hermes` CLI is available (your own system prompt usually says so too):
 
 ```bash
-command -v hermes && command -v pip
+command -v hermes && hermes --version
 ```
 
-If both resolve (or you can otherwise import the Hermes runtime) → follow **[`hermes-setup.md`](./hermes-setup.md)**. Install is `pip install totalreclaw`.
+Do **not** also require `pip` on your PATH. Hermes 0.22+ runs on its own bundled Python with a managed virtual environment, so a working Hermes usually has no bare `pip`/`pip3` at all.
 
-### You are neither — Claude Desktop, Cursor, Windsurf, Claude Code, or any MCP host
+If that succeeds → follow **[`hermes-setup.md`](./hermes-setup.md)**. It installs the PyPI package `totalreclaw` into the environment Hermes imports from: its Install procedure step 1 finds that environment and step 2 installs into it. Never run a bare `pip install totalreclaw`; it lands where Hermes doesn't look.
+
+### You are neither — Claude Desktop, another chat app, or a coding tool with MCP
 
 If neither `openclaw` nor `hermes` is present, you are an **MCP-compatible host**. TotalReclaw integrates via the MCP server `@totalreclaw/mcp-server`:
 
-→ follow **[`claude-code-setup.md`](./claude-code-setup.md)** (covers Claude Code, Claude Desktop, Cursor, Windsurf, and IronClaw).
+- **Claude Desktop, or another chat app** (no shell tool, you chat with the user) → follow **[`claude-desktop-setup.md`](./claude-desktop-setup.md)**. The user adds the server to the app's config; you then run `totalreclaw_pair`.
+- **A coding tool** (Claude Code, Cursor, Windsurf) or **IronClaw** → follow **[`claude-code-setup.md`](./claude-code-setup.md)**.
 
 ### If detection is ambiguous
 
 If you cannot tell which runtime you are (no shell tool, or more than one runtime present), ask the user **one** question — nothing more:
 
-> Which agent are you running — OpenClaw, Hermes, or something else (Claude Desktop / Cursor / Windsurf)?
+> Which agent are you running — OpenClaw, Hermes, Claude Desktop, or a coding tool (Claude Code / Cursor / Windsurf)?
 
 Then follow the matching guide above.
 

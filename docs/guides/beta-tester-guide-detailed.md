@@ -9,7 +9,8 @@ This guide is a companion to the 95-percent-of-users setup guides. **For install
 
 - **OpenClaw** → [openclaw-setup.md](./openclaw-setup.md) (browser account-setup flow, auto-reload)
 - **Hermes (Python)** → [hermes-setup.md](./hermes-setup.md) (browser account-setup flow, manual restart)
-- **Claude Code / Claude Desktop / Cursor / Windsurf / IronClaw (MCP)** → [claude-code-setup.md](./claude-code-setup.md) (no account-setup flow — phrase from another client's credentials or offline)
+- **Claude Desktop (MCP)** → [claude-desktop-setup.md](./claude-desktop-setup.md) (browser account-setup flow via `totalreclaw_pair`, manual restart)
+- **Claude Code / Cursor / Windsurf / IronClaw (MCP)** → [claude-code-setup.md](./claude-code-setup.md) (browser account-setup flow via `totalreclaw_pair`, manual restart)
 
 Once setup is done and tools are bound, come back here for the knobs.
 
@@ -68,8 +69,8 @@ The same phrase always produces the same Smart Account, encryption key, and auth
 When a fact is stored:
 
 1. Plain text + metadata are encrypted with XChaCha20-Poly1305 (24-byte nonce).
-2. A SHA-256 content fingerprint over the canonical text dedupes duplicates client-side.
-3. Blind search trapdoors are generated for keyword tokens (HMAC-SHA256 with a per-user index secret).
+2. A content fingerprint (HMAC-SHA256 over the canonical text, keyed with a per-user dedup key) lets exact duplicates be detected without revealing the text.
+3. Blind search trapdoors are generated for keyword tokens: unkeyed SHA-256 hashes of each word and its stem, plus any entity names.
 4. A 640-dim embedding (`onnx-community/harrier-oss-v1-270m-ONNX`, q4, pre-pooled) is computed locally for semantic search.
 5. The encrypted blob, blind indices, content fingerprint, and (for v1) the protobuf-packed taxonomy fields are wrapped in a v=4 outer envelope and submitted via ERC-4337 UserOp to the EventfulDataEdge contract.
 6. The Pimlico paymaster sponsors gas. All writes (free and Pro) go to Gnosis mainnet.
@@ -84,13 +85,13 @@ When you query:
 3. The relay returns up to several thousand encrypted candidates matching the trapdoors.
 4. The plugin / MCP server / Hermes client decrypts every candidate locally.
 5. Tier 1 source-weighted reranker scores: BM25 (lexical) + cosine (semantic) + RRF fusion + source weights (user > assistant) + scope bonus + pin override.
-6. The top-N (default 8) are returned to the host LLM as context.
+6. The top-N (default 16) are returned to the host LLM as context.
 
-The relay never sees plaintext, never sees query terms, and never holds an encryption key.
+The relay never sees plaintext and never holds an encryption key. Query words reach it only as blind hashes, which have limits (see below).
 
 ### Privacy guarantees
 
-- **Server-blind search.** The relay sees blind index tokens (HMAC outputs) and never the plaintext keywords. Even with a full database compromise, an attacker can't reverse a query without the per-user secret.
+- **Server-blind search, with a caveat.** The relay and the subgraph see blind index hashes, never the plaintext. But the word, stem and entity hashes are unkeyed SHA-256, so they aren't secret: anyone can hash a wordlist and test which words a stored fact or a query contains, and stored hashes are public on-chain. LSH bucket hashes depend on a per-user seed and can't be tested that way. Keyed word indices are planned.
 - **End-to-end encryption.** All fact bytes are XChaCha20-Poly1305 ciphertext when they leave your device.
 - **No phrase ever leaves your device** as long as you follow the canonical setup. Browser setup flow encrypts the phrase locally with a fresh x25519/AES-GCM key derived against the gateway's ephemeral pubkey before posting; the relay only ever sees ciphertext.
 - **Decay is local.** Importance decay and eviction run client-side from the decrypted set. The relay can't infer which memories matter to you.
@@ -310,7 +311,7 @@ For technical testers running the validation harness:
 ### Functional suite (plugin-level, mock infrastructure)
 
 ```bash
-git clone https://github.com/p-diogo/totalreclaw.git
+git clone https://github.com/graphprotocol/totalreclaw.git
 cd totalreclaw/skill/plugin
 npm install
 npm test

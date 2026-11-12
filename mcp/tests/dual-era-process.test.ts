@@ -17,6 +17,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+// serverInfo.version is the package version (#743), not a hard-coded 1.0.0.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const PACKAGE_VERSION: string = require('../package.json').version;
+
 type Json = Record<string, any>;
 
 const DIST_ENTRY = path.join(__dirname, '..', 'dist', 'index.js');
@@ -114,7 +118,7 @@ describe('built server over a real stdio pipe (dist/index.js)', () => {
       clientInfo: { name: 'dep15-process-test', version: '0.0.0' },
     });
     expect(init.result.protocolVersion).toBe('2025-11-25');
-    expect(init.result.serverInfo).toEqual({ name: 'totalreclaw', version: '1.0.0' });
+    expect(init.result.serverInfo).toEqual({ name: 'totalreclaw', version: PACKAGE_VERSION });
     s.notify('notifications/initialized');
     const tools = await s.request(2, 'tools/list', {});
     expect(tools.result.tools).toEqual(GOLDEN_TOOLS);

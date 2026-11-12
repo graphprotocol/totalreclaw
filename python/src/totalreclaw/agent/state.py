@@ -39,12 +39,15 @@ STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity threshold for near-duplicate d
 # docs/notes/QA-V1CLEAN-VPS-20260418.md Bug #1). Restored in v2.0.2: the
 # RelayClient now reads it (or the equivalent constructor arg) and
 # forwards it to the relay as ``X-TotalReclaw-Session`` on every request.
+#
+# ``TOTALRECLAW_EXTRACTION_MODEL`` was listed here by mistake through
+# 2.5.3rc3 (#609 / #612): it has always been honoured as the operator
+# override in ``llm_client.extraction_model_plan``. Do not re-add it.
 _REMOVED_ENV_VARS = (
     "TOTALRECLAW_CHAIN_ID",
     "TOTALRECLAW_EMBEDDING_MODEL",
     "TOTALRECLAW_STORE_DEDUP",
     "TOTALRECLAW_LLM_MODEL",
-    "TOTALRECLAW_EXTRACTION_MODEL",
     "TOTALRECLAW_TAXONOMY_VERSION",
     "TOTALRECLAW_CLAIM_FORMAT",
     "TOTALRECLAW_DIGEST_MODE",
@@ -702,6 +705,58 @@ class AgentState:
         """Drop all stashed conversation slots. Called at session boundaries."""
         self._session_slots = {}
         self._active_conversation_key = None
+
+    @property
+    def active_conversation_key(self) -> Optional[str]:
+        """Host per-conversation id of the live slot, or ``None`` (legacy/default)."""
+        self._ensure_slot_store()
+        return self._active_conversation_key
+
+    def capture_live_conversation(self) -> dict:
+        """Snapshot of the live conversation slot, for ``carry_conversations``.
+
+        Copies the list fields: ``clear_messages`` clears the live list in
+        place, which would otherwise empty the carried segment too."""
+        slot = self._capture_slot()
+        for field, value in slot.items():
+            if isinstance(value, list):
+                slot[field] = list(value)
+        return slot
+
+    def carry_conversations(self, slots: dict) -> None:
+        """Keep conversation slots across a session finalize (#630).
+
+        A segment too short to crystallize is carried here, keyed by its host
+        conversation id, instead of being dropped. A resumed conversation picks
+        it up again (``activate_conversation`` / ``resume_conversation``); one
+        that never resumes is retired by the idle sweep.
+        """
+        self._ensure_slot_store()
+        self._session_slots.update(slots)
+
+    def resume_conversation(self, external_id: Optional[str]) -> bool:
+        """Make a carried slot for *external_id* live again. Called at session
+        start, for hosts that pass the conversation id to the lifecycle hooks
+        but not per turn. No-op when nothing is carried for that id or the live
+        slot already holds messages."""
+        self._ensure_slot_store()
+        if not external_id or self._messages:
+            return False
+        slot = self._session_slots.pop(external_id, None)
+        if slot is None:
+            return False
+        self._restore_slot(slot)
+        self._active_conversation_key = external_id
+        return True
+
+    def is_idle(self, idle_seconds: int) -> bool:
+        """True when the LIVE conversation has messages and its last turn was
+        *idle_seconds* or more ago. Unlike ``should_roll_idle_session`` this
+        covers host-derived session ids too: a gateway chat that Hermes never
+        ends still gets a Crystal per burst (#630). ``0`` disables."""
+        if idle_seconds <= 0 or not self._messages or self._last_activity <= 0:
+            return False
+        return (time.monotonic() - self._last_activity) >= idle_seconds
 
     def find_idle_slots(self, idle_seconds: int) -> list[str]:
         """Keys of STASHED conversation slots idle past *idle_seconds* — the

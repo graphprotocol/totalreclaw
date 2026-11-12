@@ -6,7 +6,7 @@
  *
  * Bug: 3.3.3-rc.1 used the literal string `'0.0.0-dev'` as the
  * fallback when `readPluginVersion()` returned null. That URL is
- * `https://github.com/p-diogo/totalreclaw/releases/download/v0.0.0-dev/...`
+ * `https://github.com/graphprotocol/totalreclaw/releases/download/v0.0.0-dev/...`
  * which 404s. QA on 3.3.3-rc.1 (Pedro 2026-04-30) caught this because
  * the cascade-cause (broken `readPluginVersion()` resolution) made the
  * fallback fire on every cold start, so `prefetchEmbedderBundle` failed
@@ -19,7 +19,7 @@
  *   - The fallback tag matches `^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$`
  *     (a real RC tag, not a dev placeholder).
  *   - `buildBundleUrl()` + the fallback tag form a URL whose origin is
- *     `https://github.com/p-diogo/totalreclaw/releases/download/v<tag>/...`
+ *     `https://github.com/graphprotocol/totalreclaw/releases/download/v<tag>/...`
  *     — i.e. the publish workflow's canonical layout.
  */
 
@@ -75,7 +75,7 @@ assert(
 {
   const bundleUrl = buildBundleUrl({ rcTag: tag, bundleVersion: 'v1' });
   const manifestUrl = buildManifestUrl({ rcTag: tag, bundleVersion: 'v1' });
-  const expectedPrefix = `https://github.com/p-diogo/totalreclaw/releases/download/v${tag}/`;
+  const expectedPrefix = `https://github.com/graphprotocol/totalreclaw/releases/download/v${tag}/`;
   assert(
     bundleUrl.startsWith(expectedPrefix),
     'buildBundleUrl: prefix matches GitHub Releases canonical layout',

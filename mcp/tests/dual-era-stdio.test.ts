@@ -30,13 +30,17 @@ import {
 import { SERVER_INSTRUCTIONS } from '../src/prompts';
 import type { ToolResponse } from '../src/tools/types';
 
+// serverInfo.version is the package version (#743), not a hard-coded 1.0.0.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const PACKAGE_VERSION: string = require('../package.json').version;
+
 type Json = Record<string, any>;
 
 const GOLDEN_TOOLS = JSON.parse(
   fs.readFileSync(path.join(__dirname, 'fixtures', 'tools-list.golden.json'), 'utf8'),
 ) as Json[];
 
-const EXPECTED_SERVER_INFO = { name: 'totalreclaw', version: '1.0.0' };
+const EXPECTED_SERVER_INFO = { name: 'totalreclaw', version: PACKAGE_VERSION };
 const EXPECTED_CAPABILITIES = {
   tools: {},
   prompts: {},

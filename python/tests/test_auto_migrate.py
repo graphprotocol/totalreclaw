@@ -57,6 +57,40 @@ def isolated_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return fake_home
 
 
+_REAL_REGISTER_VAULT = auto_migrate._register_vault
+
+
+@pytest.fixture(autouse=True)
+def relay_registration(monkeypatch: pytest.MonkeyPatch):
+    """Stub the pre-migration relay registration (step 3b) so these tests
+    stay offline. Records each call; set ``state["ok"] = False`` to make
+    registration fail. Tests that need the real ``_register_vault`` use
+    ``real_register_vault`` (and stub the network below it themselves).
+    """
+    state = {"ok": True, "calls": []}
+
+    def _fake_register(mnemonic: str) -> bool:
+        state["calls"].append(_credentials_snapshot())
+        return state["ok"]
+
+    monkeypatch.setattr(auto_migrate, "_register_vault", _fake_register)
+    return state
+
+
+@pytest.fixture
+def real_register_vault(relay_registration, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(auto_migrate, "_register_vault", _REAL_REGISTER_VAULT)
+
+
+def _credentials_snapshot():
+    """The on-disk credential files at the moment registration runs."""
+    d = Path(os.environ["HOME"]) / ".totalreclaw"
+    return {
+        name: (d / name).read_bytes() if (d / name).exists() else None
+        for name in ("credentials.json", "credentials.json.bak")
+    }
+
+
 @pytest.fixture
 def fake_keychain(monkeypatch):
     monkeypatch.delenv(cw.ENV_NO_KEYCHAIN, raising=False)
@@ -529,3 +563,111 @@ def test_uncached_smart_account_migrates_from_inside_a_running_loop(
     assert creds["version"] == 2
     assert "mnemonic" not in creds
     assert "recovery_phrase" not in creds
+
+
+# ---------------------------------------------------------------------------
+# Step 3b — register with the relay before migrating (a bundle never can).
+# ---------------------------------------------------------------------------
+
+
+def test_registration_runs_before_any_file_changes(
+    isolated_home: Path, fake_keychain, relay_registration
+) -> None:
+    creds_path = _write_legacy_plaintext(isolated_home)
+    original = creds_path.read_bytes()
+
+    assert auto_migrate.maybe_migrate() is True
+
+    assert len(relay_registration["calls"]) == 1
+    at_registration = relay_registration["calls"][0]
+    assert at_registration["credentials.json"] == original
+    assert at_registration["credentials.json.bak"] is None
+
+
+def test_unregistered_vault_is_not_migrated(
+    isolated_home: Path, fake_keychain, relay_registration, caplog
+) -> None:
+    """No confirmed registration -> no migration: the phrase file stays
+    exactly as it was, no backup, nothing wrapped, and the log says why."""
+    relay_registration["ok"] = False
+    creds_path = _write_legacy_plaintext(isolated_home)
+    original = creds_path.read_bytes()
+
+    with caplog.at_level("WARNING", logger="totalreclaw.hermes.auto_migrate"):
+        assert auto_migrate.maybe_migrate() is False
+
+    assert creds_path.read_bytes() == original
+    assert not (creds_path.parent / "credentials.json.bak").exists()
+    assert fake_keychain == {}
+    assert "registered with the relay" in caplog.text
+    assert TEST_MNEMONIC.split()[0] + " " + TEST_MNEMONIC.split()[1] not in caplog.text
+
+
+def test_unregistered_vault_retries_on_next_boot(
+    isolated_home: Path, fake_keychain, relay_registration
+) -> None:
+    relay_registration["ok"] = False
+    creds_path = _write_legacy_plaintext(isolated_home)
+    assert auto_migrate.maybe_migrate() is False
+
+    relay_registration["ok"] = True
+    assert auto_migrate.maybe_migrate() is True
+    assert json.loads(creds_path.read_text())["version"] == 2
+
+
+def test_already_migrated_install_does_not_register(
+    isolated_home: Path, fake_keychain, relay_registration
+) -> None:
+    _write_legacy_plaintext(isolated_home)
+    assert auto_migrate.maybe_migrate() is True
+    assert auto_migrate.maybe_migrate() is False
+    assert len(relay_registration["calls"]) == 1
+
+
+def test_register_vault_posts_register_with_the_phrase_derived_keys(
+    isolated_home: Path, real_register_vault, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real ``_register_vault`` builds a phrase-configured client and
+    calls ``register()`` on it (which sends auth_key_hash + salt)."""
+    from totalreclaw import client as client_mod
+
+    seen = []
+
+    async def _fake_relay_register(self, auth_key_hash: str, salt_hex: str) -> str:
+        seen.append((auth_key_hash, salt_hex))
+        return "user-1"
+
+    monkeypatch.setattr(client_mod.RelayClient, "register", _fake_relay_register)
+
+    assert auto_migrate._register_vault(TEST_MNEMONIC) is True
+
+    expected = client_mod.TotalReclaw(mnemonic=TEST_MNEMONIC)
+    assert seen == [
+        (
+            client_mod.compute_auth_key_hash(expected._keys.auth_key),
+            expected._keys.salt.hex(),
+        )
+    ]
+
+
+def test_register_vault_reports_failure_from_inside_a_running_loop(
+    isolated_home: Path, real_register_vault, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    import httpx
+
+    from totalreclaw import client as client_mod
+
+    async def _relay_down(self, auth_key_hash: str, salt_hex: str) -> str:
+        request = httpx.Request("POST", "https://relay.invalid/v1/register")
+        raise httpx.HTTPStatusError(
+            "boom", request=request, response=httpx.Response(503, request=request)
+        )
+
+    monkeypatch.setattr(client_mod.RelayClient, "register", _relay_down)
+
+    async def driver() -> bool:
+        return auto_migrate._register_vault(TEST_MNEMONIC)
+
+    assert asyncio.run(driver()) is False

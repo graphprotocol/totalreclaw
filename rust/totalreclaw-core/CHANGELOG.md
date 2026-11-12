@@ -5,6 +5,58 @@ All notable changes to `@totalreclaw/core` / `totalreclaw-core` are documented h
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`forget_guard`: keep auto-extraction from re-creating a fact the user forgot (internal#605, #640).** Pure write-time checks for a client-side list of explicitly forgotten facts. `match_forgotten(text, embedding, entries)` returns the first entry the candidate restates: `exact` (normalized text equal; no embedding needed), `subset` (candidate adds no content word, cosine >= 0.70), `superset` (candidate keeps every content word, cosine >= 0.80) or `anchor` (2+ and at least half of the forgotten text's capitalized / numeric words, cosine >= 0.80). A candidate that drops and adds ordinary words never matches, so value swaps ("blue" → "green", "Lisbon" → "Porto") still store. `is_forget_request(text)` flags notes about a deletion ("User asked to forget X", "asked for that record to be removed"); it needs a request verb before "to forget" or a memory/record target, so "tends to forget appointments" and "wants to delete their Facebook account" pass. Bindings: PyO3 `match_forgotten(text, embedding_json, entries_json) -> str` and `is_forget_request(text) -> bool`; WASM `matchForgotten` / `isForgetRequest`. Cross-language fixture `tests/parity/fixtures/forget-guard-v1.json`, checked by the Rust tests, `tests/parity/forget-guard-parity.test.ts` (WASM) and `python/tests/test_forget_guard.py`. No on-chain or protobuf change.
+- **[PRD-04 DEP-4] PII / credential filter.** New `pii` module:
+  - `pii_filter(text) -> PiiDecision { Allow | Block { category } | Flag { category } }`;
+  - `PiiCategory`, with stable snake_case tags via `as_str()`;
+  - `pii_block_message(category)`, the user-facing block-and-tell text (word-identical across clients; **copy pending approval**, internal #549);
+  - `PiiDecision::to_json()`.
+
+  It is a regex + validator tier only, with no ML:
+  - credentials: the 14 `secrets` classes; GitHub fine-grained, GitLab, Google, npm, PyPI, Groq, xAI, OpenRouter and Telegram bot token formats; keyword-assigned keys/tokens; upper-case env-var assignments; bearer/basic/`Authorization` headers; passwords, PINs and URL credentials;
+  - payment cards: issuer prefix + Luhn;
+  - IBAN: country length table + mod-97;
+  - government IDs: PT NIF/CC, ES DNI/NIE, IT codice fiscale, FR NIR, US SSN, BR CPF, and keyword-named passport/ID/licence/NINO/NHS/Aadhaar numbers;
+  - private keys: 64/128-hex, PEM, `xprv`, and keyword-named base58/WIF;
+  - BIP-39 phrases: checksum-valid → block; a checksum-invalid run of exactly 12/15/18/21/24 wordlist words, or one named as a phrase → flag.
+
+  Bindings: WASM `piiFilter` and PyO3 `pii_filter`, both returning the canonical JSON. The corpus `tests/parity/pii/corpus.json` (317 items: 142 negative, 175 positive) is asserted by the Rust, WASM and PyO3 runners: 0 negative-set leaks, 0 positive-set false blocks.
+- **Extraction and compaction prompts: Rule 7.** Never extract secrets or sensitive identifiers; this is the prompt half of DEP-4. The prompt bytes (and therefore their SHA-256) change with this minor (`memory-taxonomy-v1.md` "Version locking").
+- **[PRD-04 DEP-3] `dedup_context` — topical dedup context for extraction prompts.** New module `dedup_context`. `build_dedup_context(topical, pinned, recent, cap) -> String` renders the "Existing memories" block a client appends to the extraction user prompt. The header is byte-identical to the block Hermes and the OpenClaw plugin built inline. There is one `[ID: <fact id>] <text>` line per memory: pinned first, then topical, then recent. Duplicate fact ids keep the first occurrence. Ids and texts are collapsed to one line: every line-break character (the `str.splitlines` set, including U+2028, U+2029 and NEL) becomes one space, so a stored fact cannot inject a line. At most `cap` lines are kept (`DEFAULT_DEDUP_CONTEXT_CAP` = 30), and the result is `""` when nothing survives. The input element is `DedupContextItem { id, text }`, where `id` is the on-chain fact id the LLM echoes back as `existingFactId`. The v0 `Claim` was not used because it carries no id. The bindings go through the JSON wrapper `build_dedup_context_json`: WASM `buildDedupContext(topicalJson, pinnedJson, recentJson, cap?)` and PyO3 `build_dedup_context(topical_json, pinned_json, recent_json, cap=30)`. `cap` defaults to 30 in both. WASM throws on a negative, fractional, `NaN` or infinite `cap`; PyO3 raises `OverflowError` on a negative one. Malformed JSON or a non-array section raises (`JsError` / `ValueError`), `null` is an empty section, and extra fields are ignored. The cross-language fixture `tests/parity/fixtures/dedup-context-v1.json` (16 cases, written by `generate-dedup-context-v1.py` from an independent Python reference) is checked by the Rust tests, `tests/parity/dedup-context-parity.test.ts` (WASM) and `python/tests/test_dedup_context_parity.py` (PyO3).
+
+### Fixed
+
+- **`secrets::detect_secrets` was unsafe on multi-byte text.** It panicked when accented text sat within 38 bytes of a secret, because the context window was sliced mid-UTF-8. It could also miss a secret right after a multi-byte character, because the word-boundary check read a UTF-8 continuation byte as a `char`. Both paths now decode characters.
+
+## [2.6.1] - 2026-11-02
+
+Packaging-only release for the PyPI wheel. No source, API or output changes:
+the Rust code is the same as 2.6.0, and a fixed set of deterministic outputs
+(key derivation, auth-key hash, EOA address, blind indices, content
+fingerprint, f16 embedding encoding, LSH buckets) is byte-identical between
+the 2.6.0 `cp312` wheel and the new `abi3` wheel.
+
+### Changed
+
+- **PyPI wheels now target CPython's stable ABI (`abi3`, Python 3.10 and later).**
+  2.6.0 shipped `cp312` wheels only, so on Python 3.13 and 3.14, pip fell back to
+  the sdist and needed a Rust and C toolchain to install, which most users don't
+  have. The `python-extension` feature now enables `pyo3/abi3-py310`, so each
+  platform gets one `cp310-abi3` wheel that installs on 3.10, 3.11, 3.12, 3.13,
+  3.14 and later CPython releases without a compiler. Platforms are unchanged:
+  manylinux2014 x86_64 and aarch64, macOS arm64 and x86_64, and Windows x86_64.
+  Free-threaded (`3.14t`) builds are not covered, because the stable ABI does not
+  support them yet. The PyPI publish workflow now installs the built wheel on
+  Python 3.10 through 3.14 (Linux, macOS, Windows) before it publishes. PR CI
+  now installs the Python client binary-only on Python 3.14 against the
+  in-repo core wheel.
+- npm (`@totalreclaw/core`) and crates.io: nothing to ship. The source is
+  identical to 2.6.0, so publishing 2.6.1 there is optional.
+
 ## [2.6.0] - 2026-08-16
 
 Two additive surfaces: the `derived-bundle-v1` credential bundle (Option E

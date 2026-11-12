@@ -1,6 +1,6 @@
 {
   "name": "@totalreclaw/mcp-server",
-  "version": "3.5.0",
+  "version": "3.5.3",
   "description": "End-to-end encrypted memory for AI agents \u2014 portable, yours forever. MCP server with XChaCha20-Poly1305 E2EE, semantic search, import/export, and on-chain storage",
   "homepage": "https://totalreclaw.xyz",
   "main": "dist/index.js",
@@ -17,7 +17,9 @@
     "lint": "eslint src --ext .ts",
     "clean": "rm -rf dist",
     "start": "node dist/index.js",
-    "setup": "node dist/cli/setup.js"
+    "setup": "node dist/cli/setup.js",
+    "check-url-binding": "node scripts/check-url-binding.cjs",
+    "prepublishOnly": "node scripts/check-url-binding.cjs"
   },
   "keywords": [
     "totalreclaw",
@@ -72,7 +74,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/p-diogo/totalreclaw.git",
+    "url": "https://github.com/graphprotocol/totalreclaw.git",
     "directory": "mcp"
   }
 }
