@@ -455,6 +455,8 @@ jobs:
         run: cd tests/parity && npx tsx pii/pii-parity.test.ts
       - name: Outer protobuf fields 9/11 absent — MCP + WASM calldata parity (PRD-04 F8 / DEP-6)
         run: cd tests/parity && npx tsx outer-protobuf-parity.test.ts
+      - name: Forget-guard parity (TS/WASM side, internal#605)
+        run: cd tests/parity && npx tsx forget-guard-parity.test.ts
       - name: Topical dedup-context parity (TS/WASM side, PRD-04 DEP-3)
         run: cd tests/parity && npx tsx dedup-context-parity.test.ts
 

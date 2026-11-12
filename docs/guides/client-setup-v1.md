@@ -97,7 +97,7 @@ The IronClaw agent config references the MCP server via the same JSON shape. See
 
 Ask the agent: *"What TotalReclaw tools do you have?"* — you should see 18 tools including `totalreclaw_pin`, `totalreclaw_retype`, `totalreclaw_set_scope`.
 
-**Full guide:** [claude-code-setup.md](./claude-code-setup.md)
+**Full guides:** [claude-desktop-setup.md](./claude-desktop-setup.md) (Claude Desktop) · [claude-code-setup.md](./claude-code-setup.md) (Claude Code, Cursor, Windsurf)
 
 ---
 
@@ -114,7 +114,7 @@ TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
 
 Add this to your NanoClaw deployment (Docker env, `.env`, or platform config). The NanoClaw agent-runner auto-spawns `@totalreclaw/mcp-server` with this env.
 
-If you need to generate a recovery phrase first, run `npx @totalreclaw/mcp-server setup` on any machine with Node 18+.
+If you need to generate a recovery phrase first, run `npx @totalreclaw/mcp-server setup` on any machine with Node 20+.
 
 **Full guide:** [nanoclaw-getting-started.md](./nanoclaw-getting-started.md)
 
