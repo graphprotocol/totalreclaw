@@ -1858,11 +1858,12 @@ function quotaExceededResponse(): { content: Array<{ type: string; text: string 
 // returned the BIP-39 mnemonic via the `recovery_phrase` field, which crossed
 // the LLM's context window every time an agent invoked the tool. That violated
 // the phrase-safety invariant ("the recovery phrase MUST NEVER cross the LLM
-// context"). MCP onboarding now follows the URL-driven flow documented at
-// `docs/guides/claude-code-setup.md` — agents direct users to source their
-// phrase from the OpenClaw / Hermes browser pair flow (or an offline BIP-39
-// generator) and paste it into the MCP host config themselves. No tool path
-// exists for the agent to ever see the phrase.
+// context"). Onboarding is now pair-first: an unconfigured server tells the
+// agent to call `totalreclaw_pair`, which returns a link + PIN. The user opens
+// the link and creates a new recovery phrase, or enters an existing one, in
+// the browser only; the phrase reaches this server encrypted, straight from
+// the browser, and never appears in a tool response or in the chat. No tool
+// path exists for the agent to ever see the phrase.
 
 // ── Server wiring ─────────────────────────────────────────────────────────
 // The MCP `Server` is constructed in `main()` via `createTotalReclawServer`
@@ -2197,6 +2198,7 @@ async function main(): Promise<void> {
     {
       callTool: callToolHandler,
       isManagedMode: () => !!subgraphState,
+      isUnconfigured: () => currentMode === 'unconfigured',
       getClient,
     },
     {

@@ -91,6 +91,12 @@ export interface ServerSetupDeps {
   callTool: (name: string, args: unknown) => Promise<ToolResponse>;
   /** True when running against the managed service (subgraph) — no resource reads. */
   isManagedMode: () => boolean;
+  /**
+   * True while no account is configured (no credentials yet). The memory-context
+   * resource must not build the self-hosted client then: that path registers a
+   * user against the relay. Optional; omitted means "treat as configured".
+   */
+  isUnconfigured?: () => boolean;
   /** Lazily build/return the self-hosted client (resource reads only). */
   getClient: () => Promise<TotalReclaw>;
 }
@@ -175,6 +181,20 @@ export function createTotalReclawServer(deps: ServerSetupDeps): Server {
               uri: memoryContextResource.uri,
               mimeType: 'text/markdown',
               text: '*Memory context resource is not available with the managed service. Use totalreclaw_recall to search memories.*',
+            },
+          ],
+        };
+      }
+
+      // No account yet: answer with text instead of constructing the
+      // self-hosted client (init + register against the relay).
+      if (deps.isUnconfigured?.()) {
+        return {
+          contents: [
+            {
+              uri: memoryContextResource.uri,
+              mimeType: 'text/markdown',
+              text: '*Memory context is not available yet: TotalReclaw is not configured. Run totalreclaw_pair to set up an account, then use totalreclaw_recall to search memories.*',
             },
           ],
         };
