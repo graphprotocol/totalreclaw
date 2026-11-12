@@ -25,6 +25,7 @@ only, see [`../architecture.md`](../architecture.md) for the live picture.
 | [mcp-auto-memory.md](totalreclaw/mcp-auto-memory.md) | Auto-memory for generic MCP hosts | Design complete, not implemented |
 | [mcp-onboarding.md](totalreclaw/mcp-onboarding.md) | NanoClaw onboarding & payment UX | Design complete |
 | [mcp-server.md](totalreclaw/mcp-server.md) | MCP server spec v1.0 | Shipped |
+| [mcp-dual-era.md](totalreclaw/mcp-dual-era.md) | MCP protocol eras: 2025-11-25 `initialize` + 2026-07-28 `server/discover` (enclave mirror contract in §6) | Implemented (stdio) |
 | [skill-openclaw.md](totalreclaw/skill-openclaw.md) | OpenClaw skill spec | Shipped (spec predates implementation) |
 | [skill-nanoclaw.md](totalreclaw/skill-nanoclaw.md) | NanoClaw skill spec | Shipped (spec predates implementation) |
 | [recrystallize-backfill.md](totalreclaw/recrystallize-backfill.md) | Re-crystallize / re-key backfill for collapsed sessions | Implemented — not yet run on a user vault |

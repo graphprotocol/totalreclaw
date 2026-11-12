@@ -150,8 +150,8 @@ describe('handleRecall (self-hosted path) emits the block', () => {
   });
 
   it('a connected MCP client receives both content blocks and structuredContent', async () => {
-    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const { Client } = await import('@modelcontextprotocol/client');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/server');
     const { createTotalReclawServer } = await import('../src/server-setup');
 
     const payload = { memories: [{ fact_id: 'a', fact_text: 'x' }], latency_ms: 1 };
