@@ -398,13 +398,13 @@ export function weightedRrfFusion(
  *
  * @param candidates - Candidates in relevance order (best first), with optional embeddings
  * @param lambda     - Trade-off between relevance and diversity (default 0.7)
- * @param topK       - Number of results to return (default 8)
+ * @param topK       - Number of results to return (default 16)
  * @returns          - Re-ordered candidates with diversity
  */
 export function applyMMR<T extends { id: string; embedding?: number[] }>(
   candidates: T[],
   lambda: number = 0.7,
-  topK: number = 8,
+  topK: number = 16,
 ): T[] {
   if (candidates.length === 0) return [];
   if (candidates.length <= 1) return candidates.slice(0, topK);

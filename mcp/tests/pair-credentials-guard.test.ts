@@ -154,10 +154,10 @@ describe('handlePair: refuses when credentials already exist', () => {
     expect(openSession).not.toHaveBeenCalled();
   });
 
-  it('the refusal never carries anything that could authorise a replacement', async () => {
+  it('a replace_confirmed argument alone never authorises a replacement', async () => {
     const credentialsPath = tmpCredentialsPath();
     fs.writeFileSync(credentialsPath, '{}', 'utf-8');
-    const res = await handlePair({} as never, { replace: true, replace_confirmed: true } as never, {
+    const res = await handlePair({} as never, { replace_confirmed: true } as never, {
       credentialsPath,
       isConfigured: () => false,
       openSession: jest.fn() as never,

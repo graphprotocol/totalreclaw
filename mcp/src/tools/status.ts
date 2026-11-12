@@ -37,6 +37,7 @@ export interface BillingFeatures {
   extraction_interval?: number;
   max_facts_per_extraction?: number;
   max_candidate_pool?: number;
+  recall_top_k?: number;
 }
 
 export interface BillingStatusResponse {
