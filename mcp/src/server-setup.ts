@@ -36,7 +36,13 @@ import { serveStdio, type StdioServerHandle } from '@modelcontextprotocol/server
 import type { TotalReclaw } from '@totalreclaw/client';
 import type { ToolResponse } from './tools/types.js';
 import { TOOL_MANIFEST } from './dispatch.js';
-import { SERVER_INSTRUCTIONS, PROMPT_DEFINITIONS, getPromptMessages } from './prompts.js';
+import {
+  SERVER_INSTRUCTIONS,
+  SERVER_GUIDE,
+  SERVER_GUIDE_URI,
+  PROMPT_DEFINITIONS,
+  getPromptMessages,
+} from './prompts.js';
 import {
   memoryContextResource,
   readMemoryContext,
@@ -55,6 +61,19 @@ export const SERVER_VERSION: string = (() => {
     return '0.0.0';
   }
 })();
+
+/**
+ * Static usage guide. Holds the detail that does not fit the
+ * SERVER_INSTRUCTIONS length budget. Readable in every mode.
+ */
+export const guideResource = {
+  uri: SERVER_GUIDE_URI,
+  name: 'TotalReclaw usage guide',
+  description:
+    'How to use TotalReclaw memory: recall and remember rules, recovery-phrase safety, ' +
+    'setup, quota, imports, memory edits and debriefs.',
+  mimeType: 'text/markdown',
+};
 
 /** Server identity advertised in `initialize` (2025) and `_meta` serverInfo (2026-07-28). The version is the package version. */
 export const SERVER_INFO = { name: 'totalreclaw', version: SERVER_VERSION } as const;
@@ -135,11 +154,17 @@ export function createTotalReclawServer(deps: ServerSetupDeps): Server {
   // ── Resources ──────────────────────────────────────────────────────────
   server.setRequestHandler(
     'resources/list',
-    async () => ({ resources: [memoryContextResource] }) as ListResourcesResult,
+    async () => ({ resources: [memoryContextResource, guideResource] }) as ListResourcesResult,
   );
 
   server.setRequestHandler('resources/read', async (request) => {
     const { uri } = request.params;
+
+    if (uri === guideResource.uri) {
+      return {
+        contents: [{ uri: guideResource.uri, mimeType: 'text/markdown', text: SERVER_GUIDE }],
+      };
+    }
 
     if (uri === memoryContextResource.uri) {
       // The managed service does not support resource reads yet.

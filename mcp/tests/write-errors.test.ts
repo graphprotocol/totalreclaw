@@ -257,6 +257,35 @@ describe('phrase-rail wording: point users to totalreclaw_pair, never to env/con
     expect(SERVER_INSTRUCTIONS).toMatch(/in a browser|in the browser|there/);
   });
 
+  test('the rail holds for the guide, the instructions prompt and every tool description', () => {
+    const { SERVER_GUIDE, getPromptMessages } = require('../src/prompts');
+    const promptText = getPromptMessages('totalreclaw_instructions')
+      .map((m: any) => m.content.text)
+      .join('\n');
+    expect(SERVER_GUIDE).not.toMatch(bad);
+    expect(promptText).not.toMatch(bad);
+    expect(SERVER_GUIDE).toMatch(/created or entered in the browser during totalreclaw_pair/);
+    // Every string in every tool definition: top-level description plus all
+    // property descriptions in the input schema.
+    const collect = (node: any, out: string[]) => {
+      if (typeof node === 'string') return;
+      if (Array.isArray(node)) { node.forEach((n) => collect(n, out)); return; }
+      if (node && typeof node === 'object') {
+        for (const [k, v] of Object.entries(node)) {
+          if (k === 'description' && typeof v === 'string') out.push(v);
+          else collect(v, out);
+        }
+      }
+    };
+    expect(manifest.length).toBeGreaterThan(5);
+    for (const tool of manifest) {
+      const texts: string[] = [];
+      collect(tool, texts);
+      expect(texts.length).toBeGreaterThan(0);
+      for (const t of texts) expect(`${tool.name}: ${t}`).not.toMatch(bad);
+    }
+  });
+
   test('not_configured and tool_removed envelopes name totalreclaw_pair', () => {
     for (const r of [notConfiguredResponse(), setupRemovedResponse()]) {
       const text = r.content[0].text as string;

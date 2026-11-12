@@ -20,8 +20,8 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import type { StdioServerHandle } from '@modelcontextprotocol/server/stdio';
 
-import { serveTotalReclawStdio } from '../src/server-setup';
-import { PROMPT_DEFINITIONS, SERVER_INSTRUCTIONS } from '../src/prompts';
+import { serveTotalReclawStdio, guideResource } from '../src/server-setup';
+import { PROMPT_DEFINITIONS, SERVER_INSTRUCTIONS, SERVER_GUIDE, SERVER_GUIDE_URI } from '../src/prompts';
 import { memoryContextResource } from '../src/resources';
 import type { ToolResponse } from '../src/tools/types';
 
@@ -100,7 +100,20 @@ describe.each<[string, Mode, 'legacy' | 'modern']>([
       ...PROMPT_DEFINITIONS,
     ]);
     const { resources } = await c.listResources();
-    expect(resources).toEqual([memoryContextResource]);
+    expect(resources).toEqual([memoryContextResource, guideResource]);
+    expect(resources.map((r) => r.uri)).toContain('totalreclaw://guide');
+  });
+
+  it('serves the usage guide over resources/read in managed mode (isManagedMode() is true here)', async () => {
+    const c = await connect(mode);
+    const res = await c.readResource({ uri: SERVER_GUIDE_URI });
+    expect(SERVER_GUIDE_URI).toBe('totalreclaw://guide');
+    expect(res.contents).toHaveLength(1);
+    expect(res.contents[0]).toMatchObject({ uri: 'totalreclaw://guide', mimeType: 'text/markdown' });
+    expect((res.contents[0] as { text: string }).text).toBe(SERVER_GUIDE);
+    // The memory-context resource is still refused (not fetched) in managed mode.
+    const mem = await c.readResource({ uri: memoryContextResource.uri });
+    expect((mem.contents[0] as { text: string }).text).toMatch(/not available with the managed service/);
   });
 
   it('gets identical tool-call content', async () => {
