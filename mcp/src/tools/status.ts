@@ -119,7 +119,7 @@ export async function handleStatus(
     const tierLabel = billingJson.tier === 'pro' ? 'Pro' : 'Free';
     const usage = `${billingJson.free_writes_used}/${billingJson.free_writes_limit}`;
     const remaining = billingJson.free_writes_limit - billingJson.free_writes_used;
-    // Both tiers have a MONTHLY quota cap (Free 250, Pro 1500). The counter
+    // Both tiers have a MONTHLY quota cap (Free 250, Pro 3000; the relay reports the live limit). The counter
     // resets on the 1st of each calendar month. Surface this so the agent
     // doesn't have to guess between "monthly" vs "lifetime" when answering
     // user questions about their cap.
@@ -148,6 +148,9 @@ export async function handleStatus(
         type: 'text',
         text: JSON.stringify({
           tier: billingJson.tier,
+          writes_used: billingJson.free_writes_used,
+          writes_limit: billingJson.free_writes_limit,
+          // Back-compat aliases (the counters apply to any tier, not just Free).
           free_writes_used: billingJson.free_writes_used,
           free_writes_limit: billingJson.free_writes_limit,
           remaining_writes: remaining,

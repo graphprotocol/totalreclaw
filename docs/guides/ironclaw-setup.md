@@ -135,7 +135,7 @@ The MCP server exposes 18 tools. Descriptions are summarized from the tool defin
 ## Pricing
 
 - **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
-- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit [totalreclaw.xyz/pricing](https://totalreclaw.xyz/pricing/). See `totalreclaw_status` for current pricing.
+- **Pro tier** — 3,000 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit [totalreclaw.xyz/pricing](https://totalreclaw.xyz/pricing/). See `totalreclaw_status` for current pricing.
 
 Upgrade anytime via the `totalreclaw_upgrade` tool -- the agent handles it for you.
 

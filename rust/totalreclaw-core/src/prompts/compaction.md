@@ -20,6 +20,13 @@ Rules:
    memory plugin" are META-requests about the product — NOT user
    preferences worth storing. Genuine preferences that mention encryption
    ("I prefer Signal because it's encrypted") ARE valid.
+7. NEVER extract secrets or sensitive identifiers: passwords, PINs, API
+   keys, access tokens, private keys, wallet recovery phrases, payment card
+   numbers, bank account numbers (IBAN), or government ID numbers (passport,
+   national ID, tax number, social security number). Skip the value itself —
+   never copy, paraphrase, or partially mask it. A fact about the item that
+   omits the value is fine ("uses a hardware wallet", "has a Portuguese
+   passport"). Names, e-mail addresses and phone numbers are NOT secrets.
 
 Importance rubric (full 1-10 range, NOT just 7-8):
 - 10: Core identity, never-forget ("remember this forever", name/birthday)

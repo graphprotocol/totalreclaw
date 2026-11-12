@@ -30,23 +30,66 @@ End-to-end encrypted memory vault as an MCP server. Your memories are encrypted 
 
 ## Quick Start
 
-### 1. Run the setup wizard
-
-```bash
-npx @totalreclaw/mcp-server setup
-```
-
-The wizard generates your 12-word recovery phrase, registers you, and prints a config snippet for your MCP client.
-
-> **Save your recovery phrase somewhere safe.** It's the only way to recover your encrypted memories.
-
-> **Note:** The first run downloads a ~600MB embedding model for local inference. This is cached locally and only happens once.
-
-### 2. Add to your MCP client
+### 1. Add the server to your MCP client
 
 #### Claude Desktop
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "totalreclaw": {
+      "command": "npx",
+      "args": ["-y", "@totalreclaw/mcp-server"]
+    }
+  }
+}
+```
+
+> **Note:** The server URL defaults to `https://api.totalreclaw.xyz` (the managed service). You only need to set `TOTALRECLAW_SERVER_URL` if you are running a self-hosted server.
+
+> **Note:** The first run downloads a ~600MB embedding model for local inference. This is cached locally and only happens once.
+
+#### Cursor / Windsurf
+
+Add to your MCP settings (Settings > MCP Servers):
+
+```json
+{
+  "totalreclaw": {
+    "command": "npx",
+    "args": ["-y", "@totalreclaw/mcp-server"]
+  }
+}
+```
+
+#### IronClaw (NEAR AI)
+
+Add to your IronClaw MCP configuration (typically `~/.ironclaw/mcp.json` or via the IronClaw dashboard):
+
+```json
+{
+  "mcpServers": {
+    "totalreclaw": {
+      "command": "npx",
+      "args": ["@totalreclaw/mcp-server"]
+    }
+  }
+}
+```
+
+See the [IronClaw setup guide](../docs/guides/ironclaw-setup.md) for the full walkthrough including background routines.
+
+### 2. Set up your account with `totalreclaw_pair`
+
+Restart your app, then ask your agent: *"Set up TotalReclaw."* The agent calls `totalreclaw_pair`, which returns a link and a 6-digit PIN. Open the link in a browser and enter the PIN. The page creates a new 12-word recovery phrase (or lets you enter an existing one); the phrase is encrypted in the browser and never passes through the chat. When the page says "You're all set", fully quit and reopen the app (or start a new session): credentials are read at startup.
+
+> **Save your recovery phrase somewhere safe.** It's the only way to recover your encrypted memories.
+
+### Legacy: manual setup (discouraged)
+
+Older setups put the recovery phrase in the MCP host config as `TOTALRECLAW_RECOVERY_PHRASE`, or generate it with `npx @totalreclaw/mcp-server setup` (run it yourself in a terminal, never through an agent). Both still work, and self-hosted setups may still need them, but an env var stores the phrase **in plain text in a config file**, so prefer pairing. Example:
 
 ```json
 {
@@ -62,43 +105,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-> **Note:** The server URL defaults to `https://api.totalreclaw.xyz` (the managed service). You only need to set `TOTALRECLAW_SERVER_URL` if you are running a self-hosted server.
-
-#### Cursor / Windsurf
-
-Add to your MCP settings (Settings > MCP Servers):
-
-```json
-{
-  "totalreclaw": {
-    "command": "npx",
-    "args": ["-y", "@totalreclaw/mcp-server"],
-    "env": {
-      "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here"
-    }
-  }
-}
-```
-
-#### IronClaw (NEAR AI)
-
-Add to your IronClaw MCP configuration (typically `~/.ironclaw/mcp.json` or via the IronClaw dashboard):
-
-```json
-{
-  "mcpServers": {
-    "totalreclaw": {
-      "command": "npx",
-      "args": ["@totalreclaw/mcp-server"],
-      "env": {
-        "TOTALRECLAW_RECOVERY_PHRASE": "your twelve word recovery phrase goes here"
-      }
-    }
-  }
-}
-```
-
-If IronClaw supports a credential vault, store `TOTALRECLAW_RECOVERY_PHRASE` there instead of in the config file. See the [IronClaw setup guide](../docs/guides/ironclaw-setup.md) for the full walkthrough including background routines.
+If your agent supports a credential vault, store `TOTALRECLAW_RECOVERY_PHRASE` there instead of in the config file.
 
 ### 3. Verify
 
@@ -243,7 +250,7 @@ keeps a stale-install downgrade loud rather than a crash.
 ## Free Tier & Pricing
 
 - **Free tier** — 250 memories/month on Gnosis mainnet. Permanent storage. Cosine dedup (paraphrase detection). E2E encrypted. No credit card required.
-- **Pro tier** — 1,500 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>.
+- **Pro tier** — 3,000 memories/month on Gnosis mainnet. Permanent. LLM-guided dedup (catches contradictions). Custom extraction interval. Pay via the `totalreclaw_upgrade` tool or visit <https://totalreclaw.xyz/pricing>.
 
 Pay with card via Stripe. Use `totalreclaw_status` to check current pricing. Counter resets monthly.
 

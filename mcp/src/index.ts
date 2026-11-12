@@ -23,6 +23,9 @@ import {
 } from './tools/index.js';
 import { getLastBillingResponse } from './tools/status.js';
 import type { ToolContext, ToolResponse } from './tools/types.js';
+import { isQuotaExceededError, rethrowIfQuota, shortErrorMessage, logWriteError } from './tools/write-errors.js';
+import { pickMemoryId } from './tools/helpers.js';
+import { classifyForgetTarget, forgetNotFoundResponse, forgetLookupFailedResponse } from './tools/forget.js';
 import {
   findNearDuplicate,
   shouldSupersede,
@@ -37,6 +40,7 @@ import {
   invalidateMemoryContextCache,
 } from './resources/index.js';
 import { createTotalReclawServer } from './server-setup.js';
+import { buildRecallResponse } from './recall-format.js';
 import {
   createCallToolHandler,
   type HandlerBundle,
@@ -88,7 +92,7 @@ import {
 } from './subgraph/credentials.js';
 import type { UnusableCredentials } from './dispatch.js';
 import { bundleVaultToBuffers, redactedBundleSummary, type DerivedBundleV1 } from './subgraph/bundle.js';
-import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, fetchFactById } from './subgraph/search.js';
+import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, fetchFactById, fetchFactForForget } from './subgraph/search.js';
 import { confirmIndexed } from './subgraph/confirm-indexed.js';
 import {
   decodeEmbeddingUniversal,
@@ -1199,12 +1203,13 @@ async function handleRememberSubgraph(
       }
       console.error(`Batch submitted ${batchResult.batchSize} payloads in 1 UserOp (tx=${batchResult.txHash.slice(0, 10)}...)`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
+      rethrowIfQuota(error);
+      const message = shortErrorMessage(error);
       batchError = message;
       for (const meta of pendingFactMeta) {
         results.push({ success: false, fact_id: meta.factId, tx_hash: undefined, error: message });
       }
-      console.error(`Batch submission failed: ${message}`);
+      logWriteError('Batch submission failed', error);
     }
   }
 
@@ -1304,8 +1309,10 @@ async function handleDebriefSubgraph(
         content: [{ type: 'text', text: JSON.stringify({ success: batchResult.success, stored: batchResult.success ? 1 : 0, fact_id: factId, tx_hash: batchResult.txHash, crystal: true }) }],
       };
     } catch (error) {
-      console.error(`Crystal debrief failed: ${error instanceof Error ? error.message : String(error)}`);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: String(error) }) }] };
+      rethrowIfQuota(error);
+      const message = shortErrorMessage(error);
+      logWriteError('Crystal debrief failed', error);
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: message }) }] };
     }
   }
 
@@ -1380,11 +1387,12 @@ async function handleDebriefSubgraph(
       }
       console.error(`Debrief: submitted ${batchResult.batchSize} items (tx=${batchResult.txHash.slice(0, 10)}...)`);
     } catch (error) {
-      batchError = error instanceof Error ? error.message : String(error);
+      rethrowIfQuota(error);
+      batchError = shortErrorMessage(error);
       for (const meta of pendingFactMeta) {
         results.push({ success: false, fact_id: meta.factId, error: batchError });
       }
-      console.error(`Debrief batch submission failed: ${batchError}`);
+      logWriteError('Debrief batch submission failed', error);
     }
   }
 
@@ -1400,7 +1408,7 @@ async function handleDebriefSubgraph(
 async function handleRecallSubgraph(
   state: SubgraphState,
   args: unknown,
-): Promise<{ content: Array<{ type: string; text: string }> }> {
+): Promise<ToolResponse> {
   const input = args as Record<string, unknown>;
   const query = (input?.query as string) || '';
   const startTime = Date.now();
@@ -1556,6 +1564,7 @@ async function handleRecallSubgraph(
     const subgraphCore = require('@totalreclaw/core') as typeof import('@totalreclaw/core');
     const memories = reranked.map((r) => ({
       fact_id: r.id,
+      memory_id: r.id,
       fact_text: r.text,
       type: categoryMap.get(r.id) ?? 'fact',
       source: sourceMap.get(r.id),
@@ -1573,19 +1582,21 @@ async function handleRecallSubgraph(
         : '',
     }));
 
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          memories,
-          latency_ms: Date.now() - startTime,
-          candidates_searched: candidates.length,
-          broadened_search: true,
-          mode: 'subgraph',
-          query_intent: intent,
-        }),
-      }],
-    };
+    return buildRecallResponse(
+      {
+        memories,
+        latency_ms: Date.now() - startTime,
+        candidates_searched: candidates.length,
+        broadened_search: true,
+        mode: 'subgraph',
+        query_intent: intent,
+      },
+      reranked.map((r) => ({
+        type: categoryMap.get(r.id) ?? 'fact',
+        text: r.text,
+        createdAtUnix: r.createdAt ?? 0,
+      })),
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return {
@@ -1613,22 +1624,40 @@ async function handleForgetSubgraph(
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = args as Record<string, unknown>;
-  const factId = input?.fact_id as string;
+  const factId = pickMemoryId(input);
 
-  if (!factId || typeof factId !== 'string') {
+  if (!factId) {
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
           deleted_count: 0,
           fact_ids: [],
-          error: 'fact_id is required for forget (query-based forget is not supported with the managed service)',
+          error: 'memory_id (or its alias fact_id, from a recall result) is required for forget; query-based forget is not supported with the managed service',
         }),
       }],
     };
   }
 
   try {
+    // Existence check first: never tombstone (or report deleted_count: 1 for)
+    // an id that isn't an active fact of this owner.
+    let lookup: 'exists' | 'missing' | 'inactive';
+    try {
+      lookup = await classifyForgetTarget(
+        () => fetchFactForForget(
+          state.smartAccountAddress,
+          factId,
+          state.serverUrl,
+          Buffer.from(state.authKey).toString('hex'),
+        ),
+      );
+    } catch (lookupErr) {
+      logWriteError('Forget existence check failed', lookupErr);
+      return forgetLookupFailedResponse();
+    }
+    if (lookup !== 'exists') return forgetNotFoundResponse(factId, lookup);
+
     // Build a tombstone payload: same fact ID with isActive=false
     // The protobuf encoder always sets isActive=true, so we build a minimal
     // tombstone payload manually. For now, we re-encode the fact with
@@ -1682,7 +1711,9 @@ async function handleForgetSubgraph(
       }],
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
+    rethrowIfQuota(error);
+    logWriteError('Forget failed', error);
+    const message = shortErrorMessage(error);
     return {
       content: [{
         type: 'text',
@@ -1810,24 +1841,13 @@ function isAuthError(error: unknown): boolean {
 
 // ── Quota error helper ──────────────────────────────────────────────────────
 
-/**
- * Check if an error is a quota exceeded error (HTTP 403 with error_code: QUOTA_EXCEEDED).
- */
-function isQuotaExceededError(error: unknown): boolean {
-  if (error instanceof Error) {
-    const msg = error.message.toLowerCase();
-    return msg.includes('quota_exceeded') || msg.includes('quota exceeded');
-  }
-  return false;
-}
-
 function quotaExceededResponse(): { content: Array<{ type: string; text: string }>; isError: true } {
   return {
     content: [{
       type: 'text',
       text: JSON.stringify({
         error: 'quota_exceeded',
-        message: 'Free tier monthly limit reached (250 memories). Upgrade to Pro for 1,500 memories/month on Gnosis mainnet.',
+        message: 'You have reached your monthly memory limit. The counter resets on the 1st of the month. Upgrade to Pro for a higher monthly limit (Free is 250 writes a month, Pro is 3,000).',
         upgrade_url: 'Use totalreclaw_upgrade tool to get a checkout link',
       }),
     }],
@@ -1949,9 +1969,8 @@ const commonHandlers: HandlerBundle = {
 
 // ── Managed-service (subgraph) tool bundle ───────────────────────────────────
 // Tools with no managed-service equivalent return an explicit "use self-hosted
-// mode" envelope; `totalreclaw_import_batch` is intentionally absent so it
-// falls through to the standard unknown-tool error, matching pre-refactor
-// behaviour.
+// mode" envelope (including `totalreclaw_import_batch`, so every listed tool
+// is callable and tells the host plainly why it refuses).
 
 function unsupportedInSubgraph(message: string): ToolResponse {
   return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }], isError: true };
@@ -1973,6 +1992,8 @@ function subgraphBundle(state: SubgraphState): HandlerBundle {
       unsupportedInSubgraph('Import is not yet supported with the managed service. Use self-hosted mode for import.'),
     totalreclaw_import_from: async () =>
       unsupportedInSubgraph('Import from external sources is not yet supported with the managed service. Use self-hosted mode for import.'),
+    totalreclaw_import_batch: async () =>
+      unsupportedInSubgraph('Batch import is not yet supported with the managed service. Use self-hosted mode for import.'),
     totalreclaw_consolidate: async () =>
       unsupportedInSubgraph('Consolidation is not supported with the managed service. On-chain facts require tombstone-based dedup which is handled automatically at store time.'),
   };
@@ -2094,7 +2115,7 @@ async function main(): Promise<void> {
       );
     } else {
       console.error(
-        'TotalReclaw MCP server started (unconfigured — set TOTALRECLAW_RECOVERY_PHRASE in the MCP host config; see docs/guides/claude-code-setup.md)',
+        'TotalReclaw MCP server started (unconfigured — ask the assistant to run totalreclaw_pair to set up an account)',
       );
     }
   } else {

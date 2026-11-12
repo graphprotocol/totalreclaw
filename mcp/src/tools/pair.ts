@@ -38,15 +38,21 @@
  * the server to re-read credentials.json and switch out of `unconfigured`
  * mode.
  *
- * Existing-credentials guard: `~/.totalreclaw/credentials.json` is shared
- * with every TotalReclaw client on the machine (Hermes reads the same file).
- * Pairing over it would move all of them to a different account, so when the
- * server is configured or the file exists (even one this server can't read,
- * such as a Hermes OS-keychain file), the tool refuses with
- * `already_configured` and opens nothing. The credentials are created with
- * an exclusive open, so a file that appears while the browser step runs is
- * never overwritten either. There is no replace path here; a user-confirmed
- * replace mode (relay PR #72, mirroring Hermes) is #716's to add.
+ * Existing-credentials guard (mirrors Hermes, `python/src/totalreclaw/hermes/pair_tool.py`):
+ *   `~/.totalreclaw/credentials.json` is shared with every TotalReclaw client
+ *   on the machine (Hermes reads the same file). Pairing over it would move
+ *   all of them to a different vault. So when the server is configured or the
+ *   file exists, the tool refuses with `already_configured`. Only if the user
+ *   asks to replace their account does the agent call again with
+ *   `replace=true`. That opens a replace-mode relay session (relay PR #72):
+ *   the pair page warns the user and makes THEM tick a confirmation box, and
+ *   the upload is refused unless the relay forwards that confirmation. The
+ *   agent never holds anything that authorises a replacement. Before a
+ *   confirmed replacement overwrites the file, the old one is kept as
+ *   `credentials.json.replaced-<UTC>-<rand>` (0600); the new file is written
+ *   atomically (temp file + rename). A normal (non-replace) pairing
+ *   creates the file with an exclusive open, so it can never overwrite one
+ *   that appeared after the guard ran.
  *
  * Reference implementation: `skill/plugin/index.ts` (totalreclaw_pair tool
  * handler) and `skill/plugin/pair-cli-relay.ts` (CLI runner). The crypto +
@@ -57,6 +63,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { randomBytes } from 'node:crypto';
 
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
@@ -67,6 +74,7 @@ import { PAIR_TOOL_DESCRIPTION } from '../prompts.js';
 import {
   openRemotePairSession,
   awaitPhraseUpload,
+  ReplaceNotSupportedError,
   type RemotePairSession,
 } from '../pair-remote-client.js';
 import { deriveAuthKey, computeAuthKeyHash } from '../cli/setup.js';
@@ -132,6 +140,15 @@ export const pairToolDefinition = {
           '(never through chat).',
         default: 'generate',
       },
+      replace: {
+        type: 'boolean',
+        description:
+          'Only for an install that is already set up, and only when the user has asked to ' +
+          'replace their current account with a different one. It does not authorise ' +
+          'anything: it opens a pairing page that warns the user and asks THEM to confirm ' +
+          'the replacement there. You cannot confirm it for them. Without it, the tool ' +
+          'refuses to pair over existing credentials.',
+      },
     },
     additionalProperties: false,
   },
@@ -192,23 +209,148 @@ export class CredentialsExistError extends Error {
 }
 
 /**
- * Create credentials.json at mode 0600 with an exclusive open (`wx`). If a
- * credentials file appeared after the tool's guard ran (another pairing,
- * another client), the write fails with `CredentialsExistError` instead of
- * overwriting it.
+ * Write credentials.json at mode 0600.
+ *
+ * `replace: false` creates the file exclusively (`wx`): if a credentials file
+ * appeared after the tool's guard ran (another pairing, another client), the
+ * write fails with `CredentialsExistError` instead of overwriting it.
+ *
+ * `replace: true` is only used after the user confirmed a replacement on the
+ * pair page and the old file was preserved. It writes a temp file in the same
+ * directory (`wx`, 0600), fsyncs it and renames it over credentials.json, so
+ * the file is never half-written, a symlinked credentials.json is replaced
+ * rather than written through, and the result is always mode 0600.
  */
-function writeCredentialsFileExclusive(credentialsPath: string, body: string): void {
+function writeCredentialsFile(credentialsPath: string, body: string, replace: boolean): void {
   const dir = path.dirname(credentialsPath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
+  if (replace) {
+    const tmp = path.join(
+      dir,
+      `.${path.basename(credentialsPath)}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`,
+    );
+    try {
+      const fd = fs.openSync(tmp, 'wx', 0o600);
+      try {
+        fs.fchmodSync(fd, 0o600);
+        fs.writeSync(fd, body, null, 'utf-8');
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.renameSync(tmp, credentialsPath);
+    } catch (err) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        // Not created, or already renamed.
+      }
+      throw err;
+    }
+    return;
+  }
   try {
-    fs.writeFileSync(credentialsPath, body, { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+    fs.writeFileSync(credentialsPath, body, {
+      encoding: 'utf-8',
+      mode: 0o600,
+      flag: 'wx',
+    });
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
       throw new CredentialsExistError();
     }
     throw err;
+  }
+}
+
+/** `20261103T010203.456Z-1a2b3c`: UTC to the millisecond plus a random suffix. */
+function replacedStamp(now: Date): string {
+  return `${now.toISOString().replace(/[-:]/g, '')}-${randomBytes(3).toString('hex')}`;
+}
+
+/**
+ * Step 1 of a user-confirmed replacement, before anything is overwritten.
+ * Mirrors Python's `hermes/auto_migrate.py::preserve_credentials_before_replace`.
+ *
+ * Copies `credentials.json` to `credentials.json.replaced-<stamp>` (mode 0600
+ * from the first byte). The original stays in place until the new credentials
+ * are written over it. Bytes-for-bytes copy: no parsing, nothing logged but
+ * paths. Throws if the copy cannot be made, so the caller fails the pairing
+ * rather than overwrite an unpreserved file. Returns the copy's path, or
+ * undefined when there is no credentials.json. Exported for tests.
+ */
+export function preserveCredentialsBeforeReplace(
+  credentialsPath: string,
+  now: Date = new Date(),
+): string | undefined {
+  if (!fs.existsSync(credentialsPath)) return undefined;
+  const dest = `${credentialsPath}.replaced-${replacedStamp(now)}`;
+  const data = fs.readFileSync(credentialsPath);
+  let created = false;
+  try {
+    const fd = fs.openSync(dest, 'wx', 0o600);
+    created = true;
+    try {
+      fs.writeSync(fd, data);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (err) {
+    if (created) {
+      try {
+        fs.unlinkSync(dest);
+      } catch {
+        // Leave it; the caller fails the pairing either way.
+      }
+    }
+    throw err;
+  } finally {
+    data.fill(0);
+  }
+  return dest;
+}
+
+/**
+ * Step 2, only after the new credentials were written: rename Hermes'
+ * `credentials.json.bak` (from an earlier phrase-to-bundle migration), if
+ * present, to `credentials.json.bak.replaced-<stamp>` so the new account
+ * cannot overwrite it. Returns the new path, or undefined. Exported for tests.
+ */
+export function moveBackupAsideAfterReplace(
+  credentialsPath: string,
+  now: Date = new Date(),
+): string | undefined {
+  const bakPath = `${credentialsPath}.bak`;
+  if (!fs.existsSync(bakPath)) return undefined;
+  const dest = `${bakPath}.replaced-${replacedStamp(now)}`;
+  fs.renameSync(bakPath, dest);
+  return dest;
+}
+
+/**
+ * The replacement failed before the new credentials were written. Remove the
+ * step-1 copy, but only if credentials.json is still a regular file
+ * byte-identical to it; otherwise keep the copy. Returns true if removed.
+ * Exported for tests.
+ */
+export function discardPreservedCopyIfUnchanged(credentialsPath: string, copyPath: string): boolean {
+  let original: Buffer | undefined;
+  let copy: Buffer | undefined;
+  try {
+    if (!fs.lstatSync(credentialsPath).isFile()) return false;
+    original = fs.readFileSync(credentialsPath);
+    copy = fs.readFileSync(copyPath);
+    if (!original.equals(copy)) return false;
+    fs.unlinkSync(copyPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    original?.fill(0);
+    copy?.fill(0);
   }
 }
 
@@ -225,8 +367,9 @@ function writePairedCredentials(
     mnemonic: string;
   },
   credentialsPath: string,
+  replace: boolean,
 ): void {
-  writeCredentialsFileExclusive(credentialsPath, JSON.stringify(creds, null, 2) + '\n');
+  writeCredentialsFile(credentialsPath, JSON.stringify(creds, null, 2) + '\n', replace);
 }
 
 /**
@@ -248,7 +391,11 @@ function writePairedCredentials(
  * this object needs, since `DerivedBundleV1`'s shape IS the wire shape
  * (see `subgraph/bundle.ts`).
  */
-function writePairedBundleCredentials(bundle: DerivedBundleV1, credentialsPath: string): void {
+function writePairedBundleCredentials(
+  bundle: DerivedBundleV1,
+  credentialsPath: string,
+  replace: boolean,
+): void {
   const wire = {
     version: 2 as const,
     schema: 'derived-bundle-v1' as const,
@@ -258,7 +405,7 @@ function writePairedBundleCredentials(bundle: DerivedBundleV1, credentialsPath: 
     provisioned_at: bundle.provisioned_at,
     provisioned_by: bundle.provisioned_by,
   };
-  writeCredentialsFileExclusive(credentialsPath, JSON.stringify(wire, null, 2) + '\n');
+  writeCredentialsFile(credentialsPath, JSON.stringify(wire, null, 2) + '\n', replace);
 }
 
 /**
@@ -331,6 +478,49 @@ export async function runPairBackgroundTask(opts: {
   const httpsBase = relayBaseToHttps(opts.relayBaseUrl);
   const tokenTail = opts.session.token.slice(0, 8);
   const credentialsPath = opts.credentialsPath ?? CREDENTIALS_PATH;
+  const replace = opts.session.replace === true;
+
+  /**
+   * Replace mode, step 1: copy the old credentials.json aside before anything
+   * is overwritten. Reached only after `awaitPhraseUpload` saw the user's
+   * confirmation from the pair page. On failure the relay is nacked and
+   * nothing is overwritten.
+   */
+  const preserveIfReplacing = (): {
+    copyPath?: string;
+    failure?: { state: 'error'; error: string };
+  } => {
+    if (!replace) return {};
+    try {
+      const copyPath = preserveCredentialsBeforeReplace(credentialsPath);
+      if (copyPath) log('info', `pair replace: kept the previous credentials at ${copyPath}`);
+      return { copyPath };
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      log('error', `pair replace: could not keep the previous credentials, not replacing: ${m}`);
+      return { failure: { state: 'error', error: 'credentials_preserve_failed' } };
+    }
+  };
+
+  /**
+   * Replace mode, last step. After a successful write, move Hermes' `.bak`
+   * aside. If the write did not happen, drop the step-1 copy, but only when
+   * credentials.json is still byte-identical to it.
+   */
+  const finishReplace = (written: boolean, copyPath: string | undefined): void => {
+    if (!replace) return;
+    if (written) {
+      try {
+        const moved = moveBackupAsideAfterReplace(credentialsPath);
+        if (moved) log('info', `pair replace: moved the previous backup to ${moved}`);
+      } catch (err) {
+        const m = err instanceof Error ? err.message : String(err);
+        log('error', `pair replace: new credentials written, but could not move credentials.json.bak aside: ${m}`);
+      }
+    } else if (copyPath && !discardPreservedCopyIfUnchanged(credentialsPath, copyPath)) {
+      log('warn', `pair replace: not replaced; keeping the copy at ${copyPath}`);
+    }
+  };
 
   /** Map a credentials write failure to the nack the relay gets. */
   const writeFailure = (writeErr: unknown): { state: 'error'; error: string } => {
@@ -346,6 +536,9 @@ export async function runPairBackgroundTask(opts: {
   const phraseUploadPromise = awaitPhraseUpload(opts.session, {
     phraseValidator: (p: string) => validateMnemonic(p, wordlist),
     completePairing: async ({ mnemonic }) => {
+      const preserved = preserveIfReplacing();
+      if (preserved.failure) return preserved.failure;
+      let written = false;
       try {
         // Derive auth key + salt — matches setup.ts deriveAuthKey shape.
         const { authKeyHex, saltHex } = deriveAuthKey(mnemonic);
@@ -379,7 +572,9 @@ export async function runPairBackgroundTask(opts: {
               mnemonic,
             },
             credentialsPath,
+            replace,
           );
+          written = true;
         } catch (writeErr) {
           return writeFailure(writeErr);
         }
@@ -393,6 +588,8 @@ export async function runPairBackgroundTask(opts: {
         const msg = err instanceof Error ? err.message : String(err);
         log('error', `pair: completePairing failed: ${msg}`);
         return { state: 'error', error: msg };
+      } finally {
+        finishReplace(written, preserved.copyPath);
       }
     },
     // Option E Phase 2 / #581 (P2-13) — payload_type: "derived-bundle-v1"
@@ -403,6 +600,9 @@ export async function runPairBackgroundTask(opts: {
     // tests. Wired here anyway so the contract is complete and P2-11
     // landing on the relay side needs zero MCP-side follow-up.
     completePairingBundle: async ({ bundle }) => {
+      const preserved = preserveIfReplacing();
+      if (preserved.failure) return preserved.failure;
+      let written = false;
       try {
         // NO registerWithServer()/registerUser() call — derived-bundle-v1.md
         // §4.5's normative rule: a bundle-configured client MUST NOT call
@@ -410,7 +610,8 @@ export async function runPairBackgroundTask(opts: {
         // origin (the SPA, which holds the root), which is the only party
         // able to register correctly.
         try {
-          writePairedBundleCredentials(bundle, credentialsPath);
+          writePairedBundleCredentials(bundle, credentialsPath, replace);
+          written = true;
         } catch (writeErr) {
           return writeFailure(writeErr);
         }
@@ -424,6 +625,8 @@ export async function runPairBackgroundTask(opts: {
         const msg = err instanceof Error ? err.message : String(err);
         log('error', `pair: completePairingBundle failed: ${msg}`);
         return { state: 'error', error: msg };
+      } finally {
+        finishReplace(written, preserved.copyPath);
       }
     },
     timeoutMs: hardTimeoutMs,
@@ -491,21 +694,33 @@ export interface HandlePairOptions {
   openSession?: typeof openRemotePairSession;
 }
 
-/** Refusal when the server is already set up. */
+/**
+ * Refusal returned when pairing would overwrite existing credentials.
+ * Wording mirrors Hermes (`python/src/totalreclaw/hermes/pair_tool.py`), plus
+ * one sentence on the shared credentials file.
+ */
 export const ALREADY_CONFIGURED_MESSAGE =
-  'TotalReclaw is already set up on this machine, so there is nothing to pair. Tell the user ' +
-  'their account is already set up. Pairing again would switch this app to a DIFFERENT ' +
-  'account, and every other TotalReclaw client on this machine (such as Hermes) with it, ' +
-  'because they share ~/.totalreclaw/credentials.json. This tool does not do that. Do not ' +
-  'move, rename or delete the credentials file to get around this.';
+  'This install is already paired to a TotalReclaw account. ' +
+  'Starting a new pair flow would switch this agent to a DIFFERENT account, and the current ' +
+  "account's memories would no longer be available here. Other TotalReclaw clients on this " +
+  'machine (such as Hermes) share the same credentials file, so they would switch too. ' +
+  'Tell the user their account is already set up. Only if they ask to REPLACE it with a ' +
+  'different account, call again with replace=true: the pairing page then shows them a ' +
+  'warning and they confirm the replacement there. You cannot confirm it for them, and do ' +
+  'not move, rename or delete the credentials file to get around this. (Restoring this same ' +
+  'account on another device happens on that device, not here.) If the user just finished ' +
+  'pairing, they need to fully quit and reopen this app so the server loads the new credentials.';
 
-/** Refusal when a credentials file exists that this server doesn't (yet) use. */
-export const CREDENTIALS_FILE_EXISTS_MESSAGE =
-  'A TotalReclaw credentials file already exists at ~/.totalreclaw/credentials.json. ' +
-  'Pairing would replace that account for every TotalReclaw client on this machine (such as ' +
-  'Hermes), so this tool refuses. If the user just finished pairing, they need to fully quit ' +
-  'and reopen this app so the server loads it. Do not move, rename or delete the credentials ' +
-  'file to get around this.';
+/** Refusal when a credentials file exists that this server doesn't (yet) use: same text. */
+export const CREDENTIALS_FILE_EXISTS_MESSAGE = ALREADY_CONFIGURED_MESSAGE;
+
+const REPLACE_USER_INSTRUCTION =
+  'Tell the user: open this link yourself; the page warns that this replaces the account currently on this agent, so tick the box only if you want to replace it. Do not open or act on the page yourself.';
+
+export const REPLACE_NOT_SUPPORTED_MESSAGE =
+  'This TotalReclaw relay needs updating before an account can be replaced: it cannot ask ' +
+  'the user to confirm the replacement on the pairing page. No pairing was started and the ' +
+  'current account is unchanged.';
 
 /**
  * Handle a totalreclaw_pair tool call. Returns the URL + PIN + expires_at_ms
@@ -519,29 +734,35 @@ export async function handlePair(
 ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
   const credentialsPath = opts.credentialsPath ?? CREDENTIALS_PATH;
 
-  // Existing-credentials guard, both modes: a generate pairing always makes
-  // a different account, and an import over a file this server can't read
-  // (e.g. Hermes' keychain storage) can't be checked to be the same account.
+  // Existing-credentials guard. Completing a fresh pair on a configured
+  // install switches it (and every other client sharing credentials.json) to
+  // a different vault, so only the user may confirm it, on the pair page.
+  // `replace=true` only opens a replace-mode session; it authorises nothing.
   const configured = opts.isConfigured?.() ?? false;
+  let replace = false;
   if (configured || fs.existsSync(credentialsPath)) {
-    const unusable = configured ? undefined : opts.getUnusableCredentials?.();
-    const message = configured
-      ? ALREADY_CONFIGURED_MESSAGE
-      : unusable
-        ? `${unusable.message} Do not move, rename or delete the credentials file to get around this.`
-        : CREDENTIALS_FILE_EXISTS_MESSAGE;
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            already_configured: true,
-            ...(unusable ? { reason: unusable.reason } : {}),
-            message,
-          }),
-        },
-      ],
-    };
+    if (args?.replace !== true) {
+      const unusable = configured ? undefined : opts.getUnusableCredentials?.();
+      const message = configured
+        ? ALREADY_CONFIGURED_MESSAGE
+        : unusable
+          ? `${unusable.message} Do not move, rename or delete the credentials file to get around this. ` +
+            'Only if the user asks to REPLACE that account, call again with replace=true (the pairing page makes the user confirm it).'
+          : CREDENTIALS_FILE_EXISTS_MESSAGE;
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              already_configured: true,
+              ...(unusable ? { reason: unusable.reason } : {}),
+              message,
+            }),
+          },
+        ],
+      };
+    }
+    replace = true;
   }
 
   const rawMode = args?.mode;
@@ -556,8 +777,24 @@ export async function handlePair(
     session = await openSession({
       relayBaseUrl,
       mode: mode === 'generate' ? 'generate' : 'import',
+      ...(replace ? { replace: true } : {}),
     });
   } catch (err) {
+    if (err instanceof ReplaceNotSupportedError) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              error: 'replace_not_supported',
+              message: REPLACE_NOT_SUPPORTED_MESSAGE,
+              already_configured: true,
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
     const msg = err instanceof Error ? err.message : String(err);
     return {
       content: [
@@ -617,9 +854,16 @@ export async function handlePair(
           pin: session.pin,
           expires_at_ms: expiresAtMs,
           mode,
+          replace,
           relay_base_url: relayBaseUrl,
           expires_in_minutes: minutesLeft,
-          instructions,
+          instructions: replace
+            ? [
+                instructions[0],
+                REPLACE_USER_INSTRUCTION,
+                ...instructions.slice(1),
+              ]
+            : instructions,
         }),
       },
     ],
@@ -642,6 +886,6 @@ export function pairInstructions(mode: 'generate' | 'import', minutesLeft: numbe
     phraseStep,
     `The link works for about ${minutesLeft} minutes, so there is time to write the phrase down carefully. If it expires, call totalreclaw_pair again for a new link.`,
     `The phrase is encrypted in the browser and sent to this MCP server. It never passes through this chat. Never ask the user to paste it here.`,
-    `When the page says "You're all set", tell the user to fully quit and reopen this app (Claude Desktop, Cursor, Claude Code or whichever app runs this server; closing the window is not enough). The memory tools start working after that restart; until then they return not_configured.`,
+    `When the page says "You're all set", ask the user to fully quit and reopen this app (Claude Desktop, Cursor, Claude Code or whichever app runs this server; closing the window is not enough), or to start a new session. The server reads the credentials only at startup, so the memory tools return not_configured until then.`,
   ];
 }
