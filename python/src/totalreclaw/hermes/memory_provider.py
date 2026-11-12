@@ -287,7 +287,7 @@ def _mirror_remember(state: "PluginState", args: Dict[str, Any]) -> bool:
     from .tools import remember as _remember
     from totalreclaw.agent.loop_runner import run_sync
 
-    result = _parse_tool_result(run_sync(_remember(args, state)))
+    result = _parse_tool_result(run_sync(_remember(args, state, _from_mirror=True)))
     if result.get("error"):
         logger.warning("memory mirror: remember failed: %s", result["error"])
         return False
@@ -302,7 +302,7 @@ def _mirror_forget(state: "PluginState", fact_ids: List[str]) -> int:
 
     forgotten = 0
     for fact_id in fact_ids:
-        result = _parse_tool_result(run_sync(_forget({"fact_id": fact_id}, state)))
+        result = _parse_tool_result(run_sync(_forget({"fact_id": fact_id}, state, _from_mirror=True)))
         if result.get("error") or not result.get("deleted", True):
             logger.warning(
                 "memory mirror: forget %s failed: %s",
@@ -751,6 +751,20 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         # span a legacy caller sent (never a snapshot key).
         exact_previous = bool(meta.get("previous_content"))
         previous = str(meta.get("previous_content") or meta.get("old_text") or "").strip()
+
+        # PRD-04 DEP-4: this mirror is an automatic write (Hermes' built-in
+        # memory tool / background review, not an explicit TotalReclaw
+        # remember), so it follows the auto-extraction rule — only ``allow``
+        # text is mirrored; block and flag are dropped (category-only log).
+        if action != "remove" and text:
+            from totalreclaw.pii import auto_storable
+
+            if not auto_storable(text):
+                logger.info(
+                    "TotalReclaw on_memory_write mirror skipped: sensitive content (action=%s)",
+                    action,
+                )
+                return
 
         if action == "add":
             if not text:

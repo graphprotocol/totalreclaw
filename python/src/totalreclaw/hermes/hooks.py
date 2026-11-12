@@ -27,43 +27,58 @@ from totalreclaw.agent.pending_drain import drain_pending, has_pending
 from totalreclaw.agent.recall import auto_recall
 from totalreclaw.agent.extraction import extract_facts_llm, extract_facts_heuristic
 from totalreclaw.agent.state import _session_idle_seconds
-from totalreclaw.relay import _HARDCODED_DEFAULT_URL
+from totalreclaw.relay import _default_relay_url
 
 logger = logging.getLogger(__name__)
 
 
-# 2.3.3-rc.1 (PR #165) — RC builds bake the staging URL as default. When
-# a real user installs a stable wheel they should never see this banner;
-# when a QA / maintainer installs an RC wheel they MUST see it so they
-# don't mistake the staging environment for production. Fires exactly
-# once per session via the ``_totalreclaw_rc_banner_shown`` latch.
-_RC_STAGING_BANNER = (
-    "## TotalReclaw — RC / staging build\n"
-    "WARNING: TotalReclaw is running in RC/staging mode against "
-    "api-staging.totalreclaw.xyz.\n"
-    "Staging has no SLA + may be wiped between QA cycles. Do NOT use "
-    "this build for real data.\n"
-    "Install the stable release for production: "
-    "`pip install totalreclaw` (no --pre)."
+# Staging-mode banner. Same condition as the OpenClaw plugin's banner
+# (``skill/plugin/index.ts``, "TotalReclaw is running in staging mode"): it
+# fires whenever the EFFECTIVE relay URL points at staging, whether that URL
+# came from ``TOTALRECLAW_SERVER_URL`` or from a wrongly bound default. Setting
+# the env var does not suppress it.
+#
+# History: PR #165 (2.3.3-rc.1) added this banner for RC wheels that baked the
+# staging URL as their default, and suppressed it whenever
+# ``TOTALRECLAW_SERVER_URL`` was set. Since the F flip (2.3.12-rc.1) every
+# wheel defaults to production, so that condition could never be true and
+# the banner never fired, not even for QA runs pinned to staging.
+#
+# The wording follows the plugin's banner with one deliberate difference: it
+# never spells out the production host. QA runs always pin staging, so this
+# text shows up in every QA session, and the Hermes QA harness treats any
+# mention of the production host in its logs as a production contact.
+#
+# Fires exactly once per process via the ``_totalreclaw_staging_banner_shown``
+# latch.
+_STAGING_HOST = "api-staging.totalreclaw.xyz"
+_STAGING_BANNER = (
+    "## \u26a0\ufe0f TotalReclaw is running in staging mode\n\n"
+    "This session is bound to `api-staging.totalreclaw.xyz`. Staging has "
+    "**no SLA** and may be wiped between QA cycles. Do **NOT** use it for "
+    "real data.\n\n"
+    "The default relay is production. To return to production, unset "
+    "`TOTALRECLAW_SERVER_URL`. To stay on staging, leave it set to "
+    "`https://api-staging.totalreclaw.xyz`."
 )
 
 
-def _rc_staging_banner_active() -> bool:
-    """Return True iff the bundled default URL points at staging AND the
-    user hasn't overridden via ``TOTALRECLAW_SERVER_URL``.
+def _effective_relay_url(state: Optional["PluginState"] = None) -> str:
+    """Return the relay URL this plugin's client talks to.
 
-    Reads ``_HARDCODED_DEFAULT_URL`` directly (not ``_default_relay_url``)
-    so the env-override check is explicit + isolated from the default
-    resolution path. The build-time injection in
-    ``.github/workflows/publish-python-client.yml`` rewrites the
-    constant to the production URL for stable wheels, so this returns
-    False on stable installs even with no env var set.
+    Mirrors ``AgentState``'s own resolution (``state._server_url`` when set,
+    else ``relay._default_relay_url()``, which is ``TOTALRECLAW_SERVER_URL``
+    or the built-in production default). Evaluated at call time so an env
+    change after import takes effect.
     """
-    if "api-staging.totalreclaw.xyz" not in _HARDCODED_DEFAULT_URL:
-        return False
-    if os.environ.get("TOTALRECLAW_SERVER_URL"):
-        return False
-    return True
+    explicit = getattr(state, "_server_url", None) if state is not None else None
+    return explicit or _default_relay_url()
+
+
+def _staging_banner_active(state: Optional["PluginState"] = None) -> bool:
+    """Return True iff the effective relay URL points at the staging relay."""
+    return _STAGING_HOST in _effective_relay_url(state).lower()
+
 
 #: Bug #6 + 2.3.7rc3: when the plugin is installed + enabled but the
 #: user hasn't completed pairing (no ``credentials.json`` on disk),
@@ -443,22 +458,23 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     if hasattr(state, "_totalreclaw_setup_nudge_shown"):
         state._totalreclaw_setup_nudge_shown = False
 
-    # 2.3.3-rc.1 (PR #165) — emit the RC/staging banner exactly once per
-    # session when the wheel is RC AND the user hasn't overridden the
-    # server URL. Surfaced via the existing ``quota_warning`` channel so
-    # the next ``pre_llm_call`` injects it as ``context``. Latch lives
-    # on the state instance so the banner is one-shot per process. Runs
-    # BEFORE the configured-only return below so unconfigured RC users
-    # see the banner on their first turn.
-    if _rc_staging_banner_active():
-        already_shown = getattr(state, "_totalreclaw_rc_banner_shown", False)
+    # Staging-mode banner: queued once per process whenever the effective
+    # relay URL points at staging (same condition as the OpenClaw plugin).
+    # Surfaced via the existing ``quota_warning`` channel so the next
+    # ``pre_llm_call`` injects it as ``context``. Latch lives on the state
+    # instance so the banner is one-shot per process. Runs BEFORE the
+    # configured-only return below so unconfigured users see the banner on
+    # their first turn.
+    if _staging_banner_active(state):
+        already_shown = getattr(state, "_totalreclaw_staging_banner_shown", False)
         if not already_shown:
-            state._totalreclaw_rc_banner_shown = True
-            state.set_quota_warning(_RC_STAGING_BANNER)
+            state._totalreclaw_staging_banner_shown = True
+            state.set_quota_warning(_STAGING_BANNER)
+            # Log the staging URL only; see the note above _STAGING_BANNER.
             logger.info(
-                "TotalReclaw: RC/staging banner queued for first turn "
-                "(default URL = %s).",
-                _HARDCODED_DEFAULT_URL,
+                "TotalReclaw: staging banner queued for first turn "
+                "(relay URL = %s).",
+                _effective_relay_url(state),
             )
 
     # Fix #191 — pick up creds written after plugin load. Cheap (one
@@ -513,13 +529,13 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
                 pct = int(used / limit * 100)
                 if tier == "pro":
                     nudge = (
-                        "Pro cap is 1,500 memories/month. The quota resets on "
-                        "the 1st of next month."
+                        f"Pro cap is {limit:,} memories/month. The quota "
+                        "resets on the 1st of next month."
                     )
                 else:
                     nudge = (
                         "Free cap is 250 memories/month. Upgrade to Pro for "
-                        "1,500 memories/month — run "
+                        "3,000 memories/month — run "
                         "totalreclaw_upgrade or visit "
                         "https://totalreclaw.xyz/pricing."
                     )

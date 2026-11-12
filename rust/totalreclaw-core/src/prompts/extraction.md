@@ -22,14 +22,21 @@ Rules:
    NOT user preferences or claims worth storing. Genuine preferences that
    happen to mention encryption (e.g., "I like using Signal because it's
    encrypted") ARE valid and should be extracted.
-7. A single request is not a trait. Asking about X once does not make "User is
+7. NEVER extract secrets or sensitive identifiers: passwords, PINs, API
+   keys, access tokens, private keys, wallet recovery phrases, payment card
+   numbers, bank account numbers (IBAN), or government ID numbers (passport,
+   national ID, tax number, social security number). Skip the value itself —
+   never copy, paraphrase, or partially mask it. A fact about the item that
+   omits the value is fine ("uses a hardware wallet", "has a Portuguese
+   passport"). Names, e-mail addresses and phone numbers are NOT secrets.
+8. A single request is not a trait. Asking about X once does not make "User is
    interested in X" a memory. Skip one-off tasks (a homework question, a
    translation, a piece of code to fix, a text to rewrite) unless the user says
    they belong to their job or to a project of theirs. Details of the user's own
    project, story, game, business or plan ARE worth storing, and so is anything
    a request reveals about the user (their job, studies, field, city), stated
    as a fact about the user.
-8. The assistant's words are not the user's. Do not extract the assistant's
+9. The assistant's words are not the user's. Do not extract the assistant's
    suggestions, recommendations, explanations, plans or guesses. If the user
    clearly accepts one ("yes, let's do that"), store the USER's decision with
    source:user. Never phrase the assistant's advice as something the user

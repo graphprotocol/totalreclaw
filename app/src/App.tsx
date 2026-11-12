@@ -25,12 +25,11 @@ export function App() {
     );
   }
 
-  // Escrow recovery (spa-passkey-unlock.md §6.3): a device with NO local
-  // VaultRecord routes to /unlock, not /bootstrap — the four-way choice
-  // there (recover with passkey / open a backup file / phrase / create new)
-  // is the right landing for a returning user, and "create a new vault"
-  // stays reachable from it. `/bootstrap` is now only reached explicitly,
-  // from that choice or a deep link.
+  // A device with NO local VaultRecord routes to /unlock, not /bootstrap.
+  // /unlock shows the front door there: "Create a vault" (primary, goes to
+  // /bootstrap with intent "create") and "I already have one" (the recovery
+  // choices from spa-passkey-unlock.md §6.3: passkey, backup file, phrase).
+  // `/bootstrap` is otherwise only reached by a deep link.
   const home = status === "unlocked" ? "/memory" : "/unlock";
 
   return (

@@ -57,6 +57,7 @@ pub mod wallet;
 
 pub use backend::{
     BatchStoreItem, MemoryCategory, MemoryEntry, TotalReclawConfig, TotalReclawMemory,
+    SERVER_URL_ENV,
 };
 
 // Re-export core Phase 2 KG types for downstream consumers.

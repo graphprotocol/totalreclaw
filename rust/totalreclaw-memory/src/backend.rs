@@ -28,6 +28,10 @@
 //! relay_url = "https://api.totalreclaw.xyz"
 //! ```
 //!
+//! `relay_url` is optional and defaults to production. The
+//! `TOTALRECLAW_SERVER_URL` env var, when set, overrides it (see
+//! [`SERVER_URL_ENV`]): the user's env always wins, only the default is fixed.
+//!
 //! ## Category Mapping (TotalReclaw -> ZeroClaw)
 //!
 //! ZeroClaw applies 7-day half-life decay to non-Core entries at retrieval time.
@@ -60,6 +64,33 @@ use totalreclaw_core::claims::{MemorySource, MemoryTypeV1};
 
 /// Default relay URL.
 const DEFAULT_RELAY_URL: &str = "https://api.totalreclaw.xyz";
+
+/// Env var that picks the relay, the same one every other TotalReclaw client
+/// reads. When set to a non-empty value it overrides
+/// [`TotalReclawConfig::relay_url`], which the host fills from its own config
+/// (ZeroClaw: `relay_url` under `[memory.totalreclaw]` in
+/// `~/.zeroclaw/config.toml`). The user's env always wins; only the default
+/// ([`DEFAULT_RELAY_URL`]) is fixed. QA pins staging with
+/// `TOTALRECLAW_SERVER_URL=https://api-staging.totalreclaw.xyz`.
+pub const SERVER_URL_ENV: &str = "TOTALRECLAW_SERVER_URL";
+
+/// Pick the relay URL: a non-empty `env_value` (the value of
+/// [`SERVER_URL_ENV`]) wins over the host-configured URL.
+///
+/// Pure, so the precedence rule is unit-testable without touching process
+/// env; [`relay_url_from_env`] supplies the real env value.
+fn resolve_relay_url(configured: &str, env_value: Option<&str>) -> String {
+    match env_value.map(str::trim) {
+        Some(url) if !url.is_empty() => url.to_string(),
+        _ => configured.to_string(),
+    }
+}
+
+/// [`resolve_relay_url`] with the current value of [`SERVER_URL_ENV`].
+fn relay_url_from_env(configured: &str) -> String {
+    let env_value = std::env::var(SERVER_URL_ENV).ok();
+    resolve_relay_url(configured, env_value.as_deref())
+}
 
 /// Gnosis mainnet chain id (Pro tier).
 const CHAIN_GNOSIS: u64 = 100;
@@ -194,7 +225,7 @@ fn category_from_source(source: &str) -> MemoryCategory {
 }
 
 /// Auto-recall top_k constant (after reranking). Matches all other clients.
-const AUTO_RECALL_TOP_K: usize = 8;
+const AUTO_RECALL_TOP_K: usize = 16;
 
 // ---------------------------------------------------------------------------
 // ZeroClaw-compatible types
@@ -267,6 +298,9 @@ pub struct TotalReclawConfig {
     pub mnemonic: String,
     pub embedding_mode: EmbeddingMode,
     pub embedding_dims: usize,
+    /// Relay URL from the host's config. [`TotalReclawMemory::new`] uses the
+    /// `TOTALRECLAW_SERVER_URL` env var instead when it is set (see
+    /// [`SERVER_URL_ENV`]).
     pub relay_url: String,
     pub is_test: bool,
 }
@@ -406,9 +440,19 @@ impl TotalReclawMemory {
         // See `initial_chain_id_from_cache` for the full cache→network precedence.
         let chain_id = initial_chain_id_from_cache();
 
+        // The user's TOTALRECLAW_SERVER_URL wins over the host-configured URL.
+        let relay_url = relay_url_from_env(&config.relay_url);
+        if relay_url != config.relay_url {
+            log::info!(
+                "totalreclaw-memory: {} overrides the configured relay_url; using {}",
+                SERVER_URL_ENV,
+                relay_url
+            );
+        }
+
         // Create relay client with wallet address
         let relay_config = RelayConfig {
-            relay_url: config.relay_url.clone(),
+            relay_url,
             auth_key_hex: auth_key_hex.clone(),
             wallet_address: wallet_address.clone(),
             is_test: config.is_test,
@@ -655,10 +699,10 @@ impl TotalReclawMemory {
         Ok(results)
     }
 
-    /// Auto-recall: search with the spec-mandated top_k=8.
+    /// Auto-recall: search with the spec-mandated top_k=16.
     ///
     /// Per the client-consistency spec, auto-recall at session start
-    /// uses the raw user message as query and returns top 8 after reranking.
+    /// uses the raw user message as query and returns top 16 after reranking.
     pub async fn auto_recall(&self, query: &str) -> Result<Vec<MemoryEntry>> {
         self.recall(query, AUTO_RECALL_TOP_K, None).await
     }
@@ -872,6 +916,70 @@ impl TotalReclawMemory {
     /// Upgrade to Pro tier -- returns Stripe checkout URL.
     pub async fn upgrade(&self) -> Result<String> {
         self.relay.create_checkout().await
+    }
+}
+
+#[cfg(test)]
+mod relay_url_tests {
+    use super::*;
+
+    // Placeholder hosts, not the real relays: the crate's publish-time URL
+    // guard rejects any quoted staging URL under src/, test modules included.
+    const CONFIGURED: &str = "https://relay.from-config.example";
+    const FROM_ENV: &str = "https://relay.from-env.example";
+
+    #[test]
+    fn env_value_overrides_configured_url() {
+        assert_eq!(resolve_relay_url(CONFIGURED, Some(FROM_ENV)), FROM_ENV);
+    }
+
+    #[test]
+    fn configured_url_used_when_env_unset() {
+        assert_eq!(resolve_relay_url(CONFIGURED, None), CONFIGURED);
+    }
+
+    #[test]
+    fn empty_or_blank_env_value_is_ignored() {
+        assert_eq!(resolve_relay_url(CONFIGURED, Some("")), CONFIGURED);
+        assert_eq!(resolve_relay_url(CONFIGURED, Some("   ")), CONFIGURED);
+    }
+
+    #[test]
+    fn env_value_is_trimmed() {
+        assert_eq!(
+            resolve_relay_url(CONFIGURED, Some("  https://x.example \n")),
+            "https://x.example"
+        );
+    }
+
+    #[test]
+    fn default_config_stays_on_production_without_env() {
+        // The built-in default is unchanged: production.
+        let cfg = TotalReclawConfig::default();
+        assert_eq!(cfg.relay_url, "https://api.totalreclaw.xyz");
+        assert_eq!(resolve_relay_url(&cfg.relay_url, None), "https://api.totalreclaw.xyz");
+    }
+
+    /// The only test in this crate that touches `TOTALRECLAW_SERVER_URL`, so
+    /// mutating process env here cannot race another test. Restores the
+    /// previous value on exit. No network: it only resolves a string.
+    #[test]
+    fn relay_url_from_env_reads_server_url_env() {
+        let saved = std::env::var_os(SERVER_URL_ENV);
+
+        std::env::set_var(SERVER_URL_ENV, FROM_ENV);
+        let with_env = relay_url_from_env(CONFIGURED);
+
+        std::env::remove_var(SERVER_URL_ENV);
+        let without_env = relay_url_from_env(CONFIGURED);
+
+        match saved {
+            Some(v) => std::env::set_var(SERVER_URL_ENV, v),
+            None => std::env::remove_var(SERVER_URL_ENV),
+        }
+
+        assert_eq!(with_env, FROM_ENV);
+        assert_eq!(without_env, CONFIGURED);
     }
 }
 

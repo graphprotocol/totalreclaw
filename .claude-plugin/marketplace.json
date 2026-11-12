@@ -1,0 +1,17 @@
+{
+  "name": "totalreclaw",
+  "description": "TotalReclaw: end-to-end encrypted memory for AI agents.",
+  "owner": {
+    "name": "TotalReclaw Team",
+    "url": "https://totalreclaw.xyz"
+  },
+  "plugins": [
+    {
+      "name": "totalreclaw",
+      "source": "./plugins/totalreclaw",
+      "description": "End-to-end encrypted memory for Claude: a skill that teaches Claude when to recall and store, plus the TotalReclaw memory server.",
+      "category": "memory",
+      "tags": ["memory", "e2ee", "privacy"]
+    }
+  ]
+}

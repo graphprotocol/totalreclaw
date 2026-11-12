@@ -35,6 +35,18 @@ import {
   invalidateMemoryContextCache,
 } from './resources/index.js';
 import { setOnRememberCallback } from './tools/remember.js';
+import { createRequire } from 'node:module';
+
+/** Package version, read from package.json (src/ and dist/ are both one level below it). */
+export const SERVER_VERSION: string = (() => {
+  try {
+    const req = createRequire(__filename);
+    const v = (req('../package.json') as { version?: unknown }).version;
+    return typeof v === 'string' && v ? v : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
 
 /** Dependencies the server wiring needs from the entry point. */
 export interface ServerSetupDeps {
@@ -54,7 +66,7 @@ export interface ServerSetupDeps {
  */
 export function createTotalReclawServer(deps: ServerSetupDeps): Server {
   const server = new Server(
-    { name: 'totalreclaw', version: '1.0.0' },
+    { name: 'totalreclaw', version: SERVER_VERSION },
     {
       capabilities: {
         tools: {},

@@ -338,7 +338,7 @@ function recencyScore(createdAt: number): number {
 export function applyMMR(
   candidates: RerankerCandidate[],
   lambda: number = 0.7,
-  topK: number = 8,
+  topK: number = 16,
 ): RerankerCandidate[] {
   if (candidates.length === 0) return [];
   if (candidates.length <= 1) return candidates.slice(0, topK);
@@ -406,7 +406,7 @@ export function rerank(
   query: string,
   queryEmbedding: number[],
   candidates: RerankerCandidate[],
-  topK: number = 8,
+  topK: number = 16,
   weights?: Partial<RankingWeights>,
   applySourceWeights: boolean = false,
 ): RerankerResult[] {

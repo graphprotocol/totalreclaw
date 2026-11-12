@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Optional
 
 from ..relay import ReadBlockState, RelayReadBlocked
 from ..agent.read_block import read_block_tool_payload
+from ..pii import log_label, parse_allow_sensitive, screen_explicit
 
 if TYPE_CHECKING:
     from .state import PluginState
@@ -151,10 +152,20 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
     if not text:
         return json.dumps({"error": "No text provided"})
 
+    # PRD-04 DEP-4 block-and-tell. First gate, so a blocked value never
+    # reaches a log line below; later logs use ``log_text`` (redacted unless
+    # the filter allowed the text).
+    pii_result, pii_notice = screen_explicit(
+        text, parse_allow_sensitive(args.get("allow_sensitive"))
+    )
+    if pii_notice is not None:
+        return json.dumps(pii_notice)
+    log_text = log_label(text, pii_result)
+
     if _is_likely_agent_self_directive(text):
         logger.warning(
             "totalreclaw_remember blocked agent self-directive: %r",
-            text[:200],
+            log_text,
         )
         return json.dumps({
             "stored": False,
@@ -179,7 +190,7 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
         state.increment_suppressed_writes()
         logger.info(
             "totalreclaw_remember suppressed (duplicate of pending auto-extract): %r",
-            text[:200],
+            log_text,
         )
         return json.dumps({
             "stored": False,
@@ -219,8 +230,24 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
             from totalreclaw.embedding import get_embedding
             embedding = get_embedding(text)
         except Exception as e:
-            logger.debug("embed failed for remember %r: %s", text[:40], e)
+            logger.debug("embed failed for remember %r: %s", log_label(text, pii_result, 40), e)
             # degrade: store without embedding (search falls back to blind indices)
+
+        if kwargs.get("_from_mirror"):
+            # A copy of a Hermes built-in memory write (its memory tool or
+            # background review, which can re-add a line from an old
+            # transcript). Not an explicit request: never re-create a fact
+            # the user forgot (#605).
+            from totalreclaw.agent.lifecycle import _forget_ledger, _restates_forgotten
+
+            why = _restates_forgotten(text, embedding, _forget_ledger(client))
+            if why:
+                logger.info("memory mirror: not storing entry: %s", why)
+                return json.dumps({"stored": False, "skipped": "forgotten"})
+        else:
+            # An explicit remember brings a forgotten fact back: drop it from
+            # the forget ledger so auto-extraction may store it again (#605).
+            _release_forgotten(client, text, embedding)
 
         fact_id = await client.remember(
             text,
@@ -242,6 +269,20 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
     except Exception as e:
         logger.error("totalreclaw_remember failed: %s", e)
         return json.dumps({"error": str(e)})
+
+
+def _release_forgotten(client, text: str, embedding) -> None:
+    """Best-effort: drop forget-ledger entries that *text* restates."""
+    from totalreclaw.forget_guard import ForgetLedger
+
+    try:
+        ledger = getattr(client, "forget_ledger", None)
+        if isinstance(ledger, ForgetLedger):
+            released = ledger.release(text, embedding)
+            if released:
+                logger.info("forget ledger: explicit remember released %d entr%s", released, "y" if released == 1 else "ies")
+    except Exception as e:
+        logger.debug("forget ledger: release failed: %s", type(e).__name__)
 
 
 async def recall(args: dict, state: "PluginState", **kwargs) -> str:
@@ -320,7 +361,13 @@ async def forget(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": "No fact_id provided"})
 
     try:
-        result = await client.forget(fact_id)
+        # A user-asked forget also goes into the encrypted forget ledger, so
+        # later auto-extraction doesn't re-create it (#605). The memory
+        # mirror's forget (a USER.md line was edited, i.e. replaced) passes
+        # ``_from_mirror`` and stays out of the ledger.
+        result = await client.forget(
+            fact_id, suppress_reextraction=not kwargs.get("_from_mirror", False)
+        )
         return json.dumps({"deleted": result["success"], "fact_id": fact_id})
     except Exception as e:
         logger.error("totalreclaw_forget failed: %s", e)

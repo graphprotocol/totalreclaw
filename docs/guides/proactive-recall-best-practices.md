@@ -11,7 +11,7 @@ TotalReclaw's automatic recall is **narrower than most agents assume** — knowi
 
 Hermes wires TotalReclaw through lifecycle hooks in `totalreclaw/hermes/hooks.py`:
 
-- **`pre_llm_call` — auto-recall, first turn only.** On the *first* turn of a session (`is_first_turn`), the plugin runs `auto_recall(user_message, state, top_k=8)` and injects the result into that turn's context as a `## Relevant memories from TotalReclaw` block. The query is the user's **first message, verbatim**.
+- **`pre_llm_call` — auto-recall, first turn only.** On the *first* turn of a session (`is_first_turn`), the plugin runs `auto_recall(user_message, state, top_k=16)` and injects the result into that turn's context as a `## Relevant memories from TotalReclaw` block. The query is the user's **first message, verbatim**.
 - **`post_llm_call` — auto-extraction, every N turns.** This writes memories (`turn_count % extraction_interval == 0`); it does **not** read or inject anything. Extraction ≠ recall — don't confuse the two.
 
 There is **no per-turn automatic recall.** After turn 1, memories enter the conversation only when the agent explicitly calls `totalreclaw_recall`. There is no background prefetch, no recall cache, and no `<memory-context>` refresh on later turns.
@@ -26,7 +26,7 @@ No lifecycle hooks at all — the host agent must call `totalreclaw_recall` expl
 
 ### What every path shares
 
-Recall is **query-driven**: it searches for memories semantically related to whatever text it was handed. The retrieval pipeline (BM25 + cosine + RRF + source-weighted rerank, `top_k` default 8/16 by tier) is sharp on specific queries, and it has a **server-side broadened fallback** — when the trapdoor search returns zero hits for a vague query, the relay returns the owner's recent facts instead. But nothing decides *for* the agent that a recall is worth doing on turn 5, or that a standing directive should be loaded before the user re-triggers it.
+Recall is **query-driven**: it searches for memories semantically related to whatever text it was handed. The retrieval pipeline (BM25 + cosine + RRF + source-weighted rerank, `top_k` default 16 in every client) is sharp on specific queries, and it has a **server-side broadened fallback** — when the trapdoor search returns zero hits for a vague query, the relay returns the owner's recent facts instead. But nothing decides *for* the agent that a recall is worth doing on turn 5, or that a standing directive should be loaded before the user re-triggers it.
 
 ## The gaps automatic recall leaves
 

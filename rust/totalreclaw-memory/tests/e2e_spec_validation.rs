@@ -7,7 +7,7 @@
 //! - Dynamic candidate pool is used in search
 //! - Store-time dedup prevents duplicates
 //! - Importance normalization (decayScore = importance/10) persists correctly
-//! - Auto-recall returns top 8 results
+//! - Auto-recall returns top 16 results
 //!
 //! Run: cargo test --test e2e_spec_validation -- --ignored --nocapture
 

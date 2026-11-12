@@ -17,10 +17,15 @@ import {
   parseDebriefResponse,
   handleSupport,
   handleAccount,
+  accountContextFromState,
+  accountUnavailableResponse,
   handlePair,
 } from './tools/index.js';
 import { getLastBillingResponse } from './tools/status.js';
 import type { ToolContext, ToolResponse } from './tools/types.js';
+import { isQuotaExceededError, rethrowIfQuota, shortErrorMessage, logWriteError } from './tools/write-errors.js';
+import { pickMemoryId } from './tools/helpers.js';
+import { classifyForgetTarget, forgetNotFoundResponse, forgetLookupFailedResponse } from './tools/forget.js';
 import {
   findNearDuplicate,
   shouldSupersede,
@@ -35,6 +40,7 @@ import {
   invalidateMemoryContextCache,
 } from './resources/index.js';
 import { createTotalReclawServer } from './server-setup.js';
+import { buildRecallResponse } from './recall-format.js';
 import {
   createCallToolHandler,
   type HandlerBundle,
@@ -71,16 +77,22 @@ import {
 import {
   resolveChainConfig,
   buildSubgraphOverrides,
-  fetchChainConfig,
+  fetchChainConfigWithRetry,
+  ensureWriteChainResolved,
   assertDataEdgeResolvable,
+  STARTUP_BILLING_RETRY,
+  WRITE_BILLING_RETRY,
+  type FetchedChainConfig,
 } from './subgraph/chain-config.js';
 import {
   resolveManagedCredential,
   isV2BundleCredentialsFile,
+  UnsupportedCredentialsError,
   type ResolvedCredential,
 } from './subgraph/credentials.js';
+import type { UnusableCredentials } from './dispatch.js';
 import { bundleVaultToBuffers, redactedBundleSummary, type DerivedBundleV1 } from './subgraph/bundle.js';
-import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, fetchFactById } from './subgraph/search.js';
+import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, fetchFactById, fetchFactForForget } from './subgraph/search.js';
 import { confirmIndexed } from './subgraph/confirm-indexed.js';
 import {
   decodeEmbeddingUniversal,
@@ -179,6 +191,7 @@ export { getSessionId };
 
 // ── Client identification ──────────────────────────────────────────────────
 import { setClientId, getClientId } from './client-id.js';
+import { getRecallTopK, setServerRecallTopK } from './recall-top-k.js';
 let clientIdentifierResolved = false;
 
 /**
@@ -239,6 +252,14 @@ function resolveMnemonic(): string | undefined {
 
 let currentMode: ServerMode = 'unconfigured';
 
+/**
+ * Set at startup when credentials.json exists but this server can't use it
+ * (OS-keychain-wrapped, or an unknown `version`). The server then runs
+ * unconfigured and says why on every tool call; `totalreclaw_pair` refuses
+ * to overwrite the file either way.
+ */
+let unusableCredentials: UnusableCredentials | undefined;
+
 // Store-time near-duplicate detection is always ON in v1.
 // The TOTALRECLAW_STORE_DEDUP env var was removed.
 const STORE_DEDUP_ENABLED = true;
@@ -279,6 +300,7 @@ function proactiveBillingFetch(state: SubgraphState): void {
           max_candidate_pool: features?.max_candidate_pool as number | undefined,
           checked_at: Date.now(),
         };
+        setServerRecallTopK(features?.recall_top_k);
       }
     })
     .catch(() => { /* best-effort */ })
@@ -310,9 +332,10 @@ interface SubgraphState {
    * Exactly one of `mnemonic` / `ownerPrivateKeyHex` is set (Option E Phase
    * 2 / #581, P2-13). `credentialKind` says which. A bundle-configured
    * state has NO mnemonic anywhere in the process (derived-bundle-v1.md
-   * §4.6 point 1) — `mnemonic` is `undefined`, not an empty string, so a
-   * stray `.split()` crashes loudly instead of silently hinting nothing
-   * (see `accountHandler` below, which reads this).
+   * §4.6 point 1) — `mnemonic` is `undefined`, not an empty string.
+   * No tool-output path may read `mnemonic` (#670: `accountHandler` used to
+   * hint its first/last words into model context; it now reads only
+   * `credentialKind`).
    */
   credentialKind: 'mnemonic' | 'bundle';
   mnemonic?: string;
@@ -338,6 +361,13 @@ interface SubgraphState {
   chainId: number;
   /** DataEdge contract — resolved verbatim from billing data_edge_address (#439). Undefined ⇒ env/default. */
   dataEdgeAddress?: string;
+  /**
+   * #689: true once a billing lookup succeeded (or TOTALRECLAW_DATA_EDGE_ADDRESS
+   * is set). While false, `writeConfigFor` re-runs the lookup before any
+   * write and fails the write if it still can't resolve — it never sends a
+   * write to the production default DataEdge.
+   */
+  chainResolved: boolean;
 }
 
 /**
@@ -355,7 +385,51 @@ function stateWriteOverrides(state: SubgraphState): Partial<SubgraphStoreConfig>
     walletAddress: state.smartAccountAddress,
     chainId: state.chainId,
     dataEdgeAddress: state.dataEdgeAddress,
+    chainResolved: state.chainResolved,
   });
+}
+
+/** Billing lookup for a state, with retries; shared by init and the lazy write path. */
+function lookupChainConfig(
+  state: Pick<SubgraphState, 'serverUrl' | 'smartAccountAddress' | 'authKey' | 'chainId'>,
+  label: string,
+  retry = WRITE_BILLING_RETRY,
+): Promise<FetchedChainConfig> {
+  return fetchChainConfigWithRetry(
+    {
+      serverUrl: state.serverUrl,
+      smartAccountAddress: state.smartAccountAddress,
+      authKeyHex: Buffer.from(state.authKey).toString('hex'),
+      headers: buildRelayHeaders(),
+      fallbackChainId: state.chainId,
+      onResolved: (billing, resolved) => {
+        console.error(
+          `TotalReclaw: ${label}tier=${billing.tier ?? 'unknown'}, chain=${resolved.chainId}` +
+            (resolved.dataEdgeAddress ? `, dataEdge=${resolved.dataEdgeAddress}` : '') + '.',
+        );
+      },
+      onBillingUnavailable: (reason) => {
+        console.error(`TotalReclaw: ${label}billing lookup failed (${reason}).`);
+      },
+    },
+    retry,
+  );
+}
+
+/**
+ * The write config for a managed-service write (#439 chain/DataEdge + #581
+ * signing source). #689: resolves chain + DataEdge first if startup could
+ * not, and throws `DataEdgeUnresolvedError` (write not sent) if it still
+ * can't. Every on-chain write site goes through here.
+ */
+async function writeConfigFor(state: SubgraphState): Promise<SubgraphStoreConfig> {
+  await ensureWriteChainResolved(
+    state,
+    () => lookupChainConfig(state, 'write-time '),
+    process.env.TOTALRECLAW_DATA_EDGE_ADDRESS,
+    state.serverUrl,
+  );
+  return getSubgraphConfig(stateWriteOverrides(state));
 }
 
 let subgraphState: SubgraphState | null = null;
@@ -395,7 +469,6 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
   // First derive on Base Sepolia (free tier default), then query billing to detect
   // Pro tier and switch to Gnosis if needed.
   const entryPointAddr = (process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || entryPoint07Address) as Address;
-  const authKeyHex = Buffer.from(authKey).toString('hex');
   const ownerAccount = mnemonicToAccount(mnemonic);
 
   // Smart Account address is deterministic via CREATE2 — use Base Sepolia for derivation
@@ -424,43 +497,10 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
   // relay's values verbatim means a future chain move needs zero client release.
   // (The client `TOTALRECLAW_CHAIN_ID` override was removed in v1.)
   //
-  // #581 P2-13: this is now `fetchChainConfig` (subgraph/chain-config.ts) —
-  // the SAME function `initSubgraphStateFromBundle` below calls, so there is
-  // no code path that can independently "forget" to make this call.
+  // #581 P2-13: the billing lookup is shared with `initSubgraphStateFromBundle`
+  // (`fetchChainConfig`, here via `lookupChainConfig`'s retry wrapper), so no
+  // code path can independently "forget" to make this call.
   //
-  // Mnemonic mode keeps the pre-existing #439 behaviour on a failed billing
-  // lookup: fall back to the Gnosis default / no DataEdge override (the
-  // store then falls to env / its own PROD default) rather than blocking
-  // startup. #618 adversarial-review fixup: that silent fallback used to
-  // have NO log line at all when the billing call failed outright — add
-  // one, naming the prod default explicitly, so a mnemonic-mode write that
-  // silently lands on production (e.g. a staging run with an unreachable
-  // relay and no TOTALRECLAW_DATA_EDGE_ADDRESS override) leaves a trace in
-  // stderr instead of looking identical to a normal write.
-  const { chainId, dataEdgeAddress, billingResolved } = await fetchChainConfig({
-    serverUrl: SERVER_URL,
-    smartAccountAddress,
-    authKeyHex,
-    headers: buildRelayHeaders(),
-    fallbackChainId: 100, // Gnosis default when billing is unreachable
-    onResolved: (billing, resolved) => {
-      console.error(
-        `TotalReclaw: tier=${billing.tier ?? 'unknown'}, chain=${resolved.chainId}` +
-          (resolved.dataEdgeAddress ? `, dataEdge=${resolved.dataEdgeAddress}` : '') + '.',
-      );
-    },
-    onBillingUnavailable: (reason) => {
-      console.error(`TotalReclaw: billing lookup failed (${reason}).`);
-    },
-  });
-  if (!billingResolved && !process.env.TOTALRECLAW_DATA_EDGE_ADDRESS) {
-    console.error(
-      `TotalReclaw: proceeding without a confirmed DataEdge — writes will target the ` +
-        `PRODUCTION default (${DEFAULT_DATA_EDGE_ADDRESS}) unless TOTALRECLAW_DATA_EDGE_ADDRESS ` +
-        'is set. Retry once the relay is reachable if this is not the intended environment.',
-    );
-  }
-
   // Register auth key with relay (idempotent — relay returns 200 for existing users).
   // Without this, all relay queries return 401 when using env var mnemonic path
   // (the setup wizard handles registration, but the env var path previously skipped it).
@@ -477,9 +517,29 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
     const saltHexForReg = Buffer.from(salt).toString('hex');
     await registerWithServer(SERVER_URL, authKeyHashForReg, saltHexForReg);
   } catch {
-    // Best-effort — if relay is unreachable, billing check above may have also failed.
+    // Best-effort — if the relay is unreachable, the billing lookup below may fail too.
     // The server returns 200 for already-registered users, so this only fails on network errors.
     console.error('TotalReclaw: Registration with relay failed (best-effort, will retry on next start).');
+  }
+
+  // #689: registration runs first (above) so a just-created account's billing
+  // lookup doesn't fail on "unknown wallet". The lookup is retried with
+  // backoff; if it still fails, the state stays UNRESOLVED and the first
+  // write re-runs it (writeConfigFor). There is NO fallback to the production
+  // default DataEdge any more: before #689 a staging server on a cold relay
+  // wrote to production for its whole lifetime.
+  const envDataEdge = process.env.TOTALRECLAW_DATA_EDGE_ADDRESS;
+  const { chainId, dataEdgeAddress, billingResolved } = await lookupChainConfig(
+    { serverUrl: SERVER_URL, smartAccountAddress, authKey, chainId: 100 }, // Gnosis default until billing answers
+    '',
+    STARTUP_BILLING_RETRY,
+  );
+  if (!billingResolved && !envDataEdge) {
+    console.error(
+      'TotalReclaw: DataEdge not confirmed yet (billing lookup failed). Recall works; the first ' +
+        'write will retry the lookup and is refused if it still fails. Writes never fall back to ' +
+        `the production default (${DEFAULT_DATA_EDGE_ADDRESS}).`,
+    );
   }
 
   return {
@@ -495,6 +555,7 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
     smartAccountAddress,
     chainId,
     dataEdgeAddress,
+    chainResolved: billingResolved || !!envDataEdge,
   };
 }
 
@@ -541,10 +602,9 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
  *      `TOTALRECLAW_DATA_EDGE_ADDRESS` override now throws rather than
  *      proceeding — bundle mode has no other way to learn which DataEdge
  *      belongs to this environment, so guessing "production" is never
- *      acceptable. Mnemonic mode (`initSubgraphState` above) deliberately
- *      keeps the pre-existing #439 fallback instead of throwing — a
- *      scoped, reviewed decision (loud `console.error` naming the prod
- *      default, no throw), not an oversight.
+ *      acceptable. Mnemonic mode (`initSubgraphState` above) no longer falls
+ *      back to the prod default either (#689): it starts unresolved and
+ *      resolves on the first write, refusing the write if it can't.
  *
  * Only `signing.kind === "owner-eoa"` is supported (Phase 2's shipping
  * configuration). A `session-key` bundle is parsed and validated fine at
@@ -569,25 +629,15 @@ async function initSubgraphStateFromBundle(bundle: DerivedBundleV1): Promise<Sub
   // account.smart_account is already resolved — no RPC round-trip, no
   // mnemonic-derived owner. See the docstring above, point 2.
   const smartAccountAddress = bundle.account.smart_account.toLowerCase();
-  const authKeyHex = vault.authKey.toString('hex');
 
-  // See the docstring above, point 4 — the load-bearing fix.
-  const { chainId, dataEdgeAddress, billingResolved } = await fetchChainConfig({
-    serverUrl: SERVER_URL,
-    smartAccountAddress,
-    authKeyHex,
-    headers: buildRelayHeaders(),
-    fallbackChainId: bundle.account.chain_id,
-    onResolved: (billing, resolved) => {
-      console.error(
-        `TotalReclaw: bundle-mode, tier=${billing.tier ?? 'unknown'}, chain=${resolved.chainId}` +
-          (resolved.dataEdgeAddress ? `, dataEdge=${resolved.dataEdgeAddress}` : '') + '.',
-      );
-    },
-    onBillingUnavailable: (reason) => {
-      console.error(`TotalReclaw: bundle-mode billing lookup failed (${reason}).`);
-    },
-  });
+  // See the docstring above, point 4 — the load-bearing fix. #689: retried
+  // with backoff like mnemonic mode; bundle mode still fails closed below if
+  // every attempt fails (it has no other source for the DataEdge).
+  const { chainId, dataEdgeAddress, billingResolved } = await lookupChainConfig(
+    { serverUrl: SERVER_URL, smartAccountAddress, authKey: vault.authKey, chainId: bundle.account.chain_id },
+    'bundle-mode, ',
+    STARTUP_BILLING_RETRY,
+  );
 
   // FAIL CLOSED (#618 adversarial review — the sibling variant of the S1
   // bug, see the docstring above, point 4). A bundle carries no
@@ -633,6 +683,8 @@ async function initSubgraphStateFromBundle(bundle: DerivedBundleV1): Promise<Sub
     smartAccountAddress,
     chainId,
     dataEdgeAddress,
+    // assertDataEdgeResolvable above guarantees billing succeeded or an env override is set.
+    chainResolved: true,
   };
 }
 
@@ -848,7 +900,9 @@ async function handleRememberSubgraph(
   // For batch mode (multiple facts from auto-extraction), apply full skip/supersede logic.
   const isExplicitRemember = !!(input?.fact as string);
 
-  const results: Array<{ success: boolean; fact_id: string; tx_hash?: string; action?: string }> = [];
+  const results: Array<{ success: boolean; fact_id: string; tx_hash?: string; action?: string; error?: string }> = [];
+  // #689: why the batch was not sent (e.g. DataEdge unresolved), returned to the caller, not just logged.
+  let batchError: string | undefined;
   let dedupSkipped = 0;
   let dedupSuperseded = 0;
 
@@ -1137,7 +1191,7 @@ async function handleRememberSubgraph(
   // Batch-submit all payloads (tombstones + facts) in a single UserOp
   if (pendingPayloads.length > 0) {
     try {
-      const batchConfig = getSubgraphConfig(stateWriteOverrides(state));
+      const batchConfig = await writeConfigFor(state);
       const batchResult = await submitFactBatchOnChain(pendingPayloads, batchConfig);
       for (const meta of pendingFactMeta) {
         results.push({
@@ -1149,11 +1203,13 @@ async function handleRememberSubgraph(
       }
       console.error(`Batch submitted ${batchResult.batchSize} payloads in 1 UserOp (tx=${batchResult.txHash.slice(0, 10)}...)`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
+      rethrowIfQuota(error);
+      const message = shortErrorMessage(error);
+      batchError = message;
       for (const meta of pendingFactMeta) {
-        results.push({ success: false, fact_id: meta.factId, tx_hash: undefined });
+        results.push({ success: false, fact_id: meta.factId, tx_hash: undefined, error: message });
       }
-      console.error(`Batch submission failed: ${message}`);
+      logWriteError('Batch submission failed', error);
     }
   }
 
@@ -1171,6 +1227,7 @@ async function handleRememberSubgraph(
         dedup_skipped: dedupSkipped,
         dedup_superseded: dedupSuperseded,
         mode: 'subgraph',
+        ...(batchError ? { error: batchError } : {}),
       }),
     }],
   };
@@ -1245,15 +1302,17 @@ async function handleDebriefSubgraph(
         encryptedEmbedding: encryptedEmb,
       };
 
-      const batchConfig = getSubgraphConfig(stateWriteOverrides(state));
+      const batchConfig = await writeConfigFor(state);
       const batchResult = await submitFactBatchOnChain([encodeFactProtobuf(factPayload)], batchConfig);
       console.error(`Crystal debrief stored (tx=${batchResult.txHash.slice(0, 10)}...)`);
       return {
         content: [{ type: 'text', text: JSON.stringify({ success: batchResult.success, stored: batchResult.success ? 1 : 0, fact_id: factId, tx_hash: batchResult.txHash, crystal: true }) }],
       };
     } catch (error) {
-      console.error(`Crystal debrief failed: ${error instanceof Error ? error.message : String(error)}`);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: String(error) }) }] };
+      rethrowIfQuota(error);
+      const message = shortErrorMessage(error);
+      logWriteError('Crystal debrief failed', error);
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: message }) }] };
     }
   }
 
@@ -1316,27 +1375,30 @@ async function handleDebriefSubgraph(
     }
   }
 
-  const results: Array<{ success: boolean; fact_id: string; tx_hash?: string }> = [];
+  const results: Array<{ success: boolean; fact_id: string; tx_hash?: string; error?: string }> = [];
+  let batchError: string | undefined;
 
   if (pendingPayloads.length > 0) {
     try {
-      const batchConfig = getSubgraphConfig(stateWriteOverrides(state));
+      const batchConfig = await writeConfigFor(state);
       const batchResult = await submitFactBatchOnChain(pendingPayloads, batchConfig);
       for (const meta of pendingFactMeta) {
         results.push({ success: batchResult.success, fact_id: meta.factId, tx_hash: batchResult.txHash });
       }
       console.error(`Debrief: submitted ${batchResult.batchSize} items (tx=${batchResult.txHash.slice(0, 10)}...)`);
     } catch (error) {
+      rethrowIfQuota(error);
+      batchError = shortErrorMessage(error);
       for (const meta of pendingFactMeta) {
-        results.push({ success: false, fact_id: meta.factId });
+        results.push({ success: false, fact_id: meta.factId, error: batchError });
       }
-      console.error(`Debrief batch submission failed: ${error instanceof Error ? error.message : String(error)}`);
+      logWriteError('Debrief batch submission failed', error);
     }
   }
 
   const stored = results.filter((r) => r.success).length;
   return {
-    content: [{ type: 'text', text: JSON.stringify({ success: stored > 0, stored, total: validated.length, results }) }],
+    content: [{ type: 'text', text: JSON.stringify({ success: stored > 0, stored, total: validated.length, results, ...(batchError ? { error: batchError } : {}) }) }],
   };
 }
 
@@ -1346,7 +1408,7 @@ async function handleDebriefSubgraph(
 async function handleRecallSubgraph(
   state: SubgraphState,
   args: unknown,
-): Promise<{ content: Array<{ type: string; text: string }> }> {
+): Promise<ToolResponse> {
   const input = args as Record<string, unknown>;
   const query = (input?.query as string) || '';
   const startTime = Date.now();
@@ -1364,8 +1426,9 @@ async function handleRecallSubgraph(
     };
   }
 
-  let k = (input?.k as number) ?? 8;
-  if (k < 1) k = 8;
+  const defaultK = getRecallTopK();
+  let k = (input?.k as number) ?? defaultK;
+  if (k < 1) k = defaultK;
   if (k > 50) k = 50;
 
   try {
@@ -1501,6 +1564,7 @@ async function handleRecallSubgraph(
     const subgraphCore = require('@totalreclaw/core') as typeof import('@totalreclaw/core');
     const memories = reranked.map((r) => ({
       fact_id: r.id,
+      memory_id: r.id,
       fact_text: r.text,
       type: categoryMap.get(r.id) ?? 'fact',
       source: sourceMap.get(r.id),
@@ -1518,19 +1582,21 @@ async function handleRecallSubgraph(
         : '',
     }));
 
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          memories,
-          latency_ms: Date.now() - startTime,
-          candidates_searched: candidates.length,
-          broadened_search: true,
-          mode: 'subgraph',
-          query_intent: intent,
-        }),
-      }],
-    };
+    return buildRecallResponse(
+      {
+        memories,
+        latency_ms: Date.now() - startTime,
+        candidates_searched: candidates.length,
+        broadened_search: true,
+        mode: 'subgraph',
+        query_intent: intent,
+      },
+      reranked.map((r) => ({
+        type: categoryMap.get(r.id) ?? 'fact',
+        text: r.text,
+        createdAtUnix: r.createdAt ?? 0,
+      })),
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return {
@@ -1558,22 +1624,40 @@ async function handleForgetSubgraph(
   args: unknown,
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const input = args as Record<string, unknown>;
-  const factId = input?.fact_id as string;
+  const factId = pickMemoryId(input);
 
-  if (!factId || typeof factId !== 'string') {
+  if (!factId) {
     return {
       content: [{
         type: 'text',
         text: JSON.stringify({
           deleted_count: 0,
           fact_ids: [],
-          error: 'fact_id is required for forget (query-based forget is not supported with the managed service)',
+          error: 'memory_id (or its alias fact_id, from a recall result) is required for forget; query-based forget is not supported with the managed service',
         }),
       }],
     };
   }
 
   try {
+    // Existence check first: never tombstone (or report deleted_count: 1 for)
+    // an id that isn't an active fact of this owner.
+    let lookup: 'exists' | 'missing' | 'inactive';
+    try {
+      lookup = await classifyForgetTarget(
+        () => fetchFactForForget(
+          state.smartAccountAddress,
+          factId,
+          state.serverUrl,
+          Buffer.from(state.authKey).toString('hex'),
+        ),
+      );
+    } catch (lookupErr) {
+      logWriteError('Forget existence check failed', lookupErr);
+      return forgetLookupFailedResponse();
+    }
+    if (lookup !== 'exists') return forgetNotFoundResponse(factId, lookup);
+
     // Build a tombstone payload: same fact ID with isActive=false
     // The protobuf encoder always sets isActive=true, so we build a minimal
     // tombstone payload manually. For now, we re-encode the fact with
@@ -1591,7 +1675,7 @@ async function handleForgetSubgraph(
     };
 
     const protobuf = encodeFactProtobuf(tombstonePayload);
-    const config = getSubgraphConfig(stateWriteOverrides(state));
+    const config = await writeConfigFor(state);
 
     const { txHash, success } = await submitFactOnChain(protobuf, config);
 
@@ -1627,7 +1711,9 @@ async function handleForgetSubgraph(
       }],
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
+    rethrowIfQuota(error);
+    logWriteError('Forget failed', error);
+    const message = shortErrorMessage(error);
     return {
       content: [{
         type: 'text',
@@ -1662,7 +1748,7 @@ function buildPinDepsFromState(state: SubgraphState): PinOpDeps {
       return Buffer.from(base64, 'base64').toString('hex');
     },
     submitBatch: async (payloads: Buffer[]) => {
-      const config = getSubgraphConfig(stateWriteOverrides(state));
+      const config = await writeConfigFor(state);
       const batchResult = await submitFactBatchOnChain(payloads, config);
       return { txHash: batchResult.txHash, success: batchResult.success };
     },
@@ -1755,24 +1841,13 @@ function isAuthError(error: unknown): boolean {
 
 // ── Quota error helper ──────────────────────────────────────────────────────
 
-/**
- * Check if an error is a quota exceeded error (HTTP 403 with error_code: QUOTA_EXCEEDED).
- */
-function isQuotaExceededError(error: unknown): boolean {
-  if (error instanceof Error) {
-    const msg = error.message.toLowerCase();
-    return msg.includes('quota_exceeded') || msg.includes('quota exceeded');
-  }
-  return false;
-}
-
 function quotaExceededResponse(): { content: Array<{ type: string; text: string }>; isError: true } {
   return {
     content: [{
       type: 'text',
       text: JSON.stringify({
         error: 'quota_exceeded',
-        message: 'Free tier monthly limit reached (250 memories). Upgrade to Pro for 1,500 memories/month on Gnosis mainnet.',
+        message: 'You have reached your monthly memory limit. The counter resets on the 1st of the month. Upgrade to Pro for a higher monthly limit (Free is 250 writes a month, Pro is 3,000).',
         upgrade_url: 'Use totalreclaw_upgrade tool to get a checkout link',
       }),
     }],
@@ -1857,6 +1932,7 @@ async function statusHandler(args: unknown): Promise<ToolResponse> {
         max_candidate_pool: raw.features.max_candidate_pool,
         checked_at: Date.now(),
       };
+      setServerRecallTopK(raw.features.recall_top_k);
     }
   } catch {
     // Best-effort cache — don't fail the status call.
@@ -1873,42 +1949,16 @@ async function upgradeHandler(args: unknown): Promise<ToolResponse> {
 }
 
 async function accountHandler(args: unknown): Promise<ToolResponse> {
-  if (!subgraphState) {
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          error: 'Account details require managed service mode (subgraph). Self-hosted mode does not track billing.',
-        }),
-      }],
-      isError: true,
-    };
-  }
-  const authKeyHex = Buffer.from(subgraphState.authKey).toString('hex');
-  // #581 P2-13: bundle-mode state has no `mnemonic` (derived-bundle-v1.md
-  // §4.6 point 1 — no code path may reconstruct one), so there is no phrase
-  // to hint at. `.split()` on `undefined` would throw; branch explicitly
-  // instead and surface the credential kind so the agent can tell the user
-  // why no phrase hint is available.
-  const mnemonicHint =
-    subgraphState.credentialKind === 'mnemonic' && subgraphState.mnemonic
-      ? (() => {
-          const words = subgraphState!.mnemonic!.split(/\s+/);
-          return `${words[0]} ... ${words[words.length - 1]}`;
-        })()
-      : '(no recovery phrase on this host — configured from a derived-bundle-v1 credential)';
-  const getFactCount = () => getOwnerFactCount(
-    subgraphState!.smartAccountAddress,
-    subgraphState!.serverUrl,
-    authKeyHex,
+  if (!subgraphState) return accountUnavailableResponse();
+  const state = subgraphState;
+  const authKeyHex = Buffer.from(state.authKey).toString('hex');
+  return handleAccount(
+    accountContextFromState(state, {
+      serverUrl: SERVER_URL,
+      getFactCount: () => getOwnerFactCount(state.smartAccountAddress, state.serverUrl, authKeyHex),
+    }),
+    args,
   );
-  return handleAccount({
-    serverUrl: SERVER_URL,
-    authKeyHex,
-    walletAddress: subgraphState.smartAccountAddress,
-    mnemonicHint,
-    getFactCount,
-  }, args);
 }
 
 const commonHandlers: HandlerBundle = {
@@ -1919,9 +1969,8 @@ const commonHandlers: HandlerBundle = {
 
 // ── Managed-service (subgraph) tool bundle ───────────────────────────────────
 // Tools with no managed-service equivalent return an explicit "use self-hosted
-// mode" envelope; `totalreclaw_import_batch` is intentionally absent so it
-// falls through to the standard unknown-tool error, matching pre-refactor
-// behaviour.
+// mode" envelope (including `totalreclaw_import_batch`, so every listed tool
+// is callable and tells the host plainly why it refuses).
 
 function unsupportedInSubgraph(message: string): ToolResponse {
   return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }], isError: true };
@@ -1943,6 +1992,8 @@ function subgraphBundle(state: SubgraphState): HandlerBundle {
       unsupportedInSubgraph('Import is not yet supported with the managed service. Use self-hosted mode for import.'),
     totalreclaw_import_from: async () =>
       unsupportedInSubgraph('Import from external sources is not yet supported with the managed service. Use self-hosted mode for import.'),
+    totalreclaw_import_batch: async () =>
+      unsupportedInSubgraph('Batch import is not yet supported with the managed service. Use self-hosted mode for import.'),
     totalreclaw_consolidate: async () =>
       unsupportedInSubgraph('Consolidation is not supported with the managed service. On-chain facts require tombstone-based dedup which is handled automatically at store time.'),
   };
@@ -1981,7 +2032,11 @@ const callToolHandler = createCallToolHandler({
   getMode: () => currentMode,
   handleSupport: (args) =>
     handleSupport({ walletAddress: subgraphState?.smartAccountAddress ?? null }, args),
-  handlePair: (args) => handlePair({}, args as Record<string, unknown> | undefined),
+  handlePair: (args) =>
+    handlePair({}, args as Record<string, unknown> | undefined, {
+      isConfigured: () => currentMode !== 'unconfigured',
+      getUnusableCredentials: () => unusableCredentials,
+    }),
   common: commonHandlers,
   resolveBundle,
   isQuotaExceededError,
@@ -1989,6 +2044,7 @@ const callToolHandler = createCallToolHandler({
   isAuthError,
   authHintResponse,
   onMutate,
+  getUnusableCredentials: () => unusableCredentials,
 });
 
 // ── Show-phrase CLI subcommand ────────────────────────────────────────────────
@@ -2059,7 +2115,7 @@ async function main(): Promise<void> {
       );
     } else {
       console.error(
-        'TotalReclaw MCP server started (unconfigured — set TOTALRECLAW_RECOVERY_PHRASE in the MCP host config; see docs/guides/claude-code-setup.md)',
+        'TotalReclaw MCP server started (unconfigured — ask the assistant to run totalreclaw_pair to set up an account)',
       );
     }
   } else {
@@ -2071,19 +2127,31 @@ async function main(): Promise<void> {
     try {
       credential = resolveManagedCredential();
     } catch (err) {
-      // Loud, actionable, FATAL — never a silent downgrade. An unknown
-      // credentials.json `version`, a `keychain_wrapped` file this server
-      // can't unwrap, or a bundle that fails §4.7 validation are all
-      // evidence of a corrupted/tampered/misconfigured credential store,
-      // not transient conditions to paper over with a caught exception.
-      // Crashing the process with the error on stderr IS the correct loud
-      // posture for a long-running server — see derived-bundle-v1.md §3.2's
-      // "the one place a well-meaning try/except would create a security
-      // bug" warning, and mcp/tests/credentials.test.ts's coverage of every
-      // one of these throw paths.
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`TotalReclaw MCP: fatal credential error: ${msg}`);
-      throw err;
+      if (err instanceof UnsupportedCredentialsError) {
+        // A real credential from another client (Hermes keychain storage)
+        // or a newer client (unknown `version`) that this server can't
+        // read. Not evidence of tampering, so start UNCONFIGURED instead of
+        // crashing: a crash makes the host drop every tool and leaves the
+        // reason in a log the user never sees. Still not a downgrade —
+        // nothing in the file is used — and the reason is returned on every
+        // tool call (dispatch.ts notConfiguredResponse). totalreclaw_pair
+        // refuses to overwrite the file.
+        unusableCredentials = { reason: err.reason, message: err.message };
+        currentMode = 'unconfigured';
+        console.error(`TotalReclaw MCP server started (unconfigured): ${err.message}`);
+      } else {
+        // Loud, actionable, FATAL — never a silent downgrade. A bundle that
+        // fails §4.7 validation is evidence of a corrupted/tampered
+        // credential store, not a transient condition to paper over with a
+        // caught exception. Crashing the process with the error on stderr
+        // IS the correct loud posture — see derived-bundle-v1.md §3.2's "the
+        // one place a well-meaning try/except would create a security bug"
+        // warning, and mcp/tests/credentials.test.ts's coverage of the
+        // throw paths.
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`TotalReclaw MCP: fatal credential error: ${msg}`);
+        throw err;
+      }
     }
 
     if (credential?.kind === 'bundle') {
@@ -2096,10 +2164,10 @@ async function main(): Promise<void> {
       currentMode = 'subgraph';
       subgraphState = await initSubgraphState(credential.mnemonic);
       console.error(`TotalReclaw MCP server started (managed service, owner: ${subgraphState.smartAccountAddress})`);
-    } else {
+    } else if (!unusableCredentials) {
       currentMode = 'unconfigured';
       console.error(
-        'TotalReclaw MCP server started (unconfigured — set TOTALRECLAW_RECOVERY_PHRASE in the MCP host config; see docs/guides/claude-code-setup.md)',
+        'TotalReclaw MCP server started (unconfigured — ask the assistant to run totalreclaw_pair to set up an account)',
       );
     }
   }

@@ -175,9 +175,9 @@ describe('Tool Registration & Routing', () => {
       expect(impProp.maximum).toBe(10);
     });
 
-    it('recall.k has default of 8', () => {
+    it('recall.k has default of 16', () => {
       const kProp = recallToolDefinition.inputSchema.properties.k;
-      expect(kProp.default).toBe(8);
+      expect(kProp.default).toBe(16);
     });
 
     it('export.format enum contains markdown and json', () => {

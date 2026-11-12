@@ -11,6 +11,7 @@ import { escrowFilename } from "../lib/auth/escrow";
 import { recordFileBackup, getLastFileBackupAt } from "../lib/vault/fileBackupRecord";
 import { isMnemonicValid } from "../lib/crypto";
 import type { VaultItem } from "../lib/types";
+import { recoveryPhraseStatus } from "../lib/recoveryStatusCopy";
 
 /** Sensitive-action gate (#323): the file is unencrypted plaintext. */
 function confirmThenExport(items: VaultItem[], format: "json" | "md") {
@@ -84,8 +85,8 @@ function PhraseEntryForm({
     <div className="mt-3 rounded-control bg-warm-white p-4 ring-1 ring-hairline">
       <p className="text-sm font-semibold text-ink">{title}</p>
       <p className="mt-1 text-xs text-ink-muted">
-        Your phrase isn’t stored anywhere — re-enter it once to seal a fresh backup under this
-        device’s passkey.
+        This browser doesn’t keep your recovery phrase. Enter it once more to make a new backup that
+        this device’s passkey can open.
       </p>
       {error && <p className="mt-2 rounded-control bg-clay-tint px-3 py-2 text-xs text-clay-deep">{error}</p>}
       <textarea
@@ -132,6 +133,17 @@ function FileCaveatNotice() {
   );
 }
 
+/** Relay backups for the unlocked vault. Shared (same query key) by both Settings sections. */
+function useEscrowRecords() {
+  const { keys, smartAccount } = useCrypto();
+  return useQuery({
+    queryKey: ["escrow-records", smartAccount],
+    queryFn: () => listEscrow(keys!),
+    enabled: !!keys,
+    retry: false,
+  });
+}
+
 function PasskeysAndBackupSection() {
   const { keys, smartAccount, enableEscrowBackup, sealPhraseToFile } = useCrypto();
   const queryClient = useQueryClient();
@@ -139,16 +151,7 @@ function PasskeysAndBackupSection() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  const {
-    data: records,
-    isError: recordsErrored,
-    isLoading: recordsLoading,
-  } = useQuery({
-    queryKey: ["escrow-records", smartAccount],
-    queryFn: () => listEscrow(keys!),
-    enabled: !!keys,
-    retry: false,
-  });
+  const { data: records, isError: recordsErrored, isLoading: recordsLoading } = useEscrowRecords();
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["escrow-records", smartAccount] });
 
@@ -293,6 +296,11 @@ export function SettingsPage() {
     enabled: !!keys,
   });
   const [busy, setBusy] = useState(false);
+  const { data: escrowRecords } = useEscrowRecords();
+  const phraseStatus = recoveryPhraseStatus({
+    relayBackups: escrowRecords ? escrowRecords.length : null,
+    fileBackupAt: smartAccount ? getLastFileBackupAt(smartAccount) : null,
+  });
 
   const onForget = async () => {
     if (!confirm("Forget this device? Your vault stays safe on-chain — this only removes the keys from this browser. You’ll need your passkey or recovery phrase to return.")) {
@@ -334,12 +342,8 @@ export function SettingsPage() {
         </Section>
 
         <Section title="Security & recovery">
-          <p>This device is unlocked with a passkey (Face ID / Touch ID / Windows Hello).</p>
-          <p className="mt-2">
-            Your recovery phrase is your <span className="font-semibold">only</span> guaranteed
-            backup and is never stored — not on this device, not by us. Keep your written copy safe;
-            you’ll need it to restore on a new device without a passkey backup.
-          </p>
+          <p>This device is unlocked with a passkey.</p>
+          <p className="mt-2">{phraseStatus}</p>
         </Section>
 
         <PasskeysAndBackupSection />

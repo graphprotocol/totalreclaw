@@ -70,6 +70,10 @@ describe('handleRecall — source-weighting disabled (ranks by base score)', () 
     const body = JSON.parse(out.content[0].text);
     expect(body.memories).toHaveLength(2);
 
+    // memory_id mirrors fact_id (write tools document memory_id; C8).
+    expect(body.memories[0].memory_id).toBe(body.memories[0].fact_id);
+    expect(body.memories[1].memory_id).toBe('user-fact-id');
+
     // Higher base score wins regardless of provenance.
     expect(body.memories[0].fact_id).toBe('assistant-fact-id');
     expect(body.memories[1].fact_id).toBe('user-fact-id');
