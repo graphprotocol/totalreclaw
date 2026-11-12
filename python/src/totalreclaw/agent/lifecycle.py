@@ -31,6 +31,7 @@ from .loop_runner import (
 )
 from .pending_drain import enqueue_messages
 from ..forget_guard import ForgetLedger, is_forget_request
+from ..pii import auto_storable, drop_sensitive_facts
 from ..relay import RelayReadBlocked
 
 logger = logging.getLogger(__name__)
@@ -371,6 +372,11 @@ def _auto_extract_inner(
     if not facts:
         facts = extract_facts_heuristic(messages, max_facts)
 
+    # PRD-04 DEP-4: automatic extraction stores only facts the core PII
+    # filter allows — block AND flag are dropped (logged by category only).
+    # Runs before every log line below that prints fact text.
+    facts = drop_sensitive_facts(facts)
+
     if not facts:
         state.mark_messages_processed()
         return []
@@ -645,6 +651,14 @@ def session_debrief(
     stored_fact_ids: list[str] = []
     try:
         crystal = run_sync(generate_crystal(all_messages, stored_fact_texts, host_type=host_type))
+        if crystal and not all(
+            auto_storable(t)
+            for t in [crystal.narrative, *crystal.key_outcomes, *crystal.open_threads, *crystal.lessons]
+        ):
+            # PRD-04 DEP-4: the Crystal is written automatically, so it follows
+            # the auto-extraction rule — skip it if any part is not ``allow``.
+            logger.info("Session Crystal skipped: sensitive content (see pii log)")
+            crystal = None
         if crystal:
             # The Crystal reads the whole conversation, including a fact the
             # user forgot mid-session (#605 / #640). Drop those parts.

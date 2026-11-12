@@ -1,5 +1,18 @@
 # Changelog — totalreclaw-memory (ZeroClaw)
 
+## Unreleased
+
+### Fixed
+
+- `TOTALRECLAW_SERVER_URL` now picks the relay, as the README always said.
+  When set to a non-empty value it overrides `TotalReclawConfig::relay_url`
+  (ZeroClaw: `relay_url` under `[memory.totalreclaw]` in
+  `~/.zeroclaw/config.toml`). Before, the crate ignored the variable, so
+  setting it alone (to pin staging, say) left ZeroClaw on the production
+  relay. The built-in default is unchanged: `https://api.totalreclaw.xyz`
+  (internal#706).
+- New public constant `SERVER_URL_ENV` names the variable.
+
 ## 2.0.1 — 2026-04-19
 
 Patch release: tracks `totalreclaw-core` bump to 2.1.0. No behavioural

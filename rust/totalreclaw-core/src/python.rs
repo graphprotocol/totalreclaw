@@ -62,6 +62,7 @@ mod bind_store;
 mod bind_search;
 mod bind_kg;
 mod bind_recall;
+mod bind_pii;
 
 pub(crate) use bind_bundle::*;
 pub(crate) use bind_crypto::*;
@@ -75,6 +76,7 @@ pub(crate) use bind_store::*;
 pub(crate) use bind_search::*;
 pub(crate) use bind_kg::*;
 pub(crate) use bind_recall::*;
+pub(crate) use bind_pii::*;
 
 // ---------------------------------------------------------------------------
 // Module registration
@@ -130,6 +132,9 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Canonical extraction + compaction system prompts (core 2.2.0 hoist).
     m.add_function(wrap_pyfunction!(py_get_extraction_system_prompt, m)?)?;
     m.add_function(wrap_pyfunction!(py_get_compaction_system_prompt, m)?)?;
+
+    // Topical dedup context for the extraction prompt (PRD-04 DEP-3).
+    m.add_function(wrap_pyfunction!(py_build_dedup_context, m)?)?;
 
     // Reranker
     m.add_function(wrap_pyfunction!(py_rerank, m)?)?;
@@ -246,6 +251,9 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Session segmentation (import Crystal grouping) — #368
     m.add_function(wrap_pyfunction!(py_segment_sessions, m)?)?;
+
+    // PII / credential filter (PRD-04 DEP-4)
+    m.add_function(wrap_pyfunction!(py_pii_filter, m)?)?;
 
     Ok(())
 }

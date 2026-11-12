@@ -24,8 +24,11 @@ export interface ToolContext {
   authKeyHex?: string;
   /** Smart Account address (managed service) — used for billing + support. */
   walletAddress?: string | null;
-  /** Recovery-phrase hint (`first … last`) for the account tool. */
-  mnemonicHint?: string;
+  /**
+   * Constant credential-kind description for the account tool. MUST NOT be
+   * derived from the recovery phrase in any way (#670).
+   */
+  credentialStatus?: string;
   /** Lazily fetch the owner's on-chain fact count (account tool). */
   getFactCount?: () => Promise<number>;
 }
@@ -34,4 +37,10 @@ export interface ToolContext {
 export interface ToolResponse {
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
+  /**
+   * Structured copy of the result for hosts that render it (MCP
+   * `structuredContent`). Tools that set it also keep the serialized JSON in
+   * `content[0]` for hosts that don't.
+   */
+  structuredContent?: Record<string, unknown>;
 }

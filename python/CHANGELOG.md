@@ -8,9 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **[PRD-04 DEP-4] Sensitive-data filter (block-and-tell).** New `totalreclaw.pii` adapter over core `pii_filter`.
+  - Automatic extraction, the end-of-session Crystal and the built-in memory mirror (`on_memory_write`) store only text the filter allows.
+  - `totalreclaw_remember` refuses secrets and sensitive identifiers, returning `{"stored": false, "blocked": "sensitive", "category", "message", "override": "allow_sensitive"}`. The new `allow_sensitive` parameter stores the item after the user confirms.
+  - Logs never carry the screened text.
+
+  Requires a core release with `pii_filter` (2.7.0). See `docs/guides/sensitive-data-filter.md`.
+
 ### Fixed
 
 - **A fact the user asks to forget stays forgotten (internal#605, #640).** `totalreclaw_forget` tombstoned the fact, but auto-extraction kept reading text that restated it: the turn that first said it, the forget turn itself, an answer the agent built from Hermes' own session search, or the session summary. The dedup context only lists active facts, so nothing told the write path that the user had deleted it, and it came back ("Inês proposed PgBouncer but this is now outdated", "User previously identified as vegetarian and asked for that record to be removed"). Now a user-asked forget decrypts the fact first and adds it to a forget ledger: one file per account at `~/.totalreclaw/forgotten-<eoa>.enc`, encrypted with the vault key, never plaintext and never on-chain. Before every auto-extracted write (turn, compaction, session end, pending drain) the client drops a candidate that restates a forgotten fact, and drops notes about a deletion ("user asked to forget X"). The session summary drops the same sentences and items. The check is lexical plus semantic, so a new value in the same slot still stores ("favorite color is green" after "blue" was forgotten). An explicit `totalreclaw_remember` of the fact brings it back and clears the entry. Copies of Hermes' built-in memory writes can't bring it back, and internal tombstones (UPDATE, mirror replace) don't enter the ledger. The matcher is `totalreclaw_core.match_forgotten` / `is_forget_request` when the installed core has them (core 2.7.0+), else an identical Python port. `TotalReclaw.forget()` gains `suppress_reextraction=False`; the ledger is `TotalReclaw.forget_ledger`. The ledger is per machine: a second device or another client does not see it yet.
+- **Pro tier copy is 3,000 memories/month ($3.99/month), not 1,500.** Stripe is the source of truth (Free 250/month, Pro 3,000/month). Updated `SKILL.md`, the session-start quota nudge (the Pro nudge now quotes the relay-returned limit instead of a hard-coded number) and the `totalreclaw_upgrade` tool description. Text only; no behaviour change.
 
 ## [2.5.3] — 2026-11-02
 

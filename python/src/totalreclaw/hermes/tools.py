@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Optional
 
 from ..relay import ReadBlockState, RelayReadBlocked
 from ..agent.read_block import read_block_tool_payload
+from ..pii import log_label, parse_allow_sensitive, screen_explicit
 
 if TYPE_CHECKING:
     from .state import PluginState
@@ -151,10 +152,20 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
     if not text:
         return json.dumps({"error": "No text provided"})
 
+    # PRD-04 DEP-4 block-and-tell. First gate, so a blocked value never
+    # reaches a log line below; later logs use ``log_text`` (redacted unless
+    # the filter allowed the text).
+    pii_result, pii_notice = screen_explicit(
+        text, parse_allow_sensitive(args.get("allow_sensitive"))
+    )
+    if pii_notice is not None:
+        return json.dumps(pii_notice)
+    log_text = log_label(text, pii_result)
+
     if _is_likely_agent_self_directive(text):
         logger.warning(
             "totalreclaw_remember blocked agent self-directive: %r",
-            text[:200],
+            log_text,
         )
         return json.dumps({
             "stored": False,
@@ -179,7 +190,7 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
         state.increment_suppressed_writes()
         logger.info(
             "totalreclaw_remember suppressed (duplicate of pending auto-extract): %r",
-            text[:200],
+            log_text,
         )
         return json.dumps({
             "stored": False,
@@ -219,7 +230,7 @@ async def remember(args: dict, state: "PluginState", **kwargs) -> str:
             from totalreclaw.embedding import get_embedding
             embedding = get_embedding(text)
         except Exception as e:
-            logger.debug("embed failed for remember %r: %s", text[:40], e)
+            logger.debug("embed failed for remember %r: %s", log_label(text, pii_result, 40), e)
             # degrade: store without embedding (search falls back to blind indices)
 
         if kwargs.get("_from_mirror"):

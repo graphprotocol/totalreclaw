@@ -12,6 +12,12 @@ All notable changes to `@totalreclaw/totalreclaw` (the OpenClaw plugin) are docu
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Pro tier copy is 3,000 memories/month, not 1,500.** Stripe is the source of truth (Free 250/month, Pro 3,000/month). Updated the upgrade tool descriptions in `skill.json`. Text only; no behaviour change.
+
 ## [3.4.4] — 2026-08-05
 
 Skips 3.4.3, which was drafted but abandoned. 3.4.3's premise was "this client cannot pin, so make the prohibition unmissable by moving it into the `memory_save` tool description." #563 makes the opposite true — the client can now pin / unpin / retype / set-scope via the `tr` CLI — so shipping 3.4.3 would publish a claim we immediately reverse. Only one commit from the 3.4.3 line survives (the bare-`tr` pairing-banner fix, below); the "cannot pin" tool-description change is dropped because #563 supersedes it and would have conflicted.

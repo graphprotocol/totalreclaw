@@ -113,6 +113,24 @@ EMISSION_PATTERNS=(
 #     mcp/tests/phrase-safety-dist.test.ts's own FORBIDDEN_PATTERNS.
 ALLOW_CONTEXT_RE='credentials\.json|writeFileSync|readFileSync|CREDENTIALS_PATH|SavedCredentials|generateMnemonic|validateMnemonic|mnemonicToAccount|mnemonicToSeedSync|process\.env|TOTALRECLAW_RECOVERY_PHRASE|subgraphState\.mnemonic|state\.mnemonic|parsed\.mnemonic|trimmed\.mnemonic|input\?\.\s*mnemonic|input\.mnemonic|description[[:space:]]*:|inputSchema|cli/setup|=[[:space:]]*undefined|kind[[:space:]]*:[[:space:]]*.mnemonic.'
 
+# Partial-phrase patterns (#670). `totalreclaw_account` returned
+# `recovery_phrase_hint: "<first> ... <last>"`, built by splitting
+# `subgraphState.mnemonic`. Two of twelve words in model context shrink the
+# brute-force space. These are checked WITHOUT ALLOW_CONTEXT_RE: that list
+# allows `subgraphState.mnemonic`, which is exactly what the leak read. No
+# shipped code has a legitimate use for these shapes. Word-count checks
+# (`mnemonic.split(/\s+/).length`) are not flagged; only indexing or
+# slicing the split words is.
+SLICE_PATTERNS=(
+    # a key or identifier naming a hint of the phrase
+    '\b(recovery_phrase|mnemonic|phrase)_hint\b'
+    '\b(mnemonic|recoveryPhrase)Hint\b'
+    # split a phrase, then index / slice the words on the same line
+    '\b(mnemonic|phrase)\??\.split\([^)]*\)[[:space:]]*(\[|\.slice\(|\.at\()'
+    # split the in-memory managed-service phrase at all
+    '[Ss]tate\??\.mnemonic\??\.split\('
+)
+
 violations=0
 debug="${PHRASE_SAFETY_DIST_DEBUG:-0}"
 
@@ -159,6 +177,24 @@ for dist_dir in "${DIST_PATHS[@]}"; do
                 violations=$((violations + 1))
             done < <(grep -nHE "$pat" "$jsfile" 2>/dev/null || true)
         done
+        for pat in "${SLICE_PATTERNS[@]}"; do
+            while IFS= read -r hit; do
+                [[ -n "$hit" ]] || continue
+                rest_after_path="${hit#*:}"
+                content="${rest_after_path#*:}"
+                stripped="$(echo "$content" | sed -e 's/^[[:space:]]*//' )"
+                case "$stripped" in
+                    "//"*|"/*"*|"*"*)
+                        if [[ "$debug" == "1" ]]; then
+                            echo "  SKIP-COMMENT: $hit"
+                        fi
+                        continue
+                        ;;
+                esac
+                echo "PHRASE-SAFETY-DIST VIOLATION [partial-phrase: $pat]: $hit"
+                violations=$((violations + 1))
+            done < <(grep -nHE "$pat" "$jsfile" 2>/dev/null || true)
+        done
     done < <(find "$dist_dir" -type f -name '*.js' 2>/dev/null | sort)
 done
 
@@ -166,6 +202,9 @@ if [[ "$violations" -gt 0 ]]; then
     cat <<EOF
 
 Found $violations phrase-emission shape(s) in compiled dist/.
+
+Partial-phrase hits (#670) mean a code path hints at or slices the phrase
+(e.g. first/last words). Any word of the phrase in model context is a leak.
 
 A line of compiled JS is treated as a phrase-safety violation when it builds
 \`recovery_phrase\` or \`mnemonic\` AS AN OBJECT KEY into JS source. Such a

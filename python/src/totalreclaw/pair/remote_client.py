@@ -51,8 +51,9 @@ logger = logging.getLogger(__name__)
 # Python clients install + pair against ``api.totalreclaw.xyz`` unless the
 # user opts into staging via env. This mirrors the documented contract in
 # ``docs/guides/hermes-setup.md`` (default = prod; staging = QA-only opt-in
-# via ``TOTALRECLAW_SERVER_URL`` / ``TOTALRECLAW_RELAY_URL`` /
-# ``TOTALRECLAW_PAIR_RELAY_URL``).
+# via ``TOTALRECLAW_SERVER_URL``). ``TOTALRECLAW_PAIR_RELAY_URL`` and
+# ``TOTALRECLAW_RELAY_URL`` can also move the pairing URL (see
+# ``_resolve_relay_url``), but they do not move reads and writes.
 #
 # History: prior to 2.3.6rc5 this constant was hardcoded to the staging
 # relay, which silently routed real-user pair sessions through staging
@@ -97,9 +98,9 @@ def _default_client_id() -> str:
 def _http_to_ws(url: str) -> str:
     """Convert ``https://`` → ``wss://`` and ``http://`` → ``ws://``.
 
-    The canonical server-URL env vars (``TOTALRECLAW_SERVER_URL``,
-    ``TOTALRECLAW_RELAY_URL``) are documented in ``hermes-setup.md`` with
-    ``https://`` prefixes (matching the relay's HTTP entrypoint), but
+    The server-URL env vars (``TOTALRECLAW_SERVER_URL``, and the
+    pairing-only ``TOTALRECLAW_RELAY_URL``) take ``https://`` URLs
+    (matching the relay's HTTP entrypoint), but
     ``open_remote_pair_session`` needs a WebSocket-shape URL to dial.
     Strip + replace the scheme so users don't have to remember which
     env var takes which prefix.
@@ -124,17 +125,19 @@ def _resolve_relay_url() -> str:
        ``hermes/hooks.py``, ``hermes/pair_tool.py``). Honoured here so
        pair behaviour matches the rest of the client. Auto-converted
        from ``https://``/``http://`` to ``wss://``/``ws://``.
-    3. ``TOTALRECLAW_RELAY_URL`` — alias documented in
-       ``hermes-setup.md`` for clarity ("relay" vs "server"). Some
-       managed Hermes deployments set this instead of (or in addition
-       to) ``TOTALRECLAW_SERVER_URL``. Auto-scheme-converted.
+    3. ``TOTALRECLAW_RELAY_URL`` — pairing-only fallback. It is NOT an
+       alias for ``TOTALRECLAW_SERVER_URL``: ``relay.py`` (reads and
+       writes) never reads it, so a deployment that sets only this
+       variable pairs against that relay but stores and recalls on the
+       production default. Kept for deployments that already set it.
+       Auto-scheme-converted.
     4. ``DEFAULT_RELAY_URL`` — production (``wss://api.totalreclaw.xyz``).
 
     Why the cascade exists (2.3.6rc5): the F1 finding in auto-QA on
     2026-05-11 was that this function silently fell through to staging
-    even when the user / guide expected prod. The new cascade honours
-    every relay-URL env the rest of the client honours, in priority
-    order, before falling back to the prod default.
+    even when the user / guide expected prod. The cascade honours the
+    pairing overrides and ``TOTALRECLAW_SERVER_URL``, in priority order,
+    before falling back to the prod default.
     """
     v = os.environ.get("TOTALRECLAW_PAIR_RELAY_URL")
     if v:
