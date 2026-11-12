@@ -26,6 +26,10 @@ DEFAULT_MAX_FACTS = 15
 DEFAULT_MIN_IMPORTANCE = 6
 DEFAULT_RECALL_TOP_K = 16
 DEFAULT_MAX_CANDIDATE_POOL = 250
+# Upper bound on a relay-served candidate pool. The relay serves 2000, which
+# Hermes has never used; the cap keeps today's 250 until a large-vault
+# measurement (internal tracker #696). Env overrides are not capped.
+MAX_SERVER_CANDIDATE_POOL = 250
 BILLING_CACHE_TTL = 7200  # 2 hours
 STORE_DEDUP_THRESHOLD = 0.85  # Cosine similarity threshold for near-duplicate detection
 
@@ -972,6 +976,17 @@ class AgentState:
         self._billing_cache = data
         self._billing_cache_time = time.time()
 
+    def invalidate_billing_cache(self) -> None:
+        """Drop the cached billing data so the next session start re-fetches it.
+
+        Called when a write is refused for quota (relay 403), so the stale
+        usage numbers don't suppress the quota warning until the TTL expires.
+        Server-tuned settings already applied via ``update_from_billing`` stay
+        in effect until the next fetch replaces them.
+        """
+        self._billing_cache = None
+        self._billing_cache_time = 0.0
+
     # Extraction config
     def get_extraction_interval(self) -> int:
         """Return the extraction interval in turns."""
@@ -989,10 +1004,10 @@ class AgentState:
         """Return the recall top_k limit.
 
         Precedence (highest first):
-          1. Billing-cache value (``features.recall_top_k``) — set by
-             ``update_from_billing`` unless overridden by env var.
-          2. ``TOTALRECLAW_RECALL_TOP_K`` env var — applied at init by
+          1. ``TOTALRECLAW_RECALL_TOP_K`` env var — applied at init by
              ``_apply_env_overrides`` and protected from server override.
+          2. Billing-cache value (``features.recall_top_k``) — applied by
+             ``update_from_billing`` at session start.
           3. ``DEFAULT_RECALL_TOP_K`` (16) — compile-time default.
         """
         return self._recall_top_k
@@ -1005,7 +1020,7 @@ class AgentState:
              ``CANDIDATE_POOL_MAX_FREE`` (free/unknown), resolved at call
              time so the tier from the live billing cache is respected.
           2. Billing-cache value (``features.max_candidate_pool``) — set by
-             ``update_from_billing``.
+             ``update_from_billing``, capped at ``MAX_SERVER_CANDIDATE_POOL``.
           3. ``DEFAULT_MAX_CANDIDATE_POOL`` (250) — compile-time default.
         """
         tier = (self.get_cached_billing() or {}).get("tier")
@@ -1056,7 +1071,7 @@ class AgentState:
             try:
                 val = int(server_pool)
                 if val > 0:
-                    self._max_candidate_pool_server = val
+                    self._max_candidate_pool_server = min(val, MAX_SERVER_CANDIDATE_POOL)
             except (ValueError, TypeError):
                 pass
 

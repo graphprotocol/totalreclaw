@@ -9,7 +9,8 @@ This guide is a companion to the 95-percent-of-users setup guides. **For install
 
 - **OpenClaw** → [openclaw-setup.md](./openclaw-setup.md) (browser account-setup flow, auto-reload)
 - **Hermes (Python)** → [hermes-setup.md](./hermes-setup.md) (browser account-setup flow, manual restart)
-- **Claude Code / Claude Desktop / Cursor / Windsurf / IronClaw (MCP)** → [claude-code-setup.md](./claude-code-setup.md) (no account-setup flow — phrase from another client's credentials or offline)
+- **Claude Desktop (MCP)** → [claude-desktop-setup.md](./claude-desktop-setup.md) (browser account-setup flow via `totalreclaw_pair`, manual restart)
+- **Claude Code / Cursor / Windsurf / IronClaw (MCP)** → [claude-code-setup.md](./claude-code-setup.md) (browser account-setup flow via `totalreclaw_pair`, manual restart)
 
 Once setup is done and tools are bound, come back here for the knobs.
 

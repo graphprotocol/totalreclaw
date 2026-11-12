@@ -5,6 +5,8 @@ functions into Hermes's hook registration system.
 """
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import logging
 import os
 from typing import Optional, TYPE_CHECKING
@@ -27,7 +29,7 @@ from totalreclaw.agent.pending_drain import drain_pending, has_pending
 from totalreclaw.agent.recall import auto_recall
 from totalreclaw.agent.extraction import extract_facts_llm, extract_facts_heuristic
 from totalreclaw.agent.state import _session_idle_seconds
-from totalreclaw.relay import _default_relay_url
+from totalreclaw.relay import _default_relay_url, BillingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -334,6 +336,74 @@ def _maybe_reconfigure_from_disk(state: "PluginState") -> bool:
     return False
 
 
+# Upper bound on the billing refresh at session start once the cached copy
+# has expired. A slow relay must never hold up a session: on timeout the
+# hook keeps whatever settings are already in effect (defaults on a fresh
+# process) and tries again next session.
+_BILLING_REFRESH_TIMEOUT_S = 5.0
+
+
+def _billing_status_to_cache(status: object) -> Optional[dict]:
+    """Turn a ``client.status()`` result into the dict the billing cache holds.
+
+    ``AgentState.update_from_billing`` and the quota-warning code read a
+    plain dict shaped like the relay's ``/v1/billing/status`` JSON
+    (``tier``, ``free_writes_used``, ``free_writes_limit``, ``features``).
+    Anything that is not a :class:`BillingStatus` (or already such a dict)
+    returns ``None`` and is not cached.
+    """
+    if isinstance(status, dict):
+        return status if "tier" in status else None
+    if not isinstance(status, BillingStatus):
+        return None
+    features: dict = {}
+    if status.features is not None:
+        features = {
+            k: v for k, v in dataclasses.asdict(status.features).items() if v is not None
+        }
+    return {
+        "tier": status.tier,
+        "free_writes_used": status.free_writes_used,
+        "free_writes_limit": status.free_writes_limit,
+        "expires_at": status.expires_at,
+        "features": features,
+    }
+
+
+def _cache_billing_status(state: "PluginState", status: object) -> Optional[dict]:
+    """Store a ``client.status()`` result in the state's billing cache."""
+    data = _billing_status_to_cache(status)
+    if data is not None:
+        state.set_billing_cache(data)
+    return data
+
+
+def _refresh_billing_cache(state: "PluginState") -> Optional[dict]:
+    """Return billing data for session start: the cached copy while it is
+    within its TTL, otherwise one ``client.status()`` call bounded by
+    :data:`_BILLING_REFRESH_TIMEOUT_S`.
+
+    Best-effort: any failure (timeout, relay error, no client) returns
+    ``None`` without raising, and the caller keeps its current settings.
+    """
+    cached = state.get_cached_billing()
+    if cached:
+        return cached
+    client = state.get_client()
+    if client is None:
+        return None
+
+    async def _status_with_timeout():
+        return await asyncio.wait_for(client.status(), timeout=_BILLING_REFRESH_TIMEOUT_S)
+
+    try:
+        status = run_sync(_status_with_timeout())
+    except Exception as exc:
+        logger.debug("TotalReclaw: billing refresh failed (keeping current settings): %s", exc)
+        return None
+    return _cache_billing_status(state, status)
+
+
 def _eager_account_register(state: "PluginState") -> None:
     """Issue a one-shot ``client.status()`` so the relay creates the
     account record eagerly — fix for QA-bug #192.
@@ -386,8 +456,12 @@ def _eager_account_register(state: "PluginState") -> None:
         # SA derivation → auth-key register → /v1/billing/status. A
         # 200 from the billing endpoint with the SA on it is exactly
         # what triggers the relay-side account record.
-        run_sync(client.status())
+        status = run_sync(client.status())
         state._eager_account_registered = True
+        # The same response carries the billing status + server-tuned
+        # features; cache it so session start applies them without a
+        # second request.
+        _cache_billing_status(state, status)
         logger.info(
             "TotalReclaw: eager account register completed (relay "
             "now has account record for SA before any extraction)."
@@ -515,9 +589,15 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     except Exception as exc:
         logger.warning("TotalReclaw: pending-drain failed at session start: %s", exc)
 
-    # Check billing cache and update server-driven config
+    # Check billing cache and update server-driven config. The cache is
+    # filled by the eager register above (first session of the process) or,
+    # once it has expired, by one bounded refresh. Skip the refresh when the
+    # eager register did not succeed: the relay just failed or timed out, so
+    # a second call would only delay the session further.
     try:
         billing = state.get_cached_billing()
+        if billing is None and getattr(state, "_eager_account_registered", False):
+            billing = _refresh_billing_cache(state)
         if billing:
             # Update extraction config from server
             state.update_from_billing(billing)

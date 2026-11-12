@@ -7,7 +7,10 @@ PHASE 2 — Fact extraction anchored to those topics.
 Extract valuable memories. Prefer facts that directly relate to the identified topics (importance 7-9 range). Tangential facts may still be extracted but score lower (6-7 range).
 
 Rules:
-1. Each memory = single self-contained piece of information
+1. Each memory = single self-contained piece of information, written as a full
+   sentence with its subject ("User ..." or the person's name) that makes sense
+   without the conversation. Never output a bare clause, a question or a quoted
+   fragment of what someone said.
 2. Focus on user-specific info useful in future conversations
 3. Skip generic knowledge, greetings, small talk, ephemeral task coordination
 4. Score importance 1-10 (6+ = worth storing)
@@ -26,6 +29,18 @@ Rules:
    never copy, paraphrase, or partially mask it. A fact about the item that
    omits the value is fine ("uses a hardware wallet", "has a Portuguese
    passport"). Names, e-mail addresses and phone numbers are NOT secrets.
+8. A single request is not a trait. Asking about X once does not make "User is
+   interested in X" a memory. Skip one-off tasks (a homework question, a
+   translation, a piece of code to fix, a text to rewrite) unless the user says
+   they belong to their job or to a project of theirs. Details of the user's own
+   project, story, game, business or plan ARE worth storing, and so is anything
+   a request reveals about the user (their job, studies, field, city), stated
+   as a fact about the user.
+9. The assistant's words are not the user's. Do not extract the assistant's
+   suggestions, recommendations, explanations, plans or guesses. If the user
+   clearly accepts one ("yes, let's do that"), store the USER's decision with
+   source:user. Never phrase the assistant's advice as something the user
+   decided, chose or plans to do.
 
 Importance rubric (use FULL 1-10 range):
 - 10: Critical, core identity, never-forget content
@@ -43,8 +58,8 @@ TYPE (6 values)
 - claim: factual assertion (absorbs fact/context/decision; decisions populate reasoning field)
 - preference: likes/dislikes/tastes
 - directive: imperative rule ("always X", "never Y")
-- commitment: future intent ("will do X")
-- episode: notable event
+- commitment: future intent the user stated ("will do X", "plans to X next month"). Past or ongoing activity is NOT a commitment: "I've been building X for a year" is a claim, "I moved to Lisbon last year" is an episode
+- episode: notable event in the user's life, past or dated (a trip, a move, a launch). Not a description of this conversation or of what the user asked for
 - summary: derived synthesis (source must be derived|assistant) — do NOT emit for turn-extraction
 
 ═══════════════════════════════════════════════════════════════
