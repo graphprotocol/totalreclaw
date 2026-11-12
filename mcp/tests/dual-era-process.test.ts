@@ -45,10 +45,10 @@ interface Session {
 let session: Session | undefined;
 let home: string | undefined;
 
-function launch(): Session {
+function launch(extraEnv: Record<string, string> = {}): Session {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-dep15-'));
   const child = spawn(process.execPath, [DIST_ENTRY], {
-    env: { PATH: process.env.PATH ?? '', HOME: home },
+    env: { PATH: process.env.PATH ?? '', HOME: home, ...extraEnv },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const stdoutLines: string[] = [];
@@ -142,6 +142,48 @@ describe('built server over a real stdio pipe (dist/index.js)', () => {
     for (const line of s.stdoutLines) {
       expect(JSON.parse(line).jsonrpc).toBe('2.0');
     }
+  }, 30000);
+
+  // Regression: reading memory://context/summary on an unconfigured server used
+  // to fall through to the self-hosted client (init + register against the
+  // relay) and surface as JSON-RPC -32603 ("index out of range: 3 + 115 > 96").
+  // The relay URL points at a closed local port so a regression can never reach
+  // a real relay; the fixed handler must not touch the network at all.
+  const UNREACHABLE_RELAY = { TOTALRECLAW_SERVER_URL: 'http://127.0.0.1:9' };
+
+  it('legacy era: resources/read of memory://context/summary and totalreclaw://guide return text, not an error', async () => {
+    const s = launch(UNREACHABLE_RELAY);
+    await s.request(1, 'initialize', {
+      protocolVersion: '2025-11-25',
+      capabilities: {},
+      clientInfo: { name: 'dep15-process-test', version: '0.0.0' },
+    });
+    s.notify('notifications/initialized');
+    const mem = await s.request(2, 'resources/read', { uri: 'memory://context/summary' });
+    expect(mem.error).toBeUndefined();
+    expect(mem.result.contents[0].uri).toBe('memory://context/summary');
+    expect(mem.result.contents[0].text).toMatch(/not configured|totalreclaw_pair/i);
+    expect(mem.result.contents[0].text).toMatch(/totalreclaw_recall|totalreclaw_pair/);
+    const guide = await s.request(3, 'resources/read', { uri: 'totalreclaw://guide' });
+    expect(guide.error).toBeUndefined();
+    expect(guide.result.contents[0].text).toMatch(/^# TotalReclaw usage guide/);
+  }, 30000);
+
+  it('modern era: resources/read of memory://context/summary and totalreclaw://guide return text, not an error', async () => {
+    const s = launch(UNREACHABLE_RELAY);
+    await s.request('d', 'server/discover', { _meta: MODERN_META });
+    const mem = await s.request(2, 'resources/read', {
+      uri: 'memory://context/summary',
+      _meta: MODERN_META,
+    });
+    expect(mem.error).toBeUndefined();
+    expect(mem.result.contents[0].text).toMatch(/not configured|totalreclaw_pair/i);
+    const guide = await s.request(3, 'resources/read', {
+      uri: 'totalreclaw://guide',
+      _meta: MODERN_META,
+    });
+    expect(guide.error).toBeUndefined();
+    expect(guide.result.contents[0].text).toMatch(/^# TotalReclaw usage guide/);
   }, 30000);
 
   it('exits after the host closes stdin', async () => {

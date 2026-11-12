@@ -2197,6 +2197,7 @@ async function main(): Promise<void> {
     {
       callTool: callToolHandler,
       isManagedMode: () => !!subgraphState,
+      isUnconfigured: () => currentMode === 'unconfigured',
       getClient,
     },
     {
