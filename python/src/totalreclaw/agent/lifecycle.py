@@ -49,6 +49,20 @@ _INTERPRETER_SHUTDOWN_QUOTA_NOTE = (
 _SESSION_OVERRIDE_UNSET = object()
 
 
+def _is_write_quota_error(exc: BaseException) -> bool:
+    """True when a write failed because the relay refused it for quota.
+
+    The bundler path keeps ``raise_for_status()`` (client-consistency spec:
+    the write-path 403 is its own contract), so a refusal surfaces as an
+    ``httpx.HTTPStatusError`` with status 403. Mirrors the plugin's check,
+    which also treats a message mentioning "quota" as a quota refusal.
+    """
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) == 403:
+        return True
+    return "quota" in str(exc).lower()
+
+
 def _owner_address(state: "AgentState") -> str:
     """Best-effort lookup of the configured owner address for queue keying.
 
@@ -514,6 +528,14 @@ def _auto_extract_inner(
             logger.warning(
                 "remember_batch failed for chunk of %d facts: %s", len(chunk), e
             )
+            if _is_write_quota_error(e):
+                # Stale usage numbers would hide the quota warning until the
+                # cache TTL runs out; drop them so the next session start
+                # re-fetches billing status and warns.
+                try:
+                    state.invalidate_billing_cache()
+                except Exception:
+                    pass
             # On a total batch failure, none of the facts in this chunk landed.
             # Log each one individually so the caller can diagnose.
             for fact, _, _ in chunk:
