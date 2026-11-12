@@ -213,7 +213,20 @@ Every client reading `POST /v1/subgraph` must classify a non-2xx response the sa
 
 **Pause semantics:** once a client sees a blocking denial, it must short-circuit every further read (zero HTTP) for a bounded window instead of re-raising once per call site — a single recall can fan out into a dozen-plus subgraph queries (trapdoor chunks, pagination, broadened search, dedup, contradiction detection), and re-hitting an already-denied relay on every one just adds load without new information. Re-probe periodically (default 15 min) rather than pausing until the stated reset time — a legacy 403 can be a transient DB blip, and a raised cap or upgrade should self-heal without a restart. Writes are never gated by this pause; pre-write dedup and contradiction detection fail open while paused.
 
-The write-path 403 `quota_exceeded` on `/v1/bundler` is a **different, unrelated** contract (`submit_userop` keeps `raise_for_status()` and must not change).
+The write-path 403 `quota_exceeded` on `/v1/bundler` is a **different, unrelated** contract: it never triggers the read pause and is never classified as a read error. See "Write-quota refusal" below.
+
+### Write-quota refusal (`/v1/bundler`)
+
+A UserOp submission (`eth_sendUserOperation`) that would take the account over its monthly write cap gets `403 {"error":"quota_exceeded","message":"...","upgrade_url":"..."}`. The relay refuses a batch whole when it does not fit (`used + count > cap`), so in a multi-group write an earlier group can land and a later one be refused. A fail-closed relay DB error answers the same way.
+
+Every client must:
+
+1. **Classify it.** Match `error_code` then `error` by string equality, on status 403 only. Anything else (another 403 code such as `call_target_not_allowed`, a non-JSON body, a 5xx) stays a plain HTTP error.
+2. **Report per-fact outcomes on a batch.** Which facts landed before the refusal, so the caller neither drops stored facts nor re-stores them.
+3. **Tell the user.** An explicit write tool returns a structured result (`error_code: "quota_exceeded"`, plus tier / usage / reset date from `/v1/billing/status` and `upgrade_url`), never the raw HTTP text. A background write (auto-extraction, mirrors) injects a notice into the next turn, at most once per session.
+4. **Not lose auto-extracted facts.** Keep refused facts on the device (encrypted) and store them once a write succeeds again (reset or upgrade), deduplicated against the vault first.
+
+Python/Hermes is the reference implementation (#747): `relay.RelayWriteQuotaExceeded` / `raise_for_bundler_status`, `TotalReclaw.remember_batch` (`batch_results`), `agent/pending_store.py`, `agent/write_quota.py`, `agent/lifecycle.py::drain_pending_stores`. MCP returns a structured tool error and has no auto-extraction to queue. The OpenClaw plugin misreports it (#550). ZeroClaw maps it to `QuotaExceeded`.
 
 ### Session Debrief
 

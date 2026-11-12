@@ -114,7 +114,7 @@ Both tiers: encryption, ownership, and on-chain durability are identical. Tier o
 The plugin fetches billing on every `on_session_start` and caches it for 2 hours. It auto-injects warnings into your context at these thresholds — when you see them, surface them to the user:
 
 - **>80% usage** — soft warning. Mention casually: *"You're at `<used>` / `<limit>` of your free-tier quota this month. Upgrade to Pro for 3,000/month — want me to open the upgrade link?"* Wait for confirmation before calling `totalreclaw_upgrade`.
-- **403 quota exceeded** on a write → billing cache invalidated, warning re-injects next turn. Surface the error verbatim + offer `totalreclaw_upgrade` immediately.
+- **Monthly write allowance used up** (relay 403 `quota_exceeded` on a write) — a `[totalreclaw] New memories are NOT being saved: ...` context line (once per session), or a `totalreclaw_remember` result with `error_code: "quota_exceeded"` (`stored: false`, plus `tier` / `used` / `limit` / `resets_at` / `upgrade_url`). Tell the user in one or two sentences that new memories are not being saved and when the allowance resets; never say a memory was saved. Free tier: offer `totalreclaw_upgrade`. Auto-extracted memories are kept on this device and saved automatically once saving works again (reset or upgrade); a `[totalreclaw] Saving memories works again: ...` line confirms it. A refused explicit `totalreclaw_remember` is not queued: say it was not saved.
 - **First successful pair** → the setup-flow confirmation already includes tier + limit. Do not re-emit the same info on subsequent first-message-of-session.
 - **Read denial (quota / rate limit)** — DIFFERENT from the write-quota warning above. A `[totalreclaw] Memory lookups are paused: ...` context line (or a `totalreclaw_recall`/`_export`/`_pin`/`_unpin`/`_retype`/`_set_scope` result carrying `error_code: "read_quota_exceeded"` or `"rate_limited"`) means the vault could NOT be searched right now — it does **not** mean the user has no memories. Relay the message to the user in one or two sentences; never say "you have no memories" or invent a count. New memories keep saving during the pause. Lookups resume automatically.
 
@@ -165,7 +165,7 @@ Only fall back to a shell command for a chat-app user if `/restart` answered "no
 - User says done but `credentials.json` missing → PIN expired or wrong phrase entered; call `totalreclaw_pair` again.
 - `totalreclaw_pair` returns `already_configured` → an account is already set up; tell the user. Only if they ask to replace it, call again with `replace=true`: the pairing page warns them and only they can confirm there. Never move, rename or delete `credentials.json` to get around this.
 - `onboarding required` → credentials missing; redo from the account-setup step in the install guide.
-- `quota exceeded` → `totalreclaw_status`, then offer `totalreclaw_upgrade`.
+- `quota_exceeded` → relay the result's `error` (it already carries usage and the reset date), then offer `totalreclaw_upgrade` (free tier).
 
 ## Tool surface
 

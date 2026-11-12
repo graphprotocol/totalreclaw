@@ -34,7 +34,7 @@ Match on the `error_code` field first, then `error`, by **string equality**, nev
 Notes:
 - The relay's `checkReadQuota` currently **fails closed** on DB errors with the same legacy 403 body. So a legacy 403 can be a transient DB blip. §4.3 re-probes for exactly this reason. Spec B flips the read path to fail-open.
 - On `/v1/subgraph`, 401 comes only from auth and 400 only from a bad wallet format. Neither is quota.
-- The write-path 403 `quota_exceeded` on `/v1/bundler` (`proxy.ts:191`) is **out of scope and must not change**. `submit_userop` keeps `raise_for_status()`.
+- The write-path 403 `quota_exceeded` on `/v1/bundler` (`proxy.ts:191`) is **out of scope and must not change**. `submit_userop` keeps `raise_for_status()`. *(Superseded by #747: the bundler path now raises `RelayWriteQuotaExceeded`, an `httpx.HTTPStatusError` subclass that is still not a `RelayReadError` and never sets the read pause. See client-consistency.md "Write-quota refusal".)*
 
 ## 3. Shared-core check
 

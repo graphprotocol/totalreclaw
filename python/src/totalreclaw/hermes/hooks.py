@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 from totalreclaw.agent.lifecycle import (
     auto_extract as _auto_extract,
     crystal_gate_passes,
+    drain_pending_stores,
     session_debrief as _session_debrief,
     _is_near_duplicate,
     _fetch_recent_memories,
@@ -366,6 +367,7 @@ def _billing_status_to_cache(status: object) -> Optional[dict]:
         "free_writes_used": status.free_writes_used,
         "free_writes_limit": status.free_writes_limit,
         "expires_at": status.expires_at,
+        "resets_at": status.resets_at,
         "features": features,
     }
 
@@ -531,6 +533,9 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     # within a single session so the agent doesn't spam the prompt.
     if hasattr(state, "_totalreclaw_setup_nudge_shown"):
         state._totalreclaw_setup_nudge_shown = False
+    # #747 — a write refused for quota is announced once per session.
+    if hasattr(state, "reset_write_quota_announcement"):
+        state.reset_write_quota_announcement()
 
     # Staging-mode banner: queued once per process whenever the effective
     # relay URL points at staging (same condition as the OpenClaw plugin).
@@ -633,6 +638,32 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
                 _maybe_queue_update_notice(state, billing)
     except Exception:
         pass
+
+    # #747 — facts a write-quota refusal queued. Store a batch of them once
+    # the billing numbers show room again (the month rolled over, or the user
+    # upgraded). Auto-extraction also drains after each successful write.
+    try:
+        if _billing_has_write_headroom(state.get_cached_billing()):
+            saved = drain_pending_stores(state)
+            if saved:
+                logger.info("TotalReclaw: stored %d queued fact(s) at session start", saved)
+    except Exception as exc:
+        logger.debug("TotalReclaw: pending-store drain skipped: %s", exc)
+
+
+def _billing_has_write_headroom(billing: Optional[dict]) -> bool:
+    """True when cached billing data says a write would be accepted: Pro
+    (the relay reports the free cap as ``free_writes_limit`` even for Pro, so
+    there is no usable number to compare), or free usage below the limit."""
+    if not isinstance(billing, dict):
+        return False
+    if billing.get("tier") == "pro":
+        return True
+    used = billing.get("free_writes_used")
+    limit = billing.get("free_writes_limit")
+    if isinstance(used, bool) or isinstance(limit, bool):
+        return False
+    return isinstance(used, int) and isinstance(limit, int) and used < limit
 
 
 def _maybe_queue_update_notice(state: "PluginState", billing: dict) -> None:

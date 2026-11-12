@@ -39,7 +39,7 @@ from .grant import (
     encode_install_signature,
     sign_digest,
 )
-from .relay import _client_header_value
+from .relay import _client_header_value, raise_for_bundler_status
 
 if TYPE_CHECKING:
     from .relay import RelayClient
@@ -689,7 +689,9 @@ async def _relay_rpc(
             "id": rpc_id,
         },
     )
-    resp.raise_for_status()
+    # A write-quota refusal (403 quota_exceeded) raises the typed
+    # ``RelayWriteQuotaExceeded`` (#747); anything else is unchanged.
+    raise_for_bundler_status(resp)
     return resp.json()
 
 
