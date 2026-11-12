@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
+import re
 import secrets
 import time
 from pathlib import Path
@@ -373,6 +375,7 @@ class QuotaClient:
         self.tier = tier
         self.batches: list[list[str]] = []
         self.stored: list[str] = []
+        self.sent: list[dict] = []  # every fact dict that reached a write
         self.status_calls = 0
         self._recent = list(recent or [])
         self._n = 0
@@ -389,11 +392,22 @@ class QuotaClient:
             raise _quota_error(batch_results=[None] * len(facts))
         self.remaining -= len(facts)
         ids = []
-        for t in texts:
+        for f in facts:
             self._n += 1
             ids.append(f"fact-{self._n}")
-            self.stored.append(t)
+            self.stored.append(f["text"])
+            self.sent.append(dict(f))
         return ids
+
+    async def remember(self, text, **kw):
+        """The single-fact path (the session Crystal uses it)."""
+        if self.remaining < 1:
+            raise _quota_error()
+        self.remaining -= 1
+        self._n += 1
+        self.stored.append(text)
+        self.sent.append({"text": text, **kw})
+        return f"fact-{self._n}"
 
     async def status(self):
         self.status_calls += 1
@@ -710,3 +724,208 @@ def test_on_session_start_does_not_drain_when_still_exhausted(state_dir):
 
     assert client.batches == []
     assert client.pending_store.count() == 1
+
+
+# ---------------------------------------------------------------------------
+# 7. The session-end Crystal (#749)
+# ---------------------------------------------------------------------------
+
+_ISO_MS = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
+_PGB = "Inês proposed using PgBouncer for connection pooling on the Postgres database"
+
+
+def _topic_embedding(text: str) -> list[float]:
+    """Deterministic stand-in for Harrier: texts sharing a topic word are close."""
+    v = [0.0] * 640
+    for i, t in enumerate(("pgbouncer", "lisbon", "jazz")):
+        if t in text.lower():
+            v[i] = 1.0
+    v[639] = 0.3
+    n = math.sqrt(sum(x * x for x in v))
+    return [x / n for x in v]
+
+
+def _crystal(**kw):
+    from totalreclaw.agent.debrief import Crystal
+
+    fields = dict(
+        narrative="User planned a Lisbon trip. They booked an aisle seat under $400.",
+        key_outcomes=["Lisbon flight booked"],
+        open_threads=["Pick a hotel"],
+        lessons=[],
+        importance=8,
+        topics_discussed=["travel"],
+    )
+    fields.update(kw)
+    return Crystal(**fields)
+
+
+def _run_debrief(state, crystal):
+    from totalreclaw.agent.lifecycle import session_debrief
+
+    if state.session_id is None:
+        state.start_session("conv-749")
+    for i in range(4):
+        state.add_message("user", f"turn {i}")
+        state.add_message("assistant", f"reply {i}")
+    with patch("totalreclaw.agent.lifecycle.generate_crystal", new=AsyncMock(return_value=crystal)), \
+         patch("totalreclaw.embedding.get_embedding", return_value=None):
+        return session_debrief(state, stored_fact_texts=[])
+
+
+class TestSessionCrystalQuota:
+    def test_refused_crystal_is_queued_and_the_user_is_told(self, state_dir):
+        client = QuotaClient(remaining=0)
+        state = _state(client)
+        state.set_billing_cache({"tier": "free", "free_writes_used": 250, "free_writes_limit": 250})
+
+        assert _run_debrief(state, _crystal()) == []
+
+        [entry] = client.pending_store.take(10)
+        fact = entry["fact"]
+        assert fact["text"] == "User planned a Lisbon trip. They booked an aisle seat under $400."
+        assert fact["fact_type"] == "summary"
+        assert fact["provenance"] == "derived"
+        assert fact["importance"] == pytest.approx(0.8)
+        meta = fact["extra_metadata"]
+        assert meta["subtype"] == "session_crystal"
+        assert meta["session_id"] == state.session_id
+        assert meta["key_outcomes"] == ["Lisbon flight booked"]
+        assert _ISO_MS.match(fact["extracted_at"])
+        notice = state.get_quota_warning() or ""
+        assert "not being saved" in notice.lower()
+        assert "1 new memory is kept on this device" in notice
+        assert state.get_cached_billing() is None
+
+    def test_no_second_notice_in_the_same_session(self, state_dir):
+        client = QuotaClient(remaining=0)
+        state = _state(client)
+        _run_extract(state, _facts("fact one"))
+        state.clear_quota_warning()  # shown on the turn
+
+        _run_debrief(state, _crystal())
+
+        assert state.get_quota_warning() is None
+        assert client.pending_store.count() == 2
+
+    def test_queued_crystal_is_stored_as_it_would_have_been(self, state_dir):
+        from totalreclaw.agent.lifecycle import drain_pending_stores
+
+        client = QuotaClient(remaining=0)
+        state = _state(client)
+        _run_debrief(state, _crystal())
+        queued = client.pending_store.take(10)
+        client.pending_store.put_back(queued)
+
+        client.remaining = 100  # the month rolled over
+        with patch("totalreclaw.embedding.get_embedding", new=_topic_embedding):
+            assert drain_pending_stores(state) == 1
+
+        [sent] = client.sent
+        assert sent["text"] == queued[0]["fact"]["text"]
+        assert sent["fact_type"] == "summary"
+        assert sent["provenance"] == "derived"
+        assert sent["extra_metadata"] == queued[0]["fact"]["extra_metadata"]
+        # Dated to the session, not to the drain, so the vault groups it
+        # with its conversation.
+        assert sent["extracted_at"] == queued[0]["fact"]["extracted_at"]
+        # Stored like a Crystal written at session end: no embedding.
+        assert sent.get("embedding") is None
+
+    def test_drain_drops_crystal_parts_the_user_forgot_since(self, state_dir):
+        from totalreclaw.agent.lifecycle import drain_pending_stores
+        from totalreclaw.forget_guard import ForgetLedger
+
+        client = QuotaClient(remaining=0)
+        state = _state(client)
+        _run_debrief(state, _crystal(
+            narrative=(
+                "User reviewed the Lisbon trip budget. "
+                "Inês proposed putting PgBouncer in front of Postgres."
+            ),
+            key_outcomes=["Inês proposed PgBouncer", "Lisbon budget agreed"],
+        ))
+
+        # Next session: the user forgets the PgBouncer fact.
+        client.forget_ledger = ForgetLedger.for_owner(client.eoa_address, secrets.token_bytes(32))
+        client.forget_ledger.record("f1", _PGB, _topic_embedding(_PGB))
+
+        client.remaining = 100
+        with patch("totalreclaw.embedding.get_embedding", new=_topic_embedding):
+            assert drain_pending_stores(state) == 1
+
+        [sent] = client.sent
+        assert sent["text"] == "User reviewed the Lisbon trip budget."
+        assert sent["extra_metadata"]["key_outcomes"] == ["Lisbon budget agreed"]
+
+    def test_drain_drops_a_crystal_that_was_all_forgotten(self, state_dir):
+        from totalreclaw.agent.lifecycle import drain_pending_stores
+        from totalreclaw.forget_guard import ForgetLedger
+
+        client = QuotaClient(remaining=0)
+        state = _state(client)
+        _run_debrief(state, _crystal(
+            narrative="Inês proposed putting PgBouncer in front of Postgres.",
+            key_outcomes=[],
+        ))
+        assert client.pending_store.count() == 1
+        client.forget_ledger = ForgetLedger.for_owner(client.eoa_address, secrets.token_bytes(32))
+        client.forget_ledger.record("f1", _PGB, _topic_embedding(_PGB))
+
+        client.remaining = 100
+        with patch("totalreclaw.embedding.get_embedding", new=_topic_embedding):
+            assert drain_pending_stores(state) == 0
+        assert client.sent == []
+        assert client.pending_store.count() == 0
+
+    def test_a_stored_crystal_is_unchanged(self, state_dir):
+        client = QuotaClient(remaining=10)
+        state = _state(client)
+        assert _run_debrief(state, _crystal()) == ["fact-1"]
+        assert client.pending_store.count() == 0
+        assert state.get_quota_warning() is None
+
+
+class TestQueuedFactTime:
+    def test_queue_stamps_the_time_a_fact_was_refused(self, state_dir):
+        q = _queue()
+        q.add([{"text": "User flies direct only"}], reason="write_quota")
+        [entry] = q.take(1)
+        assert _ISO_MS.match(entry["fact"]["extracted_at"])
+
+    def test_queue_keeps_an_existing_time(self, state_dir):
+        q = _queue()
+        q.add([{"text": "a fact", "extracted_at": "2026-01-02T03:04:05.000Z"}], reason="write_quota")
+        [entry] = q.take(1)
+        assert entry["fact"]["extracted_at"] == "2026-01-02T03:04:05.000Z"
+
+    def test_drained_fact_keeps_its_queued_time(self, state_dir):
+        from totalreclaw.agent.lifecycle import drain_pending_stores
+
+        client = QuotaClient(remaining=10)
+        client.pending_store.add(
+            [{"text": "a fact", "extracted_at": "2026-01-02T03:04:05.000Z"}], reason="write_quota",
+        )
+        state = _state(client)
+        with patch("totalreclaw.embedding.get_embedding", return_value=None):
+            drain_pending_stores(state)
+        assert client.sent[0]["extracted_at"] == "2026-01-02T03:04:05.000Z"
+
+
+@pytest.mark.parametrize(
+    "queued,lost,expected",
+    [
+        (1, 0, "1 new memory is kept on this device"),
+        (2, 0, "2 new memories are kept on this device"),
+        (0, 1, "1 new memory could not be kept and is lost"),
+        (0, 3, "3 new memories could not be kept and are lost"),
+    ],
+)
+def test_notice_counts_read_correctly(queued, lost, expected):
+    from totalreclaw.agent.write_quota import fill_write_quota_details, format_write_quota_notice
+
+    err = _quota_error()
+    fill_write_quota_details(err, None)
+    notice = format_write_quota_notice(err, queued=queued, lost=lost)
+    assert expected in notice
+    assert "from this conversation" not in notice
