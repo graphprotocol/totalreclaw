@@ -442,6 +442,37 @@ describe('runPairBackgroundTask — credentials on disk', () => {
     expect(fs.readdirSync(tmpDir).sort()).toEqual(['credentials.json', 'credentials.json.bak']);
   });
 
+  it('a failed preserve-copy nacks credentials_preserve_failed and leaves the original byte-identical', async () => {
+    fs.writeFileSync(credsPath, OLD_CREDS, { mode: 0o600 });
+    fs.writeFileSync(`${credsPath}.bak`, 'old backup\n', { mode: 0o600 });
+    const before = fs.readFileSync(credsPath);
+    // The real fs module: pair.ts reads it through an esModuleInterop getter.
+    // Only the exclusive create of the `.replaced-*` copy fails.
+    const realFs = jest.requireActual('node:fs') as typeof fs;
+    const realOpen = realFs.openSync.bind(realFs);
+    const spy = jest.spyOn(realFs, 'openSync').mockImplementation(((p: fs.PathLike, ...rest: unknown[]) => {
+      if (String(p).includes('credentials.json.replaced-')) {
+        throw new Error('simulated copy failure (disk full)');
+      }
+      return (realOpen as (...a: unknown[]) => number)(p, ...rest);
+    }) as typeof fs.openSync);
+    try {
+      const kp = generateGatewayKeypair();
+      const ws = new FakeWebSocket();
+      await run(makeSession(ws, kp, true), ws, forwardFrame(kp, { replace_confirmed: true }));
+      expect(ws.sent).toContainEqual({ type: 'nack', error: 'credentials_preserve_failed' });
+      expect(ws.sent).not.toContainEqual({ type: 'ack' });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(fs.readFileSync(credsPath).equals(before)).toBe(true);
+    expect(fs.statSync(credsPath).mode & 0o777).toBe(0o600);
+    // No partial copy, no temp file, and the Hermes .bak was not moved aside.
+    expect(fs.readFileSync(`${credsPath}.bak`, 'utf-8')).toBe('old backup\n');
+    expect(fs.readdirSync(tmpDir).sort()).toEqual(['credentials.json', 'credentials.json.bak']);
+  });
+
   it('a confirmed replacement over a 0644 file ends at mode 0600', async () => {
     fs.writeFileSync(credsPath, OLD_CREDS, { mode: 0o644 });
     fs.chmodSync(credsPath, 0o644);
