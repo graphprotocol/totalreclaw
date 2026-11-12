@@ -40,6 +40,7 @@ import {
   invalidateMemoryContextCache,
 } from './resources/index.js';
 import { createTotalReclawServer } from './server-setup.js';
+import { buildRecallResponse } from './recall-format.js';
 import {
   createCallToolHandler,
   type HandlerBundle,
@@ -190,6 +191,7 @@ export { getSessionId };
 
 // ── Client identification ──────────────────────────────────────────────────
 import { setClientId, getClientId } from './client-id.js';
+import { getRecallTopK, setServerRecallTopK } from './recall-top-k.js';
 let clientIdentifierResolved = false;
 
 /**
@@ -298,6 +300,7 @@ function proactiveBillingFetch(state: SubgraphState): void {
           max_candidate_pool: features?.max_candidate_pool as number | undefined,
           checked_at: Date.now(),
         };
+        setServerRecallTopK(features?.recall_top_k);
       }
     })
     .catch(() => { /* best-effort */ })
@@ -1405,7 +1408,7 @@ async function handleDebriefSubgraph(
 async function handleRecallSubgraph(
   state: SubgraphState,
   args: unknown,
-): Promise<{ content: Array<{ type: string; text: string }> }> {
+): Promise<ToolResponse> {
   const input = args as Record<string, unknown>;
   const query = (input?.query as string) || '';
   const startTime = Date.now();
@@ -1423,8 +1426,9 @@ async function handleRecallSubgraph(
     };
   }
 
-  let k = (input?.k as number) ?? 8;
-  if (k < 1) k = 8;
+  const defaultK = getRecallTopK();
+  let k = (input?.k as number) ?? defaultK;
+  if (k < 1) k = defaultK;
   if (k > 50) k = 50;
 
   try {
@@ -1578,19 +1582,21 @@ async function handleRecallSubgraph(
         : '',
     }));
 
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          memories,
-          latency_ms: Date.now() - startTime,
-          candidates_searched: candidates.length,
-          broadened_search: true,
-          mode: 'subgraph',
-          query_intent: intent,
-        }),
-      }],
-    };
+    return buildRecallResponse(
+      {
+        memories,
+        latency_ms: Date.now() - startTime,
+        candidates_searched: candidates.length,
+        broadened_search: true,
+        mode: 'subgraph',
+        query_intent: intent,
+      },
+      reranked.map((r) => ({
+        type: categoryMap.get(r.id) ?? 'fact',
+        text: r.text,
+        createdAtUnix: r.createdAt ?? 0,
+      })),
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return {
@@ -1926,6 +1932,7 @@ async function statusHandler(args: unknown): Promise<ToolResponse> {
         max_candidate_pool: raw.features.max_candidate_pool,
         checked_at: Date.now(),
       };
+      setServerRecallTopK(raw.features.recall_top_k);
     }
   } catch {
     // Best-effort cache — don't fail the status call.

@@ -96,7 +96,7 @@ class LaggyClient:
     async def remember_batch(self, facts, source="python-client"):
         return [await self.remember(f["text"], embedding=f.get("embedding")) for f in facts]
 
-    async def forget(self, fact_id):
+    async def forget(self, fact_id, *, suppress_reextraction=False):
         self.facts.pop(fact_id, None)
         self.forgotten.append(fact_id)
         # Same ledger contract as TotalReclaw.forget.

@@ -107,7 +107,7 @@ NOT FOR: chitchat, passwords, generic knowledge.
 Extract ATOMIC. Good: "User is vegan". Bad: "User said they became vegan, prefer organic".
 PARAMS facts[]: text; importance 1-10 def 5; type claim|preference|directive|commitment|episode|summary; scope work|personal|health|family|creative|finance|misc|unspecified. Dedup auto.`;
 
-export const RECALL_TOOL_DESCRIPTION = `Search encrypted vault. Top 8 reranked by provenance+semantic+recency.
+export const RECALL_TOOL_DESCRIPTION = `Search encrypted vault. Top 16 reranked by provenance+semantic+recency.
 INVOKE WHEN USER SAYS:
 - "what's my [phone/address/doctor]"
 - "remember when I..." / "what did I say about..."
@@ -115,7 +115,7 @@ INVOKE WHEN USER SAYS:
 - opens convo on a topic (auto-recall first msg)
 WHEN NOT TO USE: world knowledge, small talk.
 DOES: trapdoor search, decrypt, rerank BM25+cosine+source-provenance.
-PARAMS: query (5-15 words), k (def 8, max 50).
+PARAMS: query (5-15 words), k (def 16, max 50).
 Don't announce "I found these memories" — just use them.`;
 
 export const FORGET_TOOL_DESCRIPTION = `Permanently remove memory.
@@ -210,7 +210,7 @@ INVOKE WHEN USER SAYS:
 DOES: opens a relay pairing session, returns {url, pin, expires_at_ms}. Hand the URL + PIN to the user — they open the URL in any browser, the BROWSER generates (or imports) a 12-word phrase, encrypts it, uploads ciphertext to this MCP server. Server decrypts in-memory, writes ~/.totalreclaw/credentials.json (mode 0600). Phrase NEVER touches LLM context, chat transcript, stdout, or logs.
 AFTER PAIRING: when the page says "You're all set", tell the user to fully quit and reopen their MCP host (Claude Desktop / Cursor / Claude Code); the server reads credentials.json only at startup. The link lasts about 10 minutes.
 WHEN NOT TO USE:
-- TotalReclaw is already set up on this machine → the tool refuses; do not pair again
+- already set up (credentials.json exists or the server is configured) → the tool refuses with already_configured. Tell the user they are set up. Only if THEY ask to replace their account, call with replace=true; the pairing page asks the user to confirm. You cannot confirm it for them.
 - user explicitly wants terminal-only setup → point them at \`npx @totalreclaw/mcp-server setup\` (CLI wizard, runs OUTSIDE your shell tool)
 - NEVER ask the user to paste their phrase in chat. NEVER echo or print a phrase from any source.`;
 

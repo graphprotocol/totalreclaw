@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **Auto-recall returns 16 facts by default, up from 8.** `beforeAgentStart` asks the client for 16 memories when the caller passes no limit, matching Hermes, MCP and the OpenClaw plugin (public #365: on LOCOMO, 8 to 16 raised overall accuracy from 40% to 47% and multi-hop from 18% to 35%). `SKILL.md` documents the new `k` default, and the MCP-mode skill no longer passes an explicit `k`, so the MCP server's default (env > relay > 16) applies.
+
 - Pro tier copy is 3,000 memories/month, not 1,500 (Stripe is the source of truth; Free stays 250/month). Text only.
 
 ## 3.1.1-rc.1 — 2026-04-20

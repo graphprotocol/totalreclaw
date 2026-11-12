@@ -299,6 +299,7 @@ def _mirror_remember(
 
     result = _parse_tool_result(run_sync(_remember(
         args, state, gate_mode="exact_only", gate_exclude_ids=list(exclude_ids or ()),
+        _from_mirror=True,
     )))
     if result.get("error"):
         logger.warning("memory mirror: remember failed: %s", result["error"])
@@ -314,7 +315,7 @@ def _mirror_forget(state: "PluginState", fact_ids: List[str]) -> int:
 
     forgotten = 0
     for fact_id in fact_ids:
-        result = _parse_tool_result(run_sync(_forget({"fact_id": fact_id}, state)))
+        result = _parse_tool_result(run_sync(_forget({"fact_id": fact_id}, state, _from_mirror=True)))
         if result.get("error") or not result.get("deleted", True):
             logger.warning(
                 "memory mirror: forget %s failed: %s",

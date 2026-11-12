@@ -32,6 +32,7 @@ from .crypto import (
 from .lsh import LSHHasher
 from .relay import RelayClient, BillingStatus, _default_relay_url, _client_header_value
 from .reranker import RerankerResult
+from .forget_guard import ForgetLedger
 from .operations import (
     ForgetResult,
     WalletContext,
@@ -39,6 +40,7 @@ from .operations import (
     store_fact_batch,
     search_facts,
     forget_fact,
+    fetch_fact_plaintext,
     export_facts,
     pin_fact,
     unpin_fact,
@@ -1131,7 +1133,21 @@ class TotalReclaw:
             include_embeddings=include_embeddings,
         )
 
-    async def forget(self, fact_id: str) -> ForgetResult:
+    @property
+    def forget_ledger(self) -> ForgetLedger:
+        """The encrypted, machine-local list of facts the user explicitly
+        forgot (internal#605). Auto-extraction checks it before every write so
+        a forgotten fact is not re-created from old conversation text."""
+        # ``from_bundle`` bypasses ``__init__``, so read the cache defensively.
+        ledger = getattr(self, "_forget_ledger", None)
+        if ledger is None:
+            ledger = ForgetLedger.for_owner(self._eoa_address, self._keys.encryption_key)
+            self._forget_ledger = ledger
+        return ledger
+
+    async def forget(
+        self, fact_id: str, *, suppress_reextraction: bool = False
+    ) -> ForgetResult:
         """Soft-delete a fact by writing a tombstone.
 
         Returns a :class:`~totalreclaw.operations.ForgetResult` — a mapping
@@ -1140,10 +1156,22 @@ class TotalReclaw:
         :meth:`retype`, :meth:`set_scope`). It stays backward-compatible
         with the historic ``bool`` return: ``bool(result)`` is the success
         flag, so ``if await client.forget(id): ...`` keeps working.
+
+        ``suppress_reextraction=True`` marks a forget the USER asked for.
+        The fact's text and embedding are decrypted before the tombstone and,
+        once the tombstone lands, added to :attr:`forget_ledger`, so later
+        auto-extraction won't store the same fact again (internal#605).
+        Internal tombstones (an UPDATE replacing a fact, re-crystallization)
+        leave it ``False``.
         """
         await self._ensure_address()
         await self._ensure_registered()
         chain_id = await self._ensure_chain_id()
+        snapshot = None
+        if suppress_reextraction:
+            snapshot = await fetch_fact_plaintext(
+                fact_id, self._wallet_address, self._relay, self._keys
+            )
         success = await forget_fact(
             fact_id,
             self._wallet_address,
@@ -1158,6 +1186,13 @@ class TotalReclaw:
             # Store-time write gate: the subgraph keeps listing this fact until
             # it indexes the tombstone; the ledger knows it is gone.
             ledger_for(self).forget(fact_id)
+        if success and snapshot:
+            try:
+                self.forget_ledger.record(
+                    fact_id, snapshot["text"], snapshot.get("embedding")
+                )
+            except Exception as e:  # never fail a forget over the ledger
+                logger.warning("forget ledger: record failed: %s", type(e).__name__)
         return ForgetResult(success=success, fact_id=fact_id)
 
     async def pin_fact(self, fact_id: str) -> dict:

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **Auto-recall returns 16 facts, up from 8.** `AUTO_RECALL_TOP_K` is now 16, matching the other clients (public #365: on LOCOMO, 8 to 16 raised overall accuracy from 40% to 47% and multi-hop from 18% to 35%). `recall(query, limit, ..)` with an explicit limit is unchanged. This crate does not read the relay's `features.recall_top_k` yet; the constant is the only source.
+
 ### Fixed
 
 - `TOTALRECLAW_SERVER_URL` now picks the relay, as the README always said.
