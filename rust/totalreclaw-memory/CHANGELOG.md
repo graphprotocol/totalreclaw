@@ -4,6 +4,8 @@
 
 ### Changed
 
+- **`search::search_candidates` downloads much less data and runs batches concurrently.** Blind-index queries now return fact ids only, up to 6 at a time (they ran one by one). Each unique fact's payload is then fetched once, in batches of 100. The candidate set is the same as before, and results now come back in first-hit order instead of `HashMap` order. Adds a direct `futures-util` dependency, already in the tree through `reqwest`. Port of the Python change (public #703); internal #666.
+
 - **Auto-recall returns 16 facts, up from 8.** `AUTO_RECALL_TOP_K` is now 16, matching the other clients (public #365: on LOCOMO, 8 to 16 raised overall accuracy from 40% to 47% and multi-hop from 18% to 35%). `recall(query, limit, ..)` with an explicit limit is unchanged. This crate does not read the relay's `features.recall_top_k` yet; the constant is the only source.
 
 ### Fixed

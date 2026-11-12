@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **Recall downloads much less data on large vaults.** Blind-index queries in `src/subgraph/search.ts` now return fact ids only. Each unique fact's payload is then fetched once, in batches of 100, with at most 6 subgraph queries in flight (the trapdoor batches used to fire all at once). Same candidates in the same order, so ranking is unchanged. On a mocked 1,000-fact vault, a recall dropped from about 6.5 MB to 3.1 MB. Port of the Python change (public #703); internal #666.
+
 ### Fixed
 - **Reading `memory://context/summary` on an unconfigured server returns text, not a JSON-RPC error.** The handler only special-cased managed mode; an unconfigured server fell through to the self-hosted client, which ran `init()` and `register()` against `TOTALRECLAW_SERVER_URL` (and would try to write a credentials file). Against the staging relay that surfaced as `-32603 "index out of range: 3 + 115 > 96"` in both protocol eras. The in-memory tests never saw it because they stub `isManagedMode() === true`. The handler now answers with a "not configured, run totalreclaw_pair" message and never builds the client. New real-process tests read both resources in both eras: `tests/dual-era-process.test.ts`.
 - **Replace-mode preserve failure is covered by a test.** If copying the old credentials aside fails, the pairing is nacked (`credentials_preserve_failed`) and the existing file stays byte-identical. Tests: `tests/pair-replace-guard.test.ts`.
