@@ -98,6 +98,15 @@ await mgr.search('q', { signal: ac.signal, sessionKey: 'sess-42' });
 assert.equal(lastRecallOpts?.sessionKey, 'sess-42');
 assert.equal(lastRecallOpts?.signal, ac.signal);
 
+// --- Recall top-k: no maxResults -> the recall closure picks the default
+// (env > relay features.recall_top_k > 16), so search() must NOT pin one. ---
+await mgr.search('q');
+assert.equal(lastRecallOpts?.maxResults, undefined, 'no caller maxResults -> recall resolves the default');
+// An explicit maxResults is forwarded and caps the hits.
+const capped = await mgr.search('q', { maxResults: 2 });
+assert.equal(lastRecallOpts?.maxResults, 2, 'explicit maxResults is forwarded');
+assert.equal(capped.length, 2, 'explicit maxResults caps the hits');
+
 // --- readFile(): reverse path -> id -> decrypt ---
 const r = await mgr.readFile({ relPath: `${FACT_PATH_PREFIX}f1` });
 assert.match(r.text, /dark mode/);

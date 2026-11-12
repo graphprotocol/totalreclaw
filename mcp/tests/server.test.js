@@ -31,7 +31,7 @@ describe('MCP Tool Definitions', () => {
     expect(recallToolDefinition.name).toBe('totalreclaw_recall');
     expect(recallToolDefinition.inputSchema.required).toContain('query');
     expect(recallToolDefinition.inputSchema.properties.query.type).toBe('string');
-    expect(recallToolDefinition.inputSchema.properties.k.default).toBe(8);
+    expect(recallToolDefinition.inputSchema.properties.k.default).toBe(16);
   });
 
   it('should define forget tool with correct schema', () => {

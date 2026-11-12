@@ -56,6 +56,7 @@ export interface BillingCache {
     extraction_interval?: number;
     max_facts_per_extraction?: number;
     max_candidate_pool?: number;
+    recall_top_k?: number;
   };
   /**
    * Authoritative chain id from the relay `/v1/billing/status` response.
@@ -121,6 +122,37 @@ export function syncDataEdgeAddressFromBilling(address: string | undefined): voi
   setDataEdgeAddressOverride(
     typeof address === 'string' && DATA_EDGE_ADDRESS_RE.test(address) ? address : null,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Recall top-k
+// ---------------------------------------------------------------------------
+
+/** Default facts per recall when nothing else says otherwise (public #365). */
+export const DEFAULT_RECALL_TOP_K = 16;
+
+function isPositiveInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v > 0;
+}
+
+/**
+ * Resolve how many facts a recall returns when the caller passes no limit
+ * (memory_search without maxResults, and the before_agent_start auto-recall).
+ * Priority, mirroring the Python client (`AgentState.get_recall_top_k`):
+ *   1. env `TOTALRECLAW_RECALL_TOP_K` (passed in as `envOverride` — env reads
+ *      stay centralized in config.ts),
+ *   2. relay `features.recall_top_k` from the billing cache,
+ *   3. DEFAULT_RECALL_TOP_K (16).
+ * Invalid values (non-integer, <= 0, NaN) at any level are skipped.
+ */
+export function resolveRecallTopK(
+  envOverride: number | undefined,
+  cache: BillingCache | null,
+): number {
+  if (isPositiveInt(envOverride)) return envOverride;
+  const serverVal = cache?.features?.recall_top_k;
+  if (isPositiveInt(serverVal)) return serverVal;
+  return DEFAULT_RECALL_TOP_K;
 }
 
 // ---------------------------------------------------------------------------

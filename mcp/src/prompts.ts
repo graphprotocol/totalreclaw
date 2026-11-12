@@ -107,7 +107,7 @@ NOT FOR: chitchat, passwords, generic knowledge.
 Extract ATOMIC. Good: "User is vegan". Bad: "User said they became vegan, prefer organic".
 PARAMS facts[]: text; importance 1-10 def 5; type claim|preference|directive|commitment|episode|summary; scope work|personal|health|family|creative|finance|misc|unspecified. Dedup auto.`;
 
-export const RECALL_TOOL_DESCRIPTION = `Search encrypted vault. Top 8 reranked by provenance+semantic+recency.
+export const RECALL_TOOL_DESCRIPTION = `Search encrypted vault. Top 16 reranked by provenance+semantic+recency.
 INVOKE WHEN USER SAYS:
 - "what's my [phone/address/doctor]"
 - "remember when I..." / "what did I say about..."
@@ -115,7 +115,7 @@ INVOKE WHEN USER SAYS:
 - opens convo on a topic (auto-recall first msg)
 WHEN NOT TO USE: world knowledge, small talk.
 DOES: trapdoor search, decrypt, rerank BM25+cosine+source-provenance.
-PARAMS: query (5-15 words), k (def 8, max 50).
+PARAMS: query (5-15 words), k (def 16, max 50).
 Don't announce "I found these memories" — just use them.`;
 
 export const FORGET_TOOL_DESCRIPTION = `Permanently remove memory.
