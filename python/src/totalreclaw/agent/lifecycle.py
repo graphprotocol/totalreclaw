@@ -30,7 +30,7 @@ from .extraction import (
 )
 from .contradiction import detect_and_resolve_contradictions
 from .pin_guard import apply_pin_guard, fail_closed_actions
-from .debrief import generate_crystal
+from .debrief import Crystal, generate_crystal
 from .loop_runner import (
     run_sync,
     InterpreterShutdownError,
@@ -899,6 +899,7 @@ def _announce_write_quota(
 
 def _handle_write_quota(
     state: "AgentState", client, err: RelayWriteQuotaExceeded, refused: list[dict],
+    *, what: str = "auto-extracted facts",
 ) -> None:
     try:
         state.invalidate_billing_cache()
@@ -913,9 +914,9 @@ def _handle_write_quota(
             logger.warning("pending store: could not queue refused facts: %s", e)
     lost = max(0, len(refused) - queued)
     logger.warning(
-        "TotalReclaw: relay refused auto-extracted facts (write quota used up); "
+        "TotalReclaw: relay refused %s (write quota used up); "
         "%d queued for retry, %d lost",
-        queued, lost,
+        what, queued, lost,
     )
     _announce_write_quota(state, client, err, queued=queued, lost=lost)
 
@@ -975,6 +976,16 @@ def _drain_entries(state: "AgentState", client, queue: PendingStoreQueue, entrie
     to_store_entries: list[dict] = []
     for entry in entries:
         fact = dict(entry["fact"])
+        if _is_session_crystal(fact):
+            # Stored the way session_debrief stores it: forget scrub per
+            # sentence, no write gate, no embedding (#749).
+            fact = _scrub_queued_crystal(fact, ledger)
+            if fact is None:
+                logger.info("pending store: dropping a queued session Crystal (all of it was forgotten)")
+                continue
+            to_store.append(fact)
+            to_store_entries.append(entry)
+            continue
         text = fact.get("text") or ""
         embedding = None
         try:
@@ -1106,6 +1117,40 @@ def _scrub_crystal(crystal, ledger: Optional[ForgetLedger]):
     return crystal
 
 
+def _is_session_crystal(fact: dict) -> bool:
+    meta = fact.get("extra_metadata")
+    return isinstance(meta, dict) and meta.get("subtype") == "session_crystal"
+
+
+def _scrub_queued_crystal(fact: dict, ledger: Optional[ForgetLedger]) -> Optional[dict]:
+    """A queued session Crystal with the parts the user forgot since it was
+    queued removed, or ``None`` when nothing is left (#749).
+
+    The metadata is rebuilt with ``Crystal.to_metadata``, the producer
+    ``session_debrief`` uses, so the stored Crystal matches one written at
+    session end."""
+    meta = fact.get("extra_metadata") or {}
+
+    def _list(name: str) -> list[str]:
+        value = meta.get(name)
+        return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+    crystal = Crystal(
+        narrative=fact.get("text") or "",
+        key_outcomes=_list("key_outcomes"),
+        open_threads=_list("open_threads"),
+        lessons=_list("lessons"),
+        session_id=meta.get("session_id") or "",
+        source_message_ids=_list("source_message_ids"),
+        files_affected=_list("files_affected"),
+        topics_discussed=_list("topics_discussed"),
+    )
+    crystal = _scrub_crystal(crystal, ledger)
+    if crystal is None:
+        return None
+    return {**fact, "text": crystal.narrative, "extra_metadata": crystal.to_metadata()}
+
+
 def session_debrief(
     state: "AgentState",
     stored_fact_texts: Optional[list[str]] = None,
@@ -1162,23 +1207,28 @@ def session_debrief(
             # this is a no-op when there's no active session.
             if not crystal.session_id and state.session_id:
                 crystal.session_id = state.session_id
+            fields = {
+                "importance": crystal.importance / 10.0,
+                "fact_type": "summary",
+                "provenance": "derived",
+                "scope": "unspecified",
+                "extra_metadata": crystal.to_metadata(),
+            }
             try:
                 fact_id = run_sync(
-                    client.remember(
-                        crystal.narrative,
-                        importance=crystal.importance / 10.0,
-                        source="hermes_debrief",
-                        fact_type="summary",
-                        provenance="derived",
-                        scope="unspecified",
-                        extra_metadata=crystal.to_metadata(),
-                    )
+                    client.remember(crystal.narrative, source="hermes_debrief", **fields)
                 )
                 if fact_id:
                     stored_fact_ids.append(fact_id)
                     logger.info("Session Crystal stored (id=%s, importance=%d)", fact_id, crystal.importance)
             except InterpreterShutdownError:
                 raise
+            except RelayWriteQuotaExceeded as e:
+                # #749: keep it for later, like refused auto-extracted facts.
+                _handle_write_quota(
+                    state, client, e, [{"text": crystal.narrative, **fields}],
+                    what="the session Crystal",
+                )
             except Exception as e:
                 if is_interpreter_shutdown_error(e):
                     raise InterpreterShutdownError(str(e)) from e

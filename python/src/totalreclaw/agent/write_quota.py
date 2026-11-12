@@ -96,17 +96,19 @@ def format_write_quota_notice(err: "RelayWriteQuotaExceeded", *, queued: int = 0
     *queued*: refused facts kept on this device for a later retry.
     *lost*: refused facts that could not be kept (disk failure).
     """
+    # No "from this conversation": a refusal at session end (the Crystal,
+    # #749) is shown in the next conversation.
     kept = ""
     if queued:
         kept += (
-            f" {queued} new {'memory' if queued == 1 else 'memories'} from this "
-            "conversation are kept on this device and will be saved "
-            "automatically once saving works again."
+            f" {queued} new {'memory is' if queued == 1 else 'memories are'} "
+            "kept on this device and will be saved automatically once saving "
+            "works again."
         )
     if lost:
         kept += (
             f" {lost} new {'memory' if lost == 1 else 'memories'} could not be "
-            "kept and are lost."
+            f"kept and {'is' if lost == 1 else 'are'} lost."
         )
     upgrade = (
         ""

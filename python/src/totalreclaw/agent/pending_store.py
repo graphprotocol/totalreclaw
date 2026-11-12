@@ -1,7 +1,8 @@
 """Facts waiting to be stored after the relay refused them for quota (#747).
 
-When the relay refuses an auto-extracted batch because the account's monthly
-write quota is used up, the facts are kept here instead of being dropped.
+When the relay refuses an auto-extracted batch, or the session-end Crystal
+(#749), because the account's monthly write quota is used up, the facts are
+kept here instead of being dropped.
 They are stored later, once a write succeeds again (the allowance reset or the
 user upgraded): see ``agent.lifecycle.drain_pending_stores``.
 
@@ -21,7 +22,8 @@ vault encryption key, of::
 
 Same pattern as the forget ledger (``forget_guard.ForgetLedger``): fact text
 is never written to disk in plaintext. The fact dict is stored without its
-embedding (the drain recomputes it), so the file stays small. At most
+embedding (the drain recomputes it), so the file stays small, and with an
+``extracted_at`` time so it keeps its original date. At most
 :attr:`PendingStoreQueue.MAX_ENTRIES` entries are kept; the oldest go first.
 """
 from __future__ import annotations
@@ -54,7 +56,11 @@ _FACT_KEYS = (
     "volatility",
     "extra_metadata",
     "agent_name",
+    "extracted_at",
 )
+
+#: ``extracted_at`` format, the same as the write path's own timestamps.
+_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.000Z"
 
 
 def _jsonable(value: Any) -> Any:
@@ -172,12 +178,19 @@ class PendingStoreQueue:
     def add(self, facts: Iterable[dict], *, reason: str) -> int:
         """Append *facts* (``remember_batch`` dicts). Returns how many were
         written; ``0`` on a disk failure. Over :attr:`MAX_ENTRIES`, the
-        oldest entries are dropped (logged)."""
+        oldest entries are dropped (logged).
+
+        A fact without ``extracted_at`` is stamped with the current time, so
+        when it is stored later its ``created_at`` is when it was said, not
+        when the queue drained (#749): the vault then groups it with its
+        conversation."""
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        extracted_at = time.strftime(_TIMESTAMP_FORMAT, time.gmtime())
         new = []
         for fact in facts:
             q = _queueable(fact)
             if q is not None:
+                q.setdefault("extracted_at", extracted_at)
                 new.append({"queued_at": now, "reason": reason, "attempts": 0, "fact": q})
         if not new:
             return 0
