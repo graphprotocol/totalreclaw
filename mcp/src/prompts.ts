@@ -53,7 +53,7 @@ TotalReclaw uses a 12-word BIP-39 recovery phrase as the user's identity. The ph
 
 ## Setup
 If a tool returns "not_configured", offer totalreclaw_pair. It returns a URL and a PIN. The user opens the URL in a browser, the browser creates or imports the phrase, and only ciphertext reaches this server. When the page says "You're all set", ask the user to fully quit and reopen this app (or start a new session); credentials load at startup, so until then every tool still returns not_configured. The link lasts about 10 minutes. If the install is already set up, totalreclaw_pair refuses with already_configured and opens nothing: tell the user they are set up. Only if the user explicitly asks to switch to a different account, call it again with replace=true; that opens a replace session, and the user confirms the replacement on the pairing page (you cannot confirm it for them).
-Manual setup is documented at https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md. The totalreclaw_setup tool was removed in 3.2.1 because it returned the phrase through tool output.
+The totalreclaw_setup tool was removed in 3.2.1 because it returned the phrase through tool output.
 
 ## Recall
 Call totalreclaw_recall:
