@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A batch that partly fails no longer loses the facts it did store (#753).** When one group of a `remember_batch` call was stored and another failed for a reason other than the write quota, the call raised a plain `RuntimeError` that did not say which facts landed. Callers treated the whole batch as failed:
+  - Auto-extraction logged stored facts as "not stored" and did not record them. An `UPDATE` whose replacement was stored kept its old fact, so both versions stayed in the vault.
+  - The write-quota retry queue (#747) put stored facts back in the queue, where the next drain could write them a second time.
+  - Recrystallize lost the ids of a session's facts that had landed, so a resumed run wrote them again.
+
+  Now:
+  - The error is a `BatchStoreError`, still a `RuntimeError`. It carries `batch_results`, with one entry per input fact holding the id or `None`, the same shape as `BatchIds.batch_results` and `RelayWriteQuotaExceeded.batch_results`. The new `totalreclaw.client.per_fact_results(outcome, n)` reads that per-fact outcome from a return value or an error.
+  - Auto-extraction records the stored facts, tombstones the old fact of a stored `UPDATE`, and reports only the facts that failed. A partial success counts as a successful write, so queued facts get their retry.
+  - The retry queue keeps only the facts that failed.
+  - Recrystallize saves the facts that landed in its checkpoint after every batch, including a batch that then failed. A resumed run writes only the facts still missing, even after a hard kill between batches.
+
 - **Batch fact ids now stay with their own facts when part of a batch is skipped (#751).** `remember_batch` returns only the ids of the facts it stored. When a group was skipped as a duplicate, the list got shorter, and callers that matched ids to facts by position moved every later id onto the wrong fact. In auto-extraction, an `UPDATE` whose replacement was skipped could still delete (tombstone) the old fact, which lost data. In the write-quota retry queue (#747), skipped facts were dropped silently.
   - `remember_batch` still returns a `list[str]` of stored ids, now a `BatchIds` with a `batch_results` attribute. It has one entry per input fact, holding the id or `None` when that fact was skipped, the same shape as `RelayWriteQuotaExceeded.batch_results`. Auto-extraction and the retry queue match ids to facts through it.
   - A queued fact the batch writer skips goes back to the queue with one more attempt counted, and is dropped at the existing attempt limit.
