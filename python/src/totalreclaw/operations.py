@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -505,6 +506,21 @@ def group_payloads_by_size(payloads: list, max_count: int, max_bytes: int):
         yield group
 
 
+_HTTP_409 = re.compile(r"\b409\b")
+
+
+def is_duplicate_rejection(msg: str) -> bool:
+    """Whether a store error message is a duplicate rejection (HTTP 409 or a
+    duplicate content fingerprint).
+
+    ``409`` must be a whole word (#751): matching it anywhere also matched
+    the digits inside a hex hash or address in an unrelated bundler error,
+    and that error was then silently dropped as a duplicate. The managed
+    relay's ``/v1/bundler`` never returns 409.
+    """
+    return bool(_HTTP_409.search(msg)) or "duplicate" in msg or "fingerprint" in msg
+
+
 async def _store_group_adaptive(store_fn, group: list) -> tuple[list[str], list[str]]:
     """Store one payload group via ``store_fn``; halve-and-retry on a
     simulation-size revert.
@@ -532,7 +548,7 @@ async def _store_group_adaptive(store_fn, group: list) -> tuple[list[str], list[
         return list(ids), []
     except Exception as e:
         msg = str(e)
-        if '409' in msg or 'duplicate' in msg or 'fingerprint' in msg:
+        if is_duplicate_rejection(msg):
             logger.debug("Batch of %d facts rejected as duplicate", len(group))
             return [], []
         msg_l = msg.lower()

@@ -787,8 +787,9 @@ def _auto_extract_inner(
             continue
 
         wrote_ok = True
-        # fact_ids is a list[str] in the same order as chunk_dicts.
-        _process_batch_results(client, chunk, fact_ids, stored_texts, log_missing=True)
+        _process_batch_results(
+            client, chunk, _per_fact_ids(fact_ids, len(chunk)), stored_texts, log_missing=True
+        )
 
     state.mark_messages_processed()
     if wrote_ok:
@@ -843,6 +844,21 @@ def _process_batch_results(
             if is_interpreter_shutdown_error(e):
                 raise InterpreterShutdownError(str(e)) from e
             logger.warning("Failed to process batch result for fact: %s", e)
+
+
+def _per_fact_ids(ids, n: int) -> list:
+    """One entry per submitted fact: its id, or ``None`` when it was not
+    stored (#751).
+
+    ``remember_batch`` returns the stored ids only, so after a skipped group
+    the list is shorter than the input and position no longer says which
+    fact an id belongs to. Its ``batch_results`` does. A plain list (a stub
+    client) is taken as already lined up.
+    """
+    results = getattr(ids, "batch_results", None)
+    if not isinstance(results, list):
+        results = list(ids or [])
+    return list(results[:n]) + [None] * (n - len(results))
 
 
 # ---------------------------------------------------------------------------
@@ -1041,26 +1057,44 @@ def _drain_entries(state: "AgentState", client, queue: PendingStoreQueue, entrie
         if isinstance(e, InterpreterShutdownError) or is_interpreter_shutdown_error(e):
             queue.put_back(to_store_entries)
             return 0
-        retry = []
-        for entry in to_store_entries:
-            entry["attempts"] = int(entry.get("attempts") or 0) + 1
-            if entry["attempts"] < _DRAIN_MAX_ATTEMPTS:
-                retry.append(entry)
-        dropped = len(to_store_entries) - len(retry)
-        queue.put_back(retry)
+        kept, dropped = _retry_later(queue, to_store_entries)
         logger.warning(
             "pending store: queued facts not stored yet (%s); %d kept, %d dropped after %d attempts",
-            e, len(retry), dropped, _DRAIN_MAX_ATTEMPTS,
+            e, kept, dropped, _DRAIN_MAX_ATTEMPTS,
         )
         return 0
 
     stored = 0
-    for fact, fact_id in zip(to_store, ids):
+    not_stored = []
+    for fact, entry, fact_id in zip(to_store, to_store_entries, _per_fact_ids(ids, len(to_store))):
         if fact_id:
             record_write(client, fact_id, fact["text"], fact.get("embedding"))
             stored += 1
+        else:
+            not_stored.append(entry)
+    if not_stored:
+        # Skipped by the batch writer (#751). The relay never reports a
+        # duplicate, so this is not proof the fact is in the vault: retry it
+        # (the write gate drops it if it is), up to the attempt limit.
+        kept, dropped = _retry_later(queue, not_stored)
+        logger.warning(
+            "pending store: %d queued fact(s) not stored; %d kept, %d dropped after %d attempts",
+            len(not_stored), kept, dropped, _DRAIN_MAX_ATTEMPTS,
+        )
     logger.info("pending store: saved %d queued fact(s)", stored)
     return stored
+
+
+def _retry_later(queue: PendingStoreQueue, entries: list[dict]) -> tuple[int, int]:
+    """Put *entries* back with one more attempt counted, dropping those
+    that reach :data:`_DRAIN_MAX_ATTEMPTS`. Returns ``(kept, dropped)``."""
+    retry = []
+    for entry in entries:
+        entry["attempts"] = int(entry.get("attempts") or 0) + 1
+        if entry["attempts"] < _DRAIN_MAX_ATTEMPTS:
+            retry.append(entry)
+    queue.put_back(retry)
+    return len(retry), len(entries) - len(retry)
 
 
 def crystal_gate_passes(n_messages: int, n_stored_facts: int) -> bool:
