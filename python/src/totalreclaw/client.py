@@ -258,6 +258,25 @@ async def _derive_smart_account_address(mnemonic: str, rpc_url: str = "https://s
         return address.lower()
 
 
+class BatchIds(list):
+    """What :meth:`TotalReclaw.remember_batch` returns: the ids of the stored
+    facts, in input order (a plain ``list[str]``), plus ``batch_results``.
+
+    ``batch_results`` has one entry per input fact, in input order: the fact
+    id, or ``None`` when that fact was not stored (its group was skipped as a
+    duplicate). The list itself is shorter than the input whenever a fact was
+    skipped, so pair ids with input facts through ``batch_results``, never by
+    position in the list (#751). ``RelayWriteQuotaExceeded.batch_results``
+    has the same shape for a batch the quota interrupted.
+    """
+
+    def __init__(self, ids=(), batch_results=None):
+        super().__init__(ids)
+        self.batch_results: list[Optional[str]] = (
+            list(batch_results) if batch_results is not None else list(self)
+        )
+
+
 class TotalReclaw:
     """High-level TotalReclaw client with remember/recall/forget/export/status.
 
@@ -1001,7 +1020,7 @@ class TotalReclaw:
         self,
         facts: list[dict],
         source: str = "python-client",
-    ) -> list[str]:
+    ) -> "BatchIds":
         """Store N facts via byte-capped, adaptive batched UserOperations.
 
         The batch analogue of :meth:`remember`. Accepts ANY number of facts
@@ -1049,12 +1068,15 @@ class TotalReclaw:
 
         Returns
         -------
-        list[str]
-            Pre-assigned UUID fact IDs of the STORED facts, in input order.
-            Subsequent ``forget`` / ``pin_fact`` / ``unpin_fact`` calls
-            work against these IDs immediately. (A group rejected as a
-            duplicate contributes no ids and no error — it is silently
-            skipped, matching the import path's contract.)
+        BatchIds
+            A ``list[str]`` of the pre-assigned UUID fact IDs of the STORED
+            facts, in input order. Subsequent ``forget`` / ``pin_fact`` /
+            ``unpin_fact`` calls work against these IDs immediately. (A group
+            rejected as a duplicate contributes no ids and no error — it is
+            silently skipped, matching the import path's contract.) Its
+            ``batch_results`` attribute has one entry per input fact: the id,
+            or ``None`` when that fact was skipped. Use it to match ids to
+            facts (#751).
 
         Raises
         ------
@@ -1094,7 +1116,7 @@ class TotalReclaw:
         lsh = self._get_lsh_hasher() if needs_lsh else None
         wallet = self._wallet_context(chain_id)
 
-        # #747: which input facts landed, and the first write-quota refusal.
+        # #747/#751: which input facts landed, and the first write-quota refusal.
         # The adaptive helper reduces failures to strings, and a group can be
         # refused after an earlier group already stored (the relay refuses a
         # batch whole when it does not fit), so record outcomes per fact here.
@@ -1136,7 +1158,7 @@ class TotalReclaw:
                 f"remember_batch: {len(errors)} store group(s) failed: "
                 + " | ".join(errors)
             )
-        return ids
+        return BatchIds(ids, [stored_at.get(i) for i in range(len(facts))])
 
     async def recall(
         self,

@@ -98,6 +98,7 @@ from totalreclaw.operations import (  # noqa: E402,F401  (re-exports used by tes
     MAX_BATCH_BYTES as _MAX_BATCH_BYTES,
     MAX_BATCH_GROUP_COUNT as IMPORT_MAX_BATCH_SIZE,
     group_and_store_adaptive,
+    is_duplicate_rejection,
     store_fact_batch,
 )
 
@@ -1881,7 +1882,7 @@ class ImportEngine:
                 _record_stored_conv(stored_conv_ids, fact)
             except Exception as e:
                 msg = str(e)
-                if '409' in msg or 'duplicate' in msg or 'fingerprint' in msg:
+                if is_duplicate_rejection(msg):
                     logger.debug("Skipped duplicate: %s", fact.get('text', '')[:60])
                     # Counted as on-chain duplicate → conversation durably stored.
                     _record_stored_conv(stored_conv_ids, fact)
