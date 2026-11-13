@@ -581,6 +581,88 @@ async def test_execute_resume_never_double_mints(monkeypatch, tmp_path, _no_conf
 
 
 @pytest.mark.asyncio
+async def test_execute_resume_after_partial_batch_writes_only_unwritten_facts(
+    monkeypatch, tmp_path, _no_confirm
+):
+    """#753: a session write that partly failed keeps the ids that landed, so
+    the resume does not write those facts a second time."""
+    import totalreclaw.recrystallize as rec
+    from totalreclaw.client import BatchStoreError
+
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+
+    class _FirstFactOnly(_FakeClient):
+        async def remember_batch(self, facts, source="python-client"):
+            self.calls.append(("remember_batch", [f["text"] for f in facts]))
+            self._new_counter += 1
+            raise BatchStoreError(
+                "remember_batch: 1 store group(s) failed: timed out",
+                [f"new-{self._new_counter}"] + [None] * (len(facts) - 1),
+            )
+
+    client1 = _FirstFactOnly()
+    with pytest.raises(RuntimeError):
+        await execute_recrystallize(
+            client1, _sample_plan(), write_side_fix_confirmed=True, confirm=True,
+        )
+    [first_call] = [c[1] for c in client1.calls if c[0] == "remember_batch"]
+    assert len(first_call) == 2
+    landed, failed = first_call
+
+    client2 = _FakeClient()
+    cp2 = await execute_recrystallize(
+        client2, _sample_plan(), write_side_fix_confirmed=True, confirm=True,
+        checkpoint=RecrystallizeCheckpoint.load("0xabc"),
+    )
+    assert cp2.status == "completed"
+    run2_texts = [t for c in client2.calls if c[0] == "remember_batch" for t in c[1]]
+    assert landed not in run2_texts
+    assert failed in run2_texts
+    # The session's new facts include the one written by the first run.
+    assert any("new-1" in sc.new_fact_ids for sc in cp2.sessions.values())
+
+
+@pytest.mark.asyncio
+async def test_each_landed_batch_is_checkpointed_before_the_next(
+    monkeypatch, tmp_path, _no_confirm
+):
+    """#753: a session split over several batches persists each batch's ids
+    as it lands, so even a hard kill between batches (no ``except`` runs)
+    never re-writes the batches that landed."""
+    import totalreclaw.recrystallize as rec
+
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+    monkeypatch.setattr(rec, "MAX_BATCH_SIZE", 1)
+    on_disk_before_second: list[list[str]] = []
+
+    class _KilledOnSecondBatch(_FakeClient):
+        async def remember_batch(self, facts, source="python-client"):
+            if any(c[0] == "remember_batch" for c in self.calls):
+                cp = RecrystallizeCheckpoint.load("0xabc")
+                on_disk_before_second.append(
+                    [i for sc in cp.sessions.values() for i in sc.new_fact_ids_by_old_id.values()]
+                )
+                raise RuntimeError("simulated interrupt")
+            return await super().remember_batch(facts, source=source)
+
+    client1 = _KilledOnSecondBatch()
+    with pytest.raises(RuntimeError):
+        await execute_recrystallize(
+            client1, _sample_plan(), write_side_fix_confirmed=True, confirm=True,
+        )
+    assert on_disk_before_second == [["new-1"]]
+    [(_, [landed])] = [c for c in client1.calls if c[0] == "remember_batch"]
+
+    client2 = _FakeClient()
+    await execute_recrystallize(
+        client2, _sample_plan(), write_side_fix_confirmed=True, confirm=True,
+        checkpoint=RecrystallizeCheckpoint.load("0xabc"),
+    )
+    run2_texts = [t for c in client2.calls if c[0] == "remember_batch" for t in c[1]]
+    assert landed not in run2_texts
+
+
+@pytest.mark.asyncio
 async def test_execute_quota_pause_is_clean(monkeypatch, tmp_path, _no_confirm):
     import totalreclaw.recrystallize as rec
     monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)

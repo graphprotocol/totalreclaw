@@ -46,6 +46,7 @@ from .write_quota import (
 )
 from ..forget_guard import ForgetLedger, is_forget_request
 from ..pii import auto_storable, drop_sensitive_facts
+from ..client import per_fact_results
 from ..relay import RelayReadBlocked, RelayWriteQuotaExceeded
 from ..write_gate import (
     decide_write,
@@ -755,8 +756,7 @@ def _auto_extract_inner(
             # #747: the relay refused the batch for quota. Keep what landed
             # before the refusal, queue the rest of this chunk AND every later
             # chunk (they would be refused too) for a retry, and tell the user.
-            results = list(e.batch_results or [])
-            results += [None] * (len(chunk) - len(results))
+            results = per_fact_results(e, len(chunk))
             _process_batch_results(client, chunk, results, stored_texts, log_missing=False)
             refused = [fd for (_, _, fd), fid in zip(chunk, results) if not fid]
             refused += [
@@ -778,17 +778,23 @@ def _auto_extract_inner(
                     state.invalidate_billing_cache()
                 except Exception:
                     pass
-            # On a total batch failure, none of the facts in this chunk landed.
-            # Log each one individually so the caller can diagnose.
-            for fact, _, _ in chunk:
-                logger.warning(
-                    "Fact not stored (batch failure): %s", fact.text[:80]
-                )
+            # Other groups of the chunk may have landed (#753): keep those
+            # (record them, tombstone the old fact of a stored UPDATE) and
+            # report only the facts that were not stored.
+            results = per_fact_results(e, len(chunk))
+            _process_batch_results(client, chunk, results, stored_texts, log_missing=False)
+            for (fact, _, _), fact_id in zip(chunk, results):
+                if not fact_id:
+                    logger.warning(
+                        "Fact not stored (batch failure): %s", fact.text[:80]
+                    )
+            if any(results):
+                wrote_ok = True
             continue
 
         wrote_ok = True
         _process_batch_results(
-            client, chunk, _per_fact_ids(fact_ids, len(chunk)), stored_texts, log_missing=True
+            client, chunk, per_fact_results(fact_ids, len(chunk)), stored_texts, log_missing=True
         )
 
     state.mark_messages_processed()
@@ -844,21 +850,6 @@ def _process_batch_results(
             if is_interpreter_shutdown_error(e):
                 raise InterpreterShutdownError(str(e)) from e
             logger.warning("Failed to process batch result for fact: %s", e)
-
-
-def _per_fact_ids(ids, n: int) -> list:
-    """One entry per submitted fact: its id, or ``None`` when it was not
-    stored (#751).
-
-    ``remember_batch`` returns the stored ids only, so after a skipped group
-    the list is shorter than the input and position no longer says which
-    fact an id belongs to. Its ``batch_results`` does. A plain list (a stub
-    client) is taken as already lined up.
-    """
-    results = getattr(ids, "batch_results", None)
-    if not isinstance(results, list):
-        results = list(ids or [])
-    return list(results[:n]) + [None] * (n - len(results))
 
 
 # ---------------------------------------------------------------------------
@@ -1032,11 +1023,12 @@ def _drain_entries(state: "AgentState", client, queue: PendingStoreQueue, entrie
     if not to_store:
         return 0
 
+    failure: Optional[Exception] = None
     try:
         ids = run_sync(client.remember_batch(to_store, source="hermes-auto"))
+        results = per_fact_results(ids, len(to_store))
     except RelayWriteQuotaExceeded as e:
-        results = list(e.batch_results or [])
-        results += [None] * (len(to_store) - len(results))
+        results = per_fact_results(e, len(to_store))
         stored = 0
         back = []
         for fact, entry, fact_id in zip(to_store, to_store_entries, results):
@@ -1057,31 +1049,31 @@ def _drain_entries(state: "AgentState", client, queue: PendingStoreQueue, entrie
         if isinstance(e, InterpreterShutdownError) or is_interpreter_shutdown_error(e):
             queue.put_back(to_store_entries)
             return 0
-        kept, dropped = _retry_later(queue, to_store_entries)
-        logger.warning(
-            "pending store: queued facts not stored yet (%s); %d kept, %d dropped after %d attempts",
-            e, kept, dropped, _DRAIN_MAX_ATTEMPTS,
-        )
-        return 0
+        # Other groups may have landed (#753): only the rest is retried.
+        results = per_fact_results(e, len(to_store))
+        failure = e
 
     stored = 0
     not_stored = []
-    for fact, entry, fact_id in zip(to_store, to_store_entries, _per_fact_ids(ids, len(to_store))):
+    for fact, entry, fact_id in zip(to_store, to_store_entries, results):
         if fact_id:
             record_write(client, fact_id, fact["text"], fact.get("embedding"))
             stored += 1
         else:
             not_stored.append(entry)
     if not_stored:
-        # Skipped by the batch writer (#751). The relay never reports a
-        # duplicate, so this is not proof the fact is in the vault: retry it
-        # (the write gate drops it if it is), up to the attempt limit.
+        # Failed, or skipped by the batch writer (#751). The relay never
+        # reports a duplicate, so a skip is not proof the fact is in the
+        # vault: retry it (the write gate drops it if it is), up to the
+        # attempt limit.
         kept, dropped = _retry_later(queue, not_stored)
         logger.warning(
-            "pending store: %d queued fact(s) not stored; %d kept, %d dropped after %d attempts",
-            len(not_stored), kept, dropped, _DRAIN_MAX_ATTEMPTS,
+            "pending store: %d queued fact(s) not stored%s; %d kept, %d dropped after %d attempts",
+            len(not_stored), f" ({failure})" if failure is not None else "",
+            kept, dropped, _DRAIN_MAX_ATTEMPTS,
         )
-    logger.info("pending store: saved %d queued fact(s)", stored)
+    if stored or failure is None:
+        logger.info("pending store: saved %d queued fact(s)", stored)
     return stored
 
 

@@ -222,11 +222,11 @@ A UserOp submission (`eth_sendUserOperation`) that would take the account over i
 Every client must:
 
 1. **Classify it.** Match `error_code` then `error` by string equality, on status 403 only. Anything else (another 403 code such as `call_target_not_allowed`, a non-JSON body, a 5xx) stays a plain HTTP error.
-2. **Report per-fact outcomes on a batch.** Which facts landed before the refusal, so the caller neither drops stored facts nor re-stores them.
+2. **Report per-fact outcomes on a batch.** Which facts landed before the refusal, so the caller neither drops stored facts nor re-stores them. The same applies to a batch that partly fails for any other reason, and to a batch where a group was skipped (#751, #753).
 3. **Tell the user.** An explicit write tool returns a structured result (`error_code: "quota_exceeded"`, plus tier / usage / reset date from `/v1/billing/status` and `upgrade_url`), never the raw HTTP text. A background write (auto-extraction, mirrors) injects a notice into the next turn, at most once per session.
 4. **Not lose automatic writes.** Keep refused auto-extracted facts and the session summary (Crystal) on the device (encrypted) and store them once a write succeeds again (reset or upgrade). Facts are deduplicated against the vault first. Each keeps the time it was refused as `created_at`, so it groups with its conversation. A queued Crystal is stored as it would have been at session end, minus any part the user has forgotten since.
 
-Python/Hermes is the reference implementation (#747, #749): `relay.RelayWriteQuotaExceeded` / `raise_for_bundler_status`, `TotalReclaw.remember_batch` (`batch_results`), `agent/pending_store.py`, `agent/write_quota.py`, `agent/lifecycle.py::drain_pending_stores`. MCP returns a structured tool error and has no auto-extraction to queue. The OpenClaw plugin misreports it (#550). ZeroClaw maps it to `QuotaExceeded`.
+Python/Hermes is the reference implementation (#747, #749, #753): `relay.RelayWriteQuotaExceeded` / `raise_for_bundler_status`, `TotalReclaw.remember_batch` (`batch_results` on `BatchIds`, `RelayWriteQuotaExceeded` and `BatchStoreError`; `client.per_fact_results`), `agent/pending_store.py`, `agent/write_quota.py`, `agent/lifecycle.py::drain_pending_stores`. MCP returns a structured tool error and has no auto-extraction to queue. The OpenClaw plugin misreports it (#550). ZeroClaw maps it to `QuotaExceeded`.
 
 ### Session Debrief
 

@@ -48,6 +48,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from totalreclaw.client import per_fact_results
+
 # Single source of truth for the relay URL (repo forbids duplicate URL literals).
 from totalreclaw.relay import _HARDCODED_DEFAULT_URL as _CANONICAL_PROD_URL
 
@@ -695,6 +697,8 @@ class QuotaPaused(Exception):
 async def _rewrite_session_facts(
     client: Any,
     session: "CorrectedSession",
+    written: Optional[dict[str, str]] = None,
+    save: Optional[Callable[[], None]] = None,
 ) -> list[str]:
     """Write the re-keyed facts for one session; return their new ids.
 
@@ -703,31 +707,70 @@ async def _rewrite_session_facts(
     ``session_id`` stamped into ``extra_metadata`` and ``import_source``
     preserved. Batched ``remember_batch`` up to :data:`MAX_BATCH_SIZE` per
     ``executeBatch`` UserOp (design §4.1).
+
+    ``written`` (old fact id → new fact id) holds the facts an interrupted
+    run already wrote; they are not written again. It is filled in place as
+    each batch lands, including the facts a batch that then raised did store
+    (#753), and ``save`` runs after every batch that stored something, so the
+    progress survives a failure or a hard kill.
     """
-    new_ids: list[str] = []
-    fact_dicts: list[dict[str, Any]] = []
+    if written is None:
+        written = {}
+    fact_dicts: list[tuple[str, dict[str, Any]]] = []
     for f in session.facts:
+        if f.fact_id in written:
+            continue
         extra_metadata: dict[str, Any] = {"session_id": session.fresh_session_id}
         import_source = f.metadata.get("import_source")
         if isinstance(import_source, str) and import_source:
             extra_metadata["import_source"] = import_source
         fact_dicts.append(
-            {
-                "text": f.text,
-                "importance": f.importance,
-                "embedding": f.embedding,
-                "fact_type": f.fact_type,
-                "entities": f.entities,
-                "provenance": f.provenance,
-                "extra_metadata": extra_metadata,
-            }
+            (
+                f.fact_id,
+                {
+                    "text": f.text,
+                    "importance": f.importance,
+                    "embedding": f.embedding,
+                    "fact_type": f.fact_type,
+                    "entities": f.entities,
+                    "provenance": f.provenance,
+                    "extra_metadata": extra_metadata,
+                },
+            )
         )
 
     for start in range(0, len(fact_dicts), MAX_BATCH_SIZE):
         batch = fact_dicts[start : start + MAX_BATCH_SIZE]
-        ids = await client.remember_batch(batch, source="recrystallize")
-        new_ids.extend(ids)
-    return new_ids
+        try:
+            ids = await client.remember_batch(
+                [d for _, d in batch], source="recrystallize"
+            )
+        except Exception as exc:
+            _keep_landed(batch, exc, written, save)
+            raise
+        _keep_landed(batch, ids, written, save)
+    return [written[f.fact_id] for f in session.facts if f.fact_id in written]
+
+
+def _keep_landed(
+    batch: list[tuple[str, dict[str, Any]]],
+    outcome: object,
+    written: dict[str, str],
+    save: Optional[Callable[[], None]],
+) -> None:
+    """Add the facts of *batch* that were stored to *written* and persist.
+
+    *outcome* is what ``remember_batch`` returned or the error it raised; a
+    partly failed batch still says which facts landed (#753).
+    """
+    landed = {
+        old_id: new_id
+        for (old_id, _), new_id in zip(batch, per_fact_results(outcome, len(batch)))
+        if new_id
+    }
+    written.update(landed)
+    if landed and save is not None:
+        save()
 
 
 async def _write_crystal(
@@ -880,7 +923,9 @@ async def execute_recrystallize(
                         f"[{i}/{total}] writing {len(session.facts)} facts → "
                         f"session {session.fresh_session_id}"
                     )
-                    sc.new_fact_ids = await _rewrite_session_facts(client, session)
+                    sc.new_fact_ids = await _rewrite_session_facts(
+                        client, session, sc.new_fact_ids_by_old_id, checkpoint.save,
+                    )
                     sc.facts_written = True
                     checkpoint.save()  # persist BEFORE the Crystal write
                 if session.needs_crystal and not sc.crystal_written:
@@ -981,6 +1026,11 @@ class SessionCheckpoint:
     #: quota-billed). ``crystal_written`` guards the Crystal the same way.
     facts_written: bool = False
     crystal_written: bool = False
+    #: The rewritten facts that have landed so far, as old fact id → new fact
+    #: id. Saved after each batch, including the facts a partly failed batch
+    #: did store, so a resume before ``facts_written`` writes only the facts
+    #: still missing (#753).
+    new_fact_ids_by_old_id: dict[str, str] = field(default_factory=dict)
     old_fact_ids_tombstoned: list[str] = field(default_factory=list)
     old_crystal_ids_tombstoned: list[str] = field(default_factory=list)
 

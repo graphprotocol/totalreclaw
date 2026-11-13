@@ -9,6 +9,9 @@ were lost.
 
 On the managed relay the skip only fires by accident: the duplicate check
 matched ``409`` anywhere in an error message, e.g. inside a hex hash.
+
+#753: the same per-fact outcome now rides a batch that partly failed for a
+reason other than the quota, so callers keep the facts that did land.
 """
 from __future__ import annotations
 
@@ -243,16 +246,18 @@ class _DrainClient:
         return []
 
 
-class TestDrainAlignment:
-    def _drain(self, client, store):
-        from totalreclaw.agent.lifecycle import drain_pending_stores
+def _drain(client, store):
+    from totalreclaw.agent.lifecycle import drain_pending_stores
 
-        state = MagicMock()
-        with patch("totalreclaw.client.store_fact_batch", new=store), \
-             patch("totalreclaw.embedding.get_embedding", return_value=None), \
-             patch("totalreclaw.agent.lifecycle.record_write") as rec:
-            saved = drain_pending_stores(state, client)
-        return saved, rec
+    state = MagicMock()
+    with patch("totalreclaw.client.store_fact_batch", new=store), \
+         patch("totalreclaw.embedding.get_embedding", return_value=None), \
+         patch("totalreclaw.agent.lifecycle.record_write") as rec:
+        saved = drain_pending_stores(state, client)
+    return saved, rec
+
+
+class TestDrainAlignment:
 
     def test_skipped_fact_is_kept_and_ids_stay_with_their_facts(self, state_dir):
         client = _DrainClient()
@@ -261,7 +266,7 @@ class TestDrainAlignment:
             reason="write_quota",
         )
         store, _ = _store_first_half_skipped()
-        saved, rec = self._drain(client, store)
+        saved, rec = _drain(client, store)
 
         assert saved == 1
         assert [(c.args[1], c.args[2]) for c in rec.call_args_list] == [
@@ -283,6 +288,110 @@ class TestDrainAlignment:
         async def store(facts, *a, **kw):
             raise RuntimeError(_DUPLICATE)
 
-        saved, _ = self._drain(client, store)
+        saved, _ = _drain(client, store)
         assert saved == 0
         assert client.pending_store.count() == 0
+
+
+# ---------------------------------------------------------------------------
+# 5. A batch that partly failed still says which facts landed (#753)
+# ---------------------------------------------------------------------------
+
+_TIMEOUT = "bundler request timed out"
+
+
+def _store_second_half_fails():
+    """``store_fact_batch`` stand-in: a group of more than one fact reverts
+    for size (so it is halved), a group holding the "first" fact is stored,
+    and any other group fails with an error that is neither a quota refusal
+    nor a duplicate."""
+
+    async def _store(facts, *a, **kw):
+        texts = [f["text"] for f in facts]
+        if len(facts) > 1:
+            raise RuntimeError(_SIM_REVERT)
+        if texts[0].startswith("first"):
+            return [f"id:{t}" for t in texts]
+        raise RuntimeError(_TIMEOUT)
+
+    return _store
+
+
+class TestPartialFailureResults:
+    @pytest.mark.asyncio
+    async def test_partial_failure_raises_with_per_fact_results(self):
+        from totalreclaw.client import BatchStoreError
+
+        client = _client_shell()
+        with patch("totalreclaw.client.store_fact_batch", new=_store_second_half_fails()):
+            with pytest.raises(RuntimeError, match=_TIMEOUT) as exc:
+                await client.remember_batch(
+                    [{"text": "first fact"}, {"text": "second fact"}], source="t"
+                )
+        assert isinstance(exc.value, BatchStoreError)
+        assert exc.value.batch_results == ["id:first fact", None]
+
+    @pytest.mark.asyncio
+    async def test_total_failure_reports_nothing_stored(self):
+        from totalreclaw.client import BatchStoreError
+
+        async def store(facts, *a, **kw):
+            raise RuntimeError(_TIMEOUT)
+
+        client = _client_shell()
+        with patch("totalreclaw.client.store_fact_batch", new=store):
+            with pytest.raises(BatchStoreError) as exc:
+                await client.remember_batch([{"text": "a"}, {"text": "b"}], source="t")
+        assert exc.value.batch_results == [None, None]
+
+
+class TestAutoExtractPartialFailure:
+    def test_stored_update_tombstones_and_only_the_failed_fact_is_reported(self, caplog):
+        shell = _client_shell()
+        client = MagicMock()
+        client.recall = AsyncMock(return_value=[])
+        client.forget = AsyncMock(return_value=True)
+        client.get_fact_pin_status = AsyncMock(return_value=False)
+        client.remember_batch = shell.remember_batch  # the real method
+        state = _plugin_state(client)
+        facts = [
+            ExtractedFact(text="first: home city is Porto", type="claim", importance=8,
+                          action="UPDATE", existing_fact_id=OLD_ID, source="user"),
+            ExtractedFact(text="second: likes espresso", type="preference", importance=7,
+                          action="ADD", source="user"),
+        ]
+        with patch("totalreclaw.client.store_fact_batch", new=_store_second_half_fails()), \
+             patch("totalreclaw.agent.lifecycle.record_write") as rec, \
+             patch("totalreclaw.agent.lifecycle._after_successful_write") as after, \
+             caplog.at_level("WARNING", logger="totalreclaw.agent.lifecycle"):
+            stored = _run_extract(state, facts)
+
+        # The UPDATE's replacement landed, so its old fact is tombstoned.
+        client.forget.assert_awaited_once_with(OLD_ID)
+        assert stored == ["first: home city is Porto"]
+        assert [(c.args[1], c.args[2]) for c in rec.call_args_list] == [
+            ("id:first: home city is Porto", "first: home city is Porto")
+        ]
+        not_stored = [r.getMessage() for r in caplog.records if "Fact not stored" in r.getMessage()]
+        assert len(not_stored) == 1 and "second: likes espresso" in not_stored[0]
+        # A write went through, so facts an earlier quota refusal queued get
+        # their retry.
+        after.assert_called_once()
+
+
+class TestDrainPartialFailure:
+    def test_only_the_failed_fact_goes_back_to_the_queue(self, state_dir):
+        client = _DrainClient()
+        client.pending_store.add(
+            [{"text": "first queued fact about trains"}, {"text": "second queued fact about boats"}],
+            reason="write_quota",
+        )
+        saved, rec = _drain(client, _store_second_half_fails())
+
+        assert saved == 1
+        assert [(c.args[1], c.args[2]) for c in rec.call_args_list] == [
+            ("id:first queued fact about trains", "first queued fact about trains")
+        ]
+        left = client.pending_store.take(10)
+        assert [e["fact"]["text"] for e in left] == ["second queued fact about boats"]
+        assert left[0]["attempts"] == 1

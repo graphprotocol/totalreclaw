@@ -277,6 +277,38 @@ class BatchIds(list):
         )
 
 
+class BatchStoreError(RuntimeError):
+    """:meth:`TotalReclaw.remember_batch` could not store one or more groups,
+    for a reason other than the write quota (#753).
+
+    Other groups may have been stored before or after the failure.
+    ``batch_results`` says which, in the same shape as
+    :attr:`BatchIds.batch_results`: one entry per input fact, its id when it
+    was stored and ``None`` when it was not. It is a ``RuntimeError``, so
+    existing ``except RuntimeError`` handlers keep working.
+    """
+
+    def __init__(self, message: str, batch_results: list[Optional[str]]):
+        super().__init__(message)
+        self.batch_results: list[Optional[str]] = list(batch_results)
+
+
+def per_fact_results(outcome: object, n: int) -> list[Optional[str]]:
+    """One entry per fact submitted to :meth:`TotalReclaw.remember_batch`:
+    its id when it was stored, else ``None``. Always *n* entries.
+
+    *outcome* is what the call returned, or the error it raised. A
+    :class:`BatchIds`, a :class:`BatchStoreError` (#753) and a
+    ``RelayWriteQuotaExceeded`` (#747) carry ``batch_results``. A plain list
+    (a stub client's return value) is taken as already lined up with the
+    input. Any other error counts as nothing stored.
+    """
+    results = getattr(outcome, "batch_results", None)
+    if not isinstance(results, list):
+        results = list(outcome) if isinstance(outcome, (list, tuple)) else []
+    return list(results[:n]) + [None] * (n - len(results))
+
+
 class TotalReclaw:
     """High-level TotalReclaw client with remember/recall/forget/export/status.
 
@@ -1087,11 +1119,15 @@ class TotalReclaw:
             used up (#747). Its ``batch_results`` lists, per input fact in
             input order, the fact id when that fact was stored before the
             refusal and ``None`` when it was not.
-        RuntimeError
-            If one or more groups fail to store for a non-duplicate reason
-            (the bundler / paymaster error is aggregated). AA25/AA10 are
-            retried up to 3 times inside the userop layer before surfacing;
-            a -32500 simulation-size revert triggers adaptive halving first.
+        BatchStoreError
+            A ``RuntimeError``. Raised if one or more groups fail to store
+            for a non-duplicate reason (the bundler / paymaster error is
+            aggregated). AA25/AA10 are retried up to 3 times inside the
+            userop layer before surfacing; a -32500 simulation-size revert
+            triggers adaptive halving first. Other groups may have been
+            stored: its ``batch_results`` lists, per input fact in input
+            order, the fact id when that fact was stored and ``None`` when
+            it was not (#753).
 
         Examples
         --------
@@ -1149,16 +1185,18 @@ class TotalReclaw:
         ids, errors = await group_and_store_adaptive(
             _store_group, facts, MAX_BATCH_GROUP_COUNT, MAX_BATCH_BYTES
         )
+        results = [stored_at.get(i) for i in range(len(facts))]
         if errors and quota_refusals:
             err = quota_refusals[0]
-            err.batch_results = [stored_at.get(i) for i in range(len(facts))]
+            err.batch_results = results
             raise err
         if errors:
-            raise RuntimeError(
+            raise BatchStoreError(
                 f"remember_batch: {len(errors)} store group(s) failed: "
-                + " | ".join(errors)
+                + " | ".join(errors),
+                results,
             )
-        return BatchIds(ids, [stored_at.get(i) for i in range(len(facts))])
+        return BatchIds(ids, results)
 
     async def recall(
         self,
