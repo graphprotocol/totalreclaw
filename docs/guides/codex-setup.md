@@ -1,6 +1,6 @@
 # TotalReclaw for Codex
 
-TotalReclaw gives Codex encrypted memory that lasts across sessions and works with your other TotalReclaw apps. This guide covers the **Codex CLI**, the **Codex IDE extension** and the **ChatGPT desktop app**. They share one Codex configuration folder, `~/.codex`, so you set up TotalReclaw once. Setup takes about five minutes. **Your recovery phrase never goes through the chat and is never written into a settings file.**
+TotalReclaw gives Codex encrypted memory that lasts across sessions and works with your other TotalReclaw apps. This guide covers the **Codex CLI**, the **Codex IDE extension** and the **ChatGPT desktop app**. They share one Codex configuration folder, `~/.codex` (per OpenAI's documentation), so you set up TotalReclaw once. Setup takes about five minutes. **Your recovery phrase never goes through the chat and is never written into a settings file.**
 
 ## The fast way
 
@@ -12,7 +12,7 @@ Codex reads this page and runs the install commands. It asks you to approve them
 
 > **Wrong app?** This guide is for **Codex**. For **Claude Desktop**, follow [`claude-desktop-setup.md`](./claude-desktop-setup.md). For **Claude Code, Cursor and Windsurf**, follow [`claude-code-setup.md`](./claude-code-setup.md). For **OpenClaw**, follow [`openclaw-setup.md`](./openclaw-setup.md). For **Hermes**, follow [`hermes-setup.md`](./hermes-setup.md). If you are unsure, follow the universal dispatcher [`install.md`](./install.md).
 
-> **Regular ChatGPT chat (the website or the phone app) is not supported.** It only connects to remote servers. TotalReclaw's keys stay on your own device, so it runs only on your computer.
+> **Regular ChatGPT chat (the website or the phone app) is not supported.** TotalReclaw runs as a small program on your own computer and keeps its keys there, and chat on the website or phone has no way to run a program on your computer.
 
 **You need:**
 
@@ -53,7 +53,7 @@ CODEX=/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Conten
 
 ### 3. Turn off approval prompts for TotalReclaw (recommended)
 
-By default Codex asks before each tool call. To let TotalReclaw's tools run without a prompt each time, add this to `~/.codex/config.toml` (create the file if it doesn't exist):
+By default Codex asks before each tool call. To let TotalReclaw's tools run without a prompt each time, add this to `~/.codex/config.toml` (create the file if it doesn't exist; if that section is already in the file, add only the missing line):
 
 ```toml
 [plugins."totalreclaw@totalreclaw".mcp_servers.totalreclaw]
@@ -137,10 +137,14 @@ This also removes the approval block from step 3. Your account file in `~/.total
 codex mcp add totalreclaw -- npx -y @totalreclaw/mcp-server
 ```
 
-This writes a `[mcp_servers.totalreclaw]` entry to `~/.codex/config.toml`. Without the plugin there is no skill, so Codex gets less guidance on when to recall and store. For this setup the approval key is different:
+This writes a `[mcp_servers.totalreclaw]` entry to `~/.codex/config.toml`. Without the plugin there is no skill, so Codex gets less guidance on when to recall and store.
+
+To skip approval prompts in this setup, add `default_tools_approval_mode = "approve"` inside the `[mcp_servers.totalreclaw]` section the command above created. The section then looks like this (add only the last line if `command` and `args` are already there):
 
 ```toml
 [mcp_servers.totalreclaw]
+command = "npx"
+args = ["-y", "@totalreclaw/mcp-server"]
 default_tools_approval_mode = "approve"
 ```
 
