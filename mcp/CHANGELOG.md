@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- **Server instructions: unprompted save/recall wording restored up front.** Codex saved 0/6 facts unprompted with the 3.6.0-rc.1 text, 5/6 with 3.5.3's. The first 512 characters now say ALWAYS recall at the start of EVERY conversation and call remember WITHOUT being asked, in the same turn; a `## Remembering` section lists the categories again. Phrase-safety text is unchanged. Still within the 512 / 2,000 character budget (`tests/server-instructions-budget.test.ts` patterns updated for the new wording).
 - **Recall downloads much less data on large vaults.** Blind-index queries in `src/subgraph/search.ts` now return fact ids only. Each unique fact's payload is then fetched once, in batches of 100, with at most 6 subgraph queries in flight (the trapdoor batches used to fire all at once). Same candidates in the same order, so ranking is unchanged. On a mocked 1,000-fact vault, a recall dropped from about 6.5 MB to 3.1 MB. Port of the Python change (public #703); internal #666.
 
 ### Fixed

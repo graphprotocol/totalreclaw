@@ -48,8 +48,8 @@ describe(`first ${FIRST_WINDOW} characters carry the essentials`, () => {
   it.each([
     ['what the server is', /TotalReclaw is the user's encrypted long-term memory/],
     ['use it unprompted', /unprompted/],
-    ['when to recall', /totalreclaw_recall at the start of every conversation/],
-    ['when to remember', /totalreclaw_remember when the user shares a durable fact/],
+    ['when to recall', /ALWAYS call totalreclaw_recall at the start of EVERY conversation/],
+    ['when to remember', /totalreclaw_remember WITHOUT being asked[^\n]*durable fact/],
     ['phrase-safety one-liner', /recovery phrase must never enter this chat/],
     ['never ask, echo or print it', /Never ask for it, echo it or run a CLI that prints it/],
   ])('%s', (_label, pattern) => {
