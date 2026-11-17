@@ -9,7 +9,7 @@
     {
       "name": "totalreclaw",
       "source": "./plugins/totalreclaw",
-      "description": "End-to-end encrypted memory for Claude: a skill that teaches Claude when to recall and store, plus the TotalReclaw memory server.",
+      "description": "End-to-end encrypted memory for AI agents: a skill that tells your agent when to recall and store, plus the TotalReclaw memory server.",
       "category": "memory",
       "tags": ["memory", "e2ee", "privacy"]
     }
