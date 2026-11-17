@@ -59,6 +59,7 @@ One command per client. v1 is the default — no env toggles, no feature flags.
 | **OpenClaw** | `openclaw plugins install @totalreclaw/totalreclaw` |
 | **Claude Desktop** (and other MCP chat apps) | Add `npx -y @totalreclaw/mcp-server` to the app's MCP config, restart, then ask *"Set up TotalReclaw"* — see the [Claude Desktop guide](docs/guides/claude-desktop-setup.md) |
 | **Claude Code / Cursor / Windsurf** | `claude mcp add -s user totalreclaw -- npx -y @totalreclaw/mcp-server` (or the JSON config), then ask *"Set up TotalReclaw"* — see the [coding-tools guide](docs/guides/claude-code-setup.md) |
+| **Codex** (CLI, IDE extension, ChatGPT desktop app) | `codex plugin marketplace add graphprotocol/totalreclaw` then `codex plugin add totalreclaw@totalreclaw`, restart, then ask *"Set up TotalReclaw"* — see the [Codex guide](docs/guides/codex-setup.md) |
 | **NanoClaw** | `@totalreclaw/skill-nanoclaw` (bundled via NanoClaw) + set `TOTALRECLAW_RECOVERY_PHRASE` in deployment env — see the [NanoClaw guide](docs/guides/nanoclaw-getting-started.md) |
 | **Python / Hermes** | `pip install totalreclaw` |
 | **Rust / ZeroClaw** | `cargo add totalreclaw-memory` |
@@ -170,6 +171,7 @@ totalreclaw/
 - [OpenClaw](docs/guides/openclaw-setup.md)
 - [Claude Desktop](docs/guides/claude-desktop-setup.md)
 - [Claude Code / Cursor / Windsurf](docs/guides/claude-code-setup.md)
+- [Codex (CLI, IDE extension, ChatGPT desktop app)](docs/guides/codex-setup.md)
 - [NanoClaw](docs/guides/nanoclaw-getting-started.md)
 - [Hermes (Python)](docs/guides/hermes-setup.md)
 - [IronClaw (NEAR AI)](docs/guides/ironclaw-setup.md) (first-class integration paused — works via the generic MCP server)

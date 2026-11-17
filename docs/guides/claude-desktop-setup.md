@@ -165,7 +165,7 @@ When the variable is set, it takes precedence over `~/.totalreclaw/credentials.j
 
 ## Other chat apps
 
-TotalReclaw runs as a standard local MCP server (`npx -y @totalreclaw/mcp-server`), and setup always goes through `totalreclaw_pair` in the browser. Other chat apps and personal agents that can start a local MCP server can use it in the same way. Guides for specific apps, such as the ChatGPT desktop app, are planned. Until then, each app's own documentation explains where its MCP settings live.
+TotalReclaw runs as a standard local MCP server (`npx -y @totalreclaw/mcp-server`), and setup always goes through `totalreclaw_pair` in the browser. Other chat apps and personal agents that can start a local MCP server can use it in the same way. For **Codex** (CLI, IDE extension and the ChatGPT desktop app), follow [`codex-setup.md`](./codex-setup.md). For other apps, their own documentation explains where the MCP settings live.
 
 ---
 
