@@ -11,9 +11,9 @@
 //     SERVER_GUIDE, served as the `totalreclaw://guide` resource and the
 //     `totalreclaw_instructions` prompt.
 
-export const SERVER_INSTRUCTIONS = `TotalReclaw is the user's encrypted long-term memory across their AI apps. Use it unprompted:
-- Recall: call totalreclaw_recall at the start of every conversation (query: the user's first message) and whenever past context could help. Use results quietly.
-- Remember: call totalreclaw_remember when the user shares a durable fact: preferences, identity, decisions, goals, corrections, projects.
+export const SERVER_INSTRUCTIONS = `TotalReclaw is the user's encrypted long-term memory. Use it unprompted:
+- Recall: ALWAYS call totalreclaw_recall at the start of EVERY conversation (query: the user's first message) and whenever past context could help. Use quietly.
+- Remember: call totalreclaw_remember WITHOUT being asked, same turn, whenever the user shares a durable fact. They never need to say "remember this".
 - Safety: the recovery phrase must never enter this chat. Never ask for it, echo it or run a CLI that prints it.
 
 ## Recovery phrase (hard rules)
@@ -22,13 +22,13 @@ export const SERVER_INSTRUCTIONS = `TotalReclaw is the user's encrypted long-ter
 - If the user pastes a phrase anyway, tell them it is compromised and they need a fresh one from the browser pair flow (totalreclaw_pair).
 
 ## Remembering
-Store atomic facts ("User is vegan"). Don't wait for "remember this". Skip small talk, one-off tasks, generic knowledge and secrets (passwords, API keys, tokens). For a correction, store the new fact; dedup is automatic.
+Store without being asked whenever the user shares: preferences, personal info, decisions or goals, corrections, important dates or events, tech preferences, project context, opinions or values. If it could help later, store it automatically. Store atomic facts ("User is vegan"). Skip small talk, one-off tasks, generic knowledge and secrets (passwords, API keys, tokens). Correction: store the new fact.
 
 ## Setup
-A "not_configured" error means no account yet. Call totalreclaw_pair and give the user the link + PIN. The phrase is created or entered in a browser only, never in config, env vars or chat. After Pairing: when the page says "You're all set", ask them to fully quit and reopen this app (or start a new session); until then every tool returns not_configured.
+"not_configured" means no account yet. Call totalreclaw_pair and give the user the link + PIN. The phrase is created or entered in a browser only, never in config, env vars or chat. After Pairing, on "You're all set", ask them to fully quit and reopen this app (or start a new session).
 
 ## Everything else
-Details live in each tool's description. Quick map: "quota_exceeded" -> tell the user, offer totalreclaw_status / totalreclaw_upgrade, stop storing. "pin that" -> totalreclaw_pin. Migrating from another memory tool -> totalreclaw_import_from (dry_run first). "file that under X" / "that's a work thing" -> totalreclaw_set_scope. End of a substantive conversation -> totalreclaw_debrief. Full guide: resource totalreclaw://guide.`;
+"quota_exceeded" -> tell the user, offer totalreclaw_status / totalreclaw_upgrade, stop storing. "pin that" -> totalreclaw_pin. Migrating -> totalreclaw_import_from (dry_run first). "file that under X" / "that's a work thing" -> totalreclaw_set_scope. End of a substantive conversation -> totalreclaw_debrief. Guide: totalreclaw://guide.`;
 
 // Keep backward-compat export name (some callers may still reference it)
 export const SYSTEM_PROMPT_FRAGMENT = SERVER_INSTRUCTIONS;
