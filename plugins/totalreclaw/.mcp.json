@@ -2,7 +2,7 @@
   "mcpServers": {
     "totalreclaw": {
       "command": "npx",
-      "args": ["-y", "@totalreclaw/mcp-server@3.5.3"]
+      "args": ["-y", "@totalreclaw/mcp-server@3.6.0"]
     }
   }
 }
