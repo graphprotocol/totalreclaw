@@ -7,7 +7,7 @@ TotalReclaw gives Claude Desktop encrypted memory that lasts across chats and wo
 **You need:**
 
 - Claude Desktop on macOS or Windows.
-- [Node.js](https://nodejs.org) 18 or later (22 recommended). Claude Desktop starts TotalReclaw with `npx`, which comes with Node.js.
+- [Node.js](https://nodejs.org) 20 or later (22 recommended). Claude Desktop starts TotalReclaw with `npx`, which comes with Node.js.
 - A browser on this computer or your phone, for the one-time setup page. You don't need a recovery phrase beforehand. Setup creates one, or takes the one you already have.
 - `@totalreclaw/mcp-server` 3.5.1 or later. The config below always installs the newest stable release.
 
@@ -77,7 +77,7 @@ Then, in another new chat:
 
 Or ask *"What's my TotalReclaw status?"* to see your account and usage.
 
-**Tool permissions.** By default, Claude Desktop asks before each tool call. If it offers **"Always allow"**, choose it for `totalreclaw_recall` and `totalreclaw_remember` so memory works without a prompt every time. Keep the prompt for tools that change or remove things, such as `totalreclaw_forget`, `totalreclaw_export` and `totalreclaw_pair`.
+**Tool permissions.** Claude Desktop may ask for your permission the first time Claude uses a TotalReclaw tool. Claude Desktop decides which tools it asks about, and this can change between versions. If it offers **"Always allow"**, you can choose it so memory works without a prompt every time. For tools that change or remove things, such as `totalreclaw_forget`, `totalreclaw_export` and `totalreclaw_pair`, you can keep the prompt.
 
 ---
 
