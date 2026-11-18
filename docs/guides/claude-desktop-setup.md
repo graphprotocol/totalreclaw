@@ -1,50 +1,36 @@
 # TotalReclaw for Claude Desktop
 
-TotalReclaw gives Claude Desktop encrypted memory that lasts across chats and works with your other TotalReclaw apps. Setup takes about five minutes: you add TotalReclaw to Claude Desktop's settings file, restart the app, and ask Claude to set it up. Claude gives you a link to finish in your browser. **Your recovery phrase never goes through the chat and is never written into a settings file.**
+TotalReclaw gives Claude Desktop encrypted memory that lasts across chats and works with your other TotalReclaw apps. Setup takes about five minutes: you install the TotalReclaw extension, restart the app, and ask Claude to set it up. Claude gives you a link to finish in your browser. **Your recovery phrase never goes through the chat and is never written into a settings file.**
 
 > **Wrong app?** This guide is for **Claude Desktop**, the chat app. For coding tools (**Claude Code, Cursor, Windsurf**), follow [`claude-code-setup.md`](./claude-code-setup.md). If you are an **OpenClaw** agent, follow [`openclaw-setup.md`](./openclaw-setup.md). If you are a **Hermes** agent, follow [`hermes-setup.md`](./hermes-setup.md). If you are unsure, follow the universal dispatcher [`install.md`](./install.md).
 
 **You need:**
 
 - Claude Desktop on macOS or Windows.
-- [Node.js](https://nodejs.org) 20 or later (22 recommended). Claude Desktop starts TotalReclaw with `npx`, which comes with Node.js.
+- Nothing else to install. The extension runs on the Node.js built into Claude Desktop. (You need [Node.js](https://nodejs.org) 20 or later only for the config-file method in [Other way](#other-way-add-totalreclaw-to-the-config-file).)
 - A browser on this computer or your phone, for the one-time setup page. You don't need a recovery phrase beforehand. Setup creates one, or takes the one you already have.
-- `@totalreclaw/mcp-server` 3.5.1 or later. The config below always installs the newest stable release.
 
 ---
 
 ## Set up
 
-### 1. Add TotalReclaw to Claude Desktop's config
+### 1. Download the TotalReclaw extension
 
-Claude can't change its own settings from a chat, so you do this step yourself.
+Download the file for your computer:
 
-1. In Claude Desktop, open **Settings → Developer → Edit Config**. This opens `claude_desktop_config.json`:
-   - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-2. Add `totalreclaw` under `mcpServers`. If the file is empty, paste this whole block. If you already have other servers, add the `"totalreclaw": { … }` entry next to them.
+| Your computer | Download |
+|---|---|
+| macOS (Apple silicon) | [totalreclaw-3.6.0-darwin-arm64.mcpb](https://github.com/graphprotocol/totalreclaw/releases/download/mcp-server-v3.6.0/totalreclaw-3.6.0-darwin-arm64.mcpb) |
+| macOS (Intel) | [totalreclaw-3.6.0-darwin-x64.mcpb](https://github.com/graphprotocol/totalreclaw/releases/download/mcp-server-v3.6.0/totalreclaw-3.6.0-darwin-x64.mcpb) |
+| Windows | [totalreclaw-3.6.0-win32-x64.mcpb](https://github.com/graphprotocol/totalreclaw/releases/download/mcp-server-v3.6.0/totalreclaw-3.6.0-win32-x64.mcpb) |
 
-```json
-{
-  "mcpServers": {
-    "totalreclaw": {
-      "command": "npx",
-      "args": ["-y", "@totalreclaw/mcp-server"]
-    }
-  }
-}
-```
+Not sure which Mac you have? Click the Apple menu, choose **About This Mac**, and look at **Chip**. If it says Apple M1, M2, M3 or similar, choose Apple silicon. If it says Intel, choose Intel.
 
-There is no recovery phrase to add here and no `env` block. You set up your account in the browser in step 3.
+### 2. Install it
 
-### 2. Quit Claude Desktop and open it again
+Double-click the downloaded file. Claude Desktop opens and shows the TotalReclaw extension. Click **Install**. Leave **Server URL (advanced)** empty.
 
-Claude Desktop only loads new servers when it starts.
-
-- **macOS:** press Cmd-Q, or choose **Claude → Quit Claude**.
-- **Windows:** right-click the Claude icon in the system tray and choose **Quit**.
-
-Closing the window is not enough, because the app keeps running in the background. Then open Claude Desktop again.
+If double-clicking doesn't open Claude Desktop, open Claude Desktop, go to **Settings → Extensions**, and drag the downloaded file onto that page.
 
 ### 3. Ask Claude to set up TotalReclaw
 
@@ -52,7 +38,7 @@ Start a new chat and type:
 
 > **Set up TotalReclaw**
 
-Claude asks whether you're new to TotalReclaw or already have a recovery phrase. It then runs the `totalreclaw_pair` tool. The first time it uses a TotalReclaw tool, Claude Desktop asks for your permission; allow it. Claude gives you a link and a 6-digit PIN.
+Claude asks whether you're new to TotalReclaw or already have a recovery phrase. It then runs the `totalreclaw_pair` tool. The first time it uses a TotalReclaw tool, Claude Desktop may ask for your permission; allow it. Claude gives you a link and a 6-digit PIN.
 
 Open the link in any browser, on this computer or your phone, and enter the PIN. Then:
 
@@ -63,7 +49,12 @@ The link works for about 10 minutes, so there is time to write the phrase down c
 
 ### 4. Quit Claude Desktop and open it again
 
-When the page says **"You're all set"**, quit Claude Desktop the same way as in step 2 and open it again. TotalReclaw reads your account only when the app starts, so the memory tools work after this restart. The page suggests going back to your chat to try a memory; restart first.
+When the page says **"You're all set"**, quit Claude Desktop completely and open it again:
+
+- **macOS:** press Cmd-Q, or choose **Claude → Quit Claude**.
+- **Windows:** right-click the Claude icon in the system tray and choose **Quit**.
+
+Closing the window is not enough, because the app keeps running in the background. TotalReclaw reads your account only when the app starts, so the memory tools work after this restart. The page suggests going back to your chat to try a memory; restart first.
 
 ### 5. Try it
 
@@ -93,11 +84,41 @@ To use the same memories on another computer, set up TotalReclaw there and choos
 
 ---
 
+## Other way: add TotalReclaw to the config file
+
+Use this only if the extension can't be installed, for example because your organisation blocks extensions. It needs [Node.js](https://nodejs.org) 20 or later (22 recommended). Claude Desktop starts TotalReclaw with `npx`, which comes with Node.js.
+
+Claude can't change its own settings from a chat, so you do this yourself.
+
+1. In Claude Desktop, open **Settings → Developer → Edit Config**. This opens `claude_desktop_config.json`:
+   - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+2. Add `totalreclaw` under `mcpServers`. If the file is empty, paste this whole block. If you already have other servers, add the `"totalreclaw": { … }` entry next to them.
+
+```json
+{
+  "mcpServers": {
+    "totalreclaw": {
+      "command": "npx",
+      "args": ["-y", "@totalreclaw/mcp-server"]
+    }
+  }
+}
+```
+
+There is no recovery phrase to add here and no `env` block. You set up your account in the browser.
+
+3. Quit Claude Desktop and open it again, as in step 4 above. Claude Desktop only loads new servers when it starts. Then continue from step 3 (ask Claude to set up TotalReclaw).
+
+The config always installs the newest stable `@totalreclaw/mcp-server` (3.5.1 or later is required).
+
+---
+
 ## Agent instructions (read this if you are Claude, or another chat assistant, and were pointed at this page)
 
-You can't edit Claude Desktop's config file or restart the app. The user does both. Follow these steps in order.
+You can't install extensions, edit Claude Desktop's config file or restart the app. The user does these. Follow these steps in order.
 
-1. **If you don't have any `totalreclaw_*` tools**, TotalReclaw isn't installed yet. Give the user steps 1 and 2 above, with the JSON block exactly as written. Then ask them to start a new chat and say *"Set up TotalReclaw"*. Never add a recovery phrase or an `env` block to the JSON.
+1. **If you don't have any `totalreclaw_*` tools**, TotalReclaw isn't installed yet. Tell the user to install the TotalReclaw extension from this guide (download the file for their computer in step 1, then double-click it and click **Install**), and to come back to the chat afterwards. Then ask them to start a new chat and say *"Set up TotalReclaw"*. Never edit config files or run commands for the user.
 2. **If you have the tools**, call `totalreclaw_status`.
    - It shows an account: TotalReclaw is already set up. Tell the user, and stop here.
    - It returns `not_configured` with a `reason`: tell the user the `message` in plain words. Don't call `totalreclaw_pair`.
@@ -114,7 +135,7 @@ You can't edit Claude Desktop's config file or restart the app. The user does bo
 
 ## How it works
 
-1. Claude Desktop starts `npx @totalreclaw/mcp-server` as a small program on your computer and talks to it over MCP, the standard way chat apps connect to tools.
+1. The extension runs the TotalReclaw server, a small program on your computer, with Claude Desktop's built-in Node. Claude Desktop talks to it over MCP, the standard way chat apps connect to tools. (With the config-file method, Claude Desktop starts it with `npx` instead.)
 2. `totalreclaw_pair` opens a short setup session. Your browser creates or takes your recovery phrase, encrypts it to a one-time key held by that program, and sends only the encrypted version through the TotalReclaw relay. The program decrypts it on your computer and saves your account to `~/.totalreclaw/credentials.json`, readable only by you (mode `0600`).
 3. Every memory is encrypted on your computer before it leaves. The relay and the chain only ever see encrypted data.
 4. Claude decides when to recall or store a memory, based on the conversation. Unlike OpenClaw and Hermes, there are no automatic memory hooks in a chat app. If something matters, ask Claude directly: *"Remember that …"*.
@@ -124,10 +145,11 @@ You can't edit Claude Desktop's config file or restart the app. The user does bo
 
 ## Troubleshooting
 
-- **No TotalReclaw tools after restarting.** Check that the config file is valid JSON (a missing comma or brace is the usual cause) and that you fully quit the app, not just closed the window. Claude Desktop also has to be able to find `npx`. If you installed Node.js with a version manager such as nvm, Claude Desktop may not see it. In that case, set `"command"` to the full path that `which npx` (macOS) or `where npx` (Windows) prints in a terminal. Claude Desktop writes each server's log under `~/Library/Logs/Claude/` on macOS or `%APPDATA%\Claude\logs\` on Windows.
+- **No TotalReclaw tools after installing the extension.** Open **Settings → Extensions** and check that TotalReclaw is listed and enabled. Then fully quit Claude Desktop (not just the window) and open it again. If the tools are still missing, check Claude Desktop's logs: each server's log is under `~/Library/Logs/Claude/` on macOS or `%APPDATA%\Claude\logs\` on Windows.
+- **No TotalReclaw tools after restarting (config-file method).** Check that the config file is valid JSON (a missing comma or brace is the usual cause) and that you fully quit the app, not just closed the window. Claude Desktop also has to be able to find `npx`. If you installed Node.js with a version manager such as nvm, Claude Desktop may not see it. In that case, set `"command"` to the full path that `which npx` (macOS) or `where npx` (Windows) prints in a terminal. Claude Desktop writes each server's log under `~/Library/Logs/Claude/` on macOS or `%APPDATA%\Claude\logs\` on Windows.
 - **Tools say "not configured".** Setup hasn't finished, or Claude Desktop wasn't restarted after it. Ask Claude to *"Set up TotalReclaw"*, finish the page, then quit and reopen the app.
 - **Tools say "not configured" and mention the keychain.** Another TotalReclaw app (Hermes) set up this computer with the system keychain. See [Already using TotalReclaw on this computer?](#already-using-totalreclaw-on-this-computer)
-- **The setup page says "Gateway could not finish pairing" or the link expired.** Ask Claude for a new link. If it keeps happening, you may be running an older cached version: set `"args"` to `["-y", "@totalreclaw/mcp-server@latest"]`, then quit and reopen Claude Desktop. Versions before 3.5.1 stopped waiting after 60 seconds.
+- **The setup page says "Gateway could not finish pairing" or the link expired.** Ask Claude for a new link. If it keeps happening, you may be running an older version. With the extension, download the newest file from step 1 and install it again. With the config-file method, you may have an older cached version: set `"args"` to `["-y", "@totalreclaw/mcp-server@latest"]`, then quit and reopen Claude Desktop. Versions before 3.5.1 stopped waiting after 60 seconds.
 - **"Not authenticated" / 401 after importing a phrase.** Check the phrase: exact words, exact order.
 - **The first memory takes a long time.** The embedding model (about 600 MB) is downloading. It happens once.
 - **Quota exceeded (403).** The free tier has a monthly memory limit. Ask Claude to *"Upgrade my TotalReclaw subscription"*, or see [pricing](https://totalreclaw.xyz/pricing).
