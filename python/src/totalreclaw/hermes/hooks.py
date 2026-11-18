@@ -28,6 +28,7 @@ from totalreclaw.agent.lifecycle import (
 from totalreclaw.agent.loop_runner import run_sync
 from totalreclaw.agent.pending_drain import drain_pending, has_pending
 from totalreclaw.agent.recall import auto_recall
+from totalreclaw.pii import note_turn_completed as _pii_note_turn_completed
 from totalreclaw.agent.extraction import extract_facts_llm, extract_facts_heuristic
 from totalreclaw.agent.state import _session_idle_seconds
 from totalreclaw.relay import _default_relay_url, BillingStatus
@@ -1156,6 +1157,7 @@ def ingest_turn(
     _maybe_crystallize_idle_active(state)
     # Always track turns and messages (client may be configured mid-session).
     state.increment_turn()
+    _pii_note_turn_completed()  # S35: sensitive-write confirmation needs a later turn
     state.add_message("user", user_message)
     state.add_message("assistant", assistant_response)
     # 2.4.4rc2 (F7) — pending-extract buffer so later manual

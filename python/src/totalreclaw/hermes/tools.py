@@ -207,8 +207,11 @@ async def remember(
     # PRD-04 DEP-4 block-and-tell. First gate, so a blocked value never
     # reaches a log line below; later logs use ``log_text`` (redacted unless
     # the filter allowed the text).
+    _confirm_token = args.get("confirm_token")
     pii_result, pii_notice = screen_explicit(
-        text, parse_allow_sensitive(args.get("allow_sensitive"))
+        text,
+        parse_allow_sensitive(args.get("allow_sensitive")),
+        _confirm_token if isinstance(_confirm_token, str) else None,
     )
     if pii_notice is not None:
         return json.dumps(pii_notice)
