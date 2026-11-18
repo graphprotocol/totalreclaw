@@ -21,10 +21,9 @@ Download the file for your computer:
 | Your computer | Download |
 |---|---|
 | macOS (Apple silicon) | [totalreclaw-3.6.0-darwin-arm64.mcpb](https://github.com/graphprotocol/totalreclaw/releases/download/mcp-server-v3.6.0/totalreclaw-3.6.0-darwin-arm64.mcpb) |
-| macOS (Intel) | [totalreclaw-3.6.0-darwin-x64.mcpb](https://github.com/graphprotocol/totalreclaw/releases/download/mcp-server-v3.6.0/totalreclaw-3.6.0-darwin-x64.mcpb) |
 | Windows | [totalreclaw-3.6.0-win32-x64.mcpb](https://github.com/graphprotocol/totalreclaw/releases/download/mcp-server-v3.6.0/totalreclaw-3.6.0-win32-x64.mcpb) |
 
-Not sure which Mac you have? Click the Apple menu, choose **About This Mac**, and look at **Chip**. If it says Apple M1, M2, M3 or similar, choose Apple silicon. If it says Intel, choose Intel.
+TotalReclaw does not run on Intel Macs yet. To check your Mac, click the Apple menu, choose **About This Mac**, and look at **Chip**: if it says "Apple M…" (M1, M2, M3 or similar), you have Apple silicon.
 
 ### 2. Install it
 
@@ -78,7 +77,7 @@ Other TotalReclaw apps on the same computer, such as Hermes or OpenClaw, keep yo
 
 - **The file holds your account in a form TotalReclaw for Claude Desktop can read.** It is used as is. After step 2, ask *"What's my TotalReclaw status?"*. If it shows your account, skip steps 3 and 4.
 - **Hermes keeps your phrase in the system keychain.** The server can't read the keychain yet. It says so when you use a TotalReclaw tool, and it won't set up a new account over that file, so your Hermes account stays as it is. TotalReclaw doesn't work in Claude Desktop on that computer until keychain support arrives.
-- **Setup never replaces an existing account file.** If `totalreclaw_pair` says TotalReclaw is already set up, it is. Don't move, rename or delete the file to get around this, because that would switch every TotalReclaw app on the computer to a different account.
+- **Setup does not replace an existing account file unless you ask Claude to switch accounts and confirm on the setup page.** The old file is kept as a backup. If `totalreclaw_pair` says TotalReclaw is already set up, it is. Don't move, rename or delete the file to get around this, because that would switch every TotalReclaw app on the computer to a different account.
 
 To use the same memories on another computer, set up TotalReclaw there and choose *"I already have a phrase"*. You type the phrase into the setup page in your browser, never into a chat or a config file.
 
@@ -86,7 +85,7 @@ To use the same memories on another computer, set up TotalReclaw there and choos
 
 ## Other way: add TotalReclaw to the config file
 
-Use this only if the extension can't be installed, for example because your organisation blocks extensions. It needs [Node.js](https://nodejs.org) 20 or later (22 recommended). Claude Desktop starts TotalReclaw with `npx`, which comes with Node.js.
+Use this only if the extension can't be installed, for example because your organisation blocks extensions. It needs a Mac with Apple silicon, or Windows, and [Node.js](https://nodejs.org) 20 or later (22 recommended). Claude Desktop starts TotalReclaw with `npx`, which comes with Node.js.
 
 Claude can't change its own settings from a chat, so you do this yourself.
 
@@ -139,7 +138,7 @@ You can't install extensions, edit Claude Desktop's config file or restart the a
 2. `totalreclaw_pair` opens a short setup session. Your browser creates or takes your recovery phrase, encrypts it to a one-time key held by that program, and sends only the encrypted version through the TotalReclaw relay. The program decrypts it on your computer and saves your account to `~/.totalreclaw/credentials.json`, readable only by you (mode `0600`).
 3. Every memory is encrypted on your computer before it leaves. The relay and the chain only ever see encrypted data.
 4. Claude decides when to recall or store a memory, based on the conversation. Unlike OpenClaw and Hermes, there are no automatic memory hooks in a chat app. If something matters, ask Claude directly: *"Remember that …"*.
-5. The first time you use memory, TotalReclaw downloads an embedding model of about 600 MB. This happens once and is cached on your computer.
+5. The first time you use memory, TotalReclaw downloads an embedding model of about 230 MB. This happens once and is cached on your computer.
 
 ---
 
@@ -151,7 +150,7 @@ You can't install extensions, edit Claude Desktop's config file or restart the a
 - **Tools say "not configured" and mention the keychain.** Another TotalReclaw app (Hermes) set up this computer with the system keychain. See [Already using TotalReclaw on this computer?](#already-using-totalreclaw-on-this-computer)
 - **The setup page says "Gateway could not finish pairing" or the link expired.** Ask Claude for a new link. If it keeps happening, you may be running an older version. With the extension, download the newest file from step 1 and install it again. With the config-file method, you may have an older cached version: set `"args"` to `["-y", "@totalreclaw/mcp-server@latest"]`, then quit and reopen Claude Desktop. Versions before 3.5.1 stopped waiting after 60 seconds.
 - **"Not authenticated" / 401 after importing a phrase.** Check the phrase: exact words, exact order.
-- **The first memory takes a long time.** The embedding model (about 600 MB) is downloading. It happens once.
+- **The first memory takes a long time.** The embedding model (about 230 MB) is downloading. It happens once.
 - **Quota exceeded (403).** The free tier has a monthly memory limit. Ask Claude to *"Upgrade my TotalReclaw subscription"*, or see [pricing](https://totalreclaw.xyz/pricing).
 - **Your recovery phrase appeared in a chat.** Treat it as exposed and file a bug. A phrase that has been through an AI chat can't be made private again.
 
