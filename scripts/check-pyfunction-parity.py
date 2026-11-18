@@ -119,10 +119,50 @@ def strip_comments(text: str) -> str:
 
 PYF_ATTR = re.compile(r"#\[(?:pyo3::prelude::)?pyfunction\]")
 FN = re.compile(r"\bfn\s+(\w+)")
-PYO3_NAME = re.compile(r'#\[pyo3\(\s*name\s*=\s*"([^"]+)"\s*\)\]')
+PYO3_ATTR_OPEN = re.compile(r"#\[pyo3\(")
+PYO3_NAME_ARG = re.compile(r'^name\s*=\s*"([^"]*)"$')
 WRAP = re.compile(r"wrap_pyfunction!\(\s*(\w+)")
 PYCLASS = re.compile(r"#\[(?:pyo3::prelude::)?pyclass(?:[^\]]*)\]")
 STRUCT_OR_ENUM = re.compile(r"\b(?:struct|enum)\s+(\w+)")
+
+
+def find_pyo3_name(block: str) -> str | None:
+    """Return the ``name = "..."`` value from any ``#[pyo3( ... )]`` attribute
+    in ``block``, in any argument position, single- or multi-line.
+
+    Walks each attribute with a paren-depth + string-aware scan and splits on
+    top-level commas, so ``signature = (a, b, c = X)`` (nested parens, commas,
+    ``=``) is one opaque argument and a ``name = "x"`` string inside it can
+    never be mistaken for the attribute's own ``name``.
+    """
+    for om in PYO3_ATTR_OPEN.finditer(block):
+        i = om.end()
+        depth = 1
+        arg_start = i
+        args: list[str] = []
+        n = len(block)
+        while i < n and depth > 0:
+            c = block[i]
+            if c == '"':
+                i += 1
+                while i < n and block[i] != '"':
+                    i += 2 if block[i] == "\\" else 1
+            elif c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+                if depth == 0:
+                    args.append(block[arg_start:i])
+                    break
+            elif c == "," and depth == 1:
+                args.append(block[arg_start:i])
+                arg_start = i + 1
+            i += 1
+        for a in args:
+            nm = PYO3_NAME_ARG.match(a.strip())
+            if nm:
+                return nm.group(1)
+    return None
 
 
 class PyFunc:
@@ -141,7 +181,7 @@ def parse_pyfunctions(text: str, file: str) -> list[PyFunc]:
     Python-visible name (``#[pyo3(name=...)]`` if present, else the fn name).
 
     The attribute block between the ``#[pyfunction]`` line and the ``fn``
-    declaration may carry ``#[pyo3(name = "...")]``, ``#[cfg(...)]``, doc
+    declaration may carry ``#[pyo3(name = "...", signature = (..))]`` (any argument order), ``#[cfg(...)]``, doc
     comments, etc.; we scan that block for the pyo3 name.
     """
     text = strip_comments(text)
@@ -154,8 +194,7 @@ def parse_pyfunctions(text: str, file: str) -> list[PyFunc]:
             continue
         rust_fn = fnm.group(1)
         block = tail[: fnm.start()]
-        nm = PYO3_NAME.search(block)
-        py_name = nm.group(1) if nm else rust_fn
+        py_name = find_pyo3_name(block) or rust_fn
         funcs.append(PyFunc(rust_fn, py_name, file))
     return funcs
 
