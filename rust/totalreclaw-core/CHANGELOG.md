@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - unreleased
+
 ### Added
 
 - **[PRD-04 F1 / DEP-5] Recall pin boost.** `RerankerConfig.pin_boost: Option<f64>` (JSON `pin_boost`) multiplies the BM25 and cosine scores of candidates whose new `Candidate.pinned: bool` (JSON `pinned`, default `false`) is set, before the RRF ranks are computed. A pin moves up only past candidates whose relevance is within the boost of its own, so an irrelevant pin never jumps the queue, even in a small candidate pool (a multiplier on the fused RRF score would put every pin first in pools of 31 or fewer). `None` (the default), a non-finite value, a value `<= 1.0`, or an empty query embedding is a no-op, so every existing caller ranks bit-for-bit as before and no parity vector changes. `DEFAULT_PIN_BOOST = 1.5` (= `PinConfig::default().hard_boost`, signed off 2026-04-28). PyO3: `rerank_with_config(..., pin_boost=None)`, `default_pin_boost()`. WASM: `rerankWithConfig(..., pin_boost?)`, `defaultPinBoost()`. Spec: `docs/specs/totalreclaw/retrieval-v2.md` §Pin boost.
@@ -36,9 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `dedup_context` (unreleased, PRD-04 DEP-3): a line from the pinned section now reads `[ID: <id>] [pinned, read-only] <text>`, and a block with at least one pinned line ends with `DEDUP_CONTEXT_PINNED_NOTE`, which tells the LLM never to UPDATE or DELETE a pinned memory and to ADD new information instead. Pin guards drop an UPDATE aimed at a pin, so without the note the new information was lost. The note is not counted against `cap`. `dedup-context-v1.json` was regenerated in place (17 cases); it has not been released.
 - `reranker::Candidate` gains the public field `pinned`. Rust code that builds a `Candidate` with a struct literal must add `pinned: false`; JSON callers (all WASM/PyO3 clients) are unaffected because the field defaults to `false`. In-tree callers (`search.rs`, `totalreclaw-memory`) are updated.
-
-### Changed
-
+- `RerankerConfig` gains the public field `pin_boost: Option<f64>`; Rust code that builds it with a struct literal must add `pin_boost: None` or use `..Default::default()`; JSON, WASM and PyO3 callers are unaffected.
 - **Extraction prompt stores fewer non-facts.** The canonical `extraction.md` gains
   three rules and two sharper type definitions: a memory is a full sentence with a
   subject, never a clause or question (internal #620, #662); a single request is
