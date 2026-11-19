@@ -15,9 +15,9 @@ Download the file for your computer:
 | macOS (Apple silicon) | [totalreclaw-3.6.0-darwin-arm64.mcpb](https://github.com/graphprotocol/totalreclaw/releases/download/mcp-server-v3.6.0/totalreclaw-3.6.0-darwin-arm64.mcpb) |
 | Windows | [totalreclaw-3.6.0-win32-x64.mcpb](https://github.com/graphprotocol/totalreclaw/releases/download/mcp-server-v3.6.0/totalreclaw-3.6.0-win32-x64.mcpb) |
 
-Double-click the file, click **Install**, and leave **Server URL (advanced)** empty. If double-clicking doesn't open Claude Desktop, drag the file onto **Settings → Extensions**.
+Double-click the file, click **Install**, and leave **Server URL (advanced)** empty. If double-clicking doesn't open Claude Desktop, open it, go to **Settings → Extensions**, and drag the file there.
 
-TotalReclaw doesn't run on Intel Macs yet. On a supported Mac, Apple menu → **About This Mac** shows "Apple M…" next to **Chip**.
+TotalReclaw doesn't run on Intel Macs yet. To check, open Apple menu → **About This Mac**: a supported Mac shows "Apple M…" next to **Chip**.
 
 ### 2. Set up your account
 
@@ -30,7 +30,7 @@ The link lasts about 10 minutes. If it expires, ask Claude for a new one.
 
 ### 3. Restart Claude Desktop
 
-When the page says **"You're all set"**, quit Claude Desktop and open it again: on macOS press Cmd-Q; on Windows right-click the tray icon and choose **Quit**. TotalReclaw loads your account when Claude Desktop starts, so closing the window is not enough.
+When the page says **"You're all set"**, quit Claude Desktop and open it again: on macOS press Cmd-Q; on Windows right-click the Claude icon in the system tray and choose **Quit**. TotalReclaw loads your account when Claude Desktop starts, so closing the window is not enough.
 
 ### 4. Try it
 
@@ -41,7 +41,7 @@ In a new chat, type **Remember that I prefer window seats on flights.** Then, in
 - Claude Desktop may ask permission before using a TotalReclaw tool. **Always allow** is fine; you can keep the prompt for `totalreclaw_forget`, `totalreclaw_export` and `totalreclaw_pair`.
 - To use TotalReclaw on another computer, set it up there and choose **I already have a phrase** on the page.
 - Already using TotalReclaw on this computer? See [Already using TotalReclaw on this computer?](#already-using-totalreclaw-on-this-computer).
-- A chat app has no automatic memory hooks: Claude stores memories when you ask or when it judges something important. Say **Remember that …** for things that matter.
+- Claude doesn't save memories on its own: it stores one when you ask, or when it judges something important. Say **Remember that …** for things that matter.
 
 <a id="already-using-totalreclaw-on-this-computer"></a>
 <details>
@@ -167,7 +167,7 @@ You can't install extensions, edit Claude Desktop's config file or restart the a
 3. Ask one question: *"Are you new to TotalReclaw, or do you already have a TotalReclaw recovery phrase?"* Then call `totalreclaw_pair` with `mode: "generate"` for a new user, or `mode: "import"` for an existing phrase.
    - If the result says `already_configured`, tell the user TotalReclaw is already set up. Never move, rename or delete the credentials file.
    - Otherwise, give the user the `url` and `pin` with this message, filling in the two values: *"Open this link in any browser, on this computer or your phone: <url>. Enter this PIN when asked: <pin>. The link works for about 10 minutes; if it stops working, tell me and I'll make a new one. Tell me when the page says "You're all set"."* Add *"The page will create your recovery phrase. Write it down and keep it safe: it is the only way back into your memories."* for a new user, or *"Type your recovery phrase into that page, not into this chat."* for an existing one.
-4. When the user says the page is done, tell them: *"Last step: quit Claude Desktop completely (Cmd-Q on macOS, or Quit from the tray icon on Windows) and open it again. TotalReclaw will work after that."* The memory tools return `not_configured` until they restart.
+4. When the user says the page is done, tell them: *"Last step: quit Claude Desktop completely (Cmd-Q on macOS, or Quit from the Claude icon in the system tray on Windows) and open it again. TotalReclaw will work after that."* The memory tools return `not_configured` until they restart.
 5. If the link expired or the page couldn't finish, call `totalreclaw_pair` again for a new link and PIN.
 
 **Phrase safety (never break):** never ask the user to type, paste or read out a recovery phrase in the chat, and never put one in a config file, an environment variable or a tool argument. The phrase is created or entered only on the setup page in the browser. If the user pastes a phrase into the chat anyway, don't repeat it. Tell them it has been exposed and should be replaced with a new account, and call `totalreclaw_support` for how to get help.
