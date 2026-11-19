@@ -547,8 +547,9 @@ async def check_store(
     """Gate one write: fetch topical candidates, add the ledger, decide.
 
     A failed subgraph read (reads paused, network) degrades to the ledger
-    plus the cached view of facts this process saw (``VIEW_CACHE_TTL_SECONDS``), so writes are never blocked by a read failure. Interpreter
-    shutdown errors propagate.
+    plus the cached view of facts this process saw
+    (``VIEW_CACHE_TTL_SECONDS``), so writes are never blocked by a read
+    failure. Interpreter shutdown errors propagate.
     """
     from .agent.loop_runner import InterpreterShutdownError, is_interpreter_shutdown_error
 
