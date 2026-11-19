@@ -1,5 +1,5 @@
 {
-  "description": "Cross-language fixture for totalreclaw-core forget_guard (internal#605/#640). Hand-written; checked by rust/totalreclaw-core/src/forget_guard.rs (tests::parity_fixture_vectors), python/tests/test_forget_guard.py (core binding + pure-Python fallback) and tests/parity/forget-guard-parity.test.ts (WASM). Embeddings are 2-d unit vectors [c, sqrt(1-c^2)] against an entry at [1, 0], so the cosine is c. Anchor tokens: kept words with an uppercase first letter or a digit.",
+  "description": "Cross-language fixture for totalreclaw-core forget_guard (internal#605/#640). Hand-written; match_cases cover match_forgotten, release_cases cover forget_release_ids (embedding null = unavailable); checked by rust/totalreclaw-core/src/forget_guard.rs (tests::parity_fixture_vectors), python/tests/test_forget_guard.py (core binding + pure-Python fallback) and tests/parity/forget-guard-parity.test.ts (WASM). Embeddings are 2-d unit vectors [c, sqrt(1-c^2)] against an entry at [1, 0], so the cosine is c. Anchor tokens: kept words with an uppercase first letter or a digit.",
   "subset_min_cosine": 0.7,
   "superset_min_cosine": 0.8,
   "anchor_min_cosine": 0.8,
@@ -406,6 +406,189 @@
       ],
       "entries": [],
       "expected": null
+    },
+    {
+      "name": "clause_padded_restatement_h13",
+      "text": "User is vegetarian (does not eat meat) and always orders the lentil curry at their usual Indian restaurant near Bolhão.",
+      "embedding": [
+        0.71,
+        0.7042016756583301
+      ],
+      "entries": [
+        {
+          "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+          "text": "User is vegetarian.",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": {
+        "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+        "reason": "clause"
+      }
+    },
+    {
+      "name": "clause_padded_restatement_below_floor",
+      "text": "User is vegetarian (does not eat meat) and always orders the lentil curry at their usual Indian restaurant near Bolhão.",
+      "embedding": [
+        0.55,
+        0.8351646544245033
+      ],
+      "entries": [
+        {
+          "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+          "text": "User is vegetarian.",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "clause_padded_remember_h13",
+      "text": "User is vegetarian again (does not eat meat), resuming as of November 18, 2026 — they had lapsed from vegetarianism at some point before this and have now returned to it.",
+      "embedding": [
+        0.69,
+        0.7238093671679029
+      ],
+      "entries": [
+        {
+          "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+          "text": "User is vegetarian.",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": {
+        "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+        "reason": "clause"
+      }
+    },
+    {
+      "name": "clause_fragment_needs_more_than_the_tokens",
+      "text": "User's sister Ana is a nurse, and vegetarian.",
+      "embedding": [
+        0.75,
+        0.6614378277661477
+      ],
+      "entries": [
+        {
+          "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+          "text": "User is vegetarian.",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "clause_value_swap",
+      "text": "User's favorite color is green, and they repainted the kitchen.",
+      "embedding": [
+        0.7,
+        0.714142842854285
+      ],
+      "entries": [
+        {
+          "id": "c1",
+          "text": "User's favorite color is blue",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "clause_subject_swap",
+      "text": "User's brother Rui lives in Porto and works at Farfetch.",
+      "embedding": [
+        0.75,
+        0.6614378277661477
+      ],
+      "entries": [
+        {
+          "id": "p1",
+          "text": "User lives in Porto",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "clause_moved_from",
+      "text": "User lives in Lisbon (moved from Porto in 2024).",
+      "embedding": [
+        0.79,
+        0.6131068422387732
+      ],
+      "entries": [
+        {
+          "id": "p1",
+          "text": "User lives in Porto",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "clause_conjunction_split",
+      "text": "User is vegetarian, so they always order the lentil curry near Bolhão.",
+      "embedding": [
+        0.69,
+        0.7238093671679029
+      ],
+      "entries": [
+        {
+          "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+          "text": "User is vegetarian.",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": {
+        "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+        "reason": "clause"
+      }
+    },
+    {
+      "name": "clause_negated_update",
+      "text": "User is not vegetarian anymore (eats fish now).",
+      "embedding": [
+        0.79,
+        0.6131068422387732
+      ],
+      "entries": [
+        {
+          "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+          "text": "User is vegetarian.",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": {
+        "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+        "reason": "clause"
+      }
     }
   ],
   "request_cases": [
@@ -547,6 +730,136 @@
         "paulo",
         "sao"
       ]
+    }
+  ],
+  "clause_min_cosine": 0.6,
+  "release_min_cosine": 0.6,
+  "release_cases": [
+    {
+      "name": "release_ids_h13",
+      "text": "User is vegetarian again (does not eat meat), resuming as of November 18, 2026 — they had lapsed from vegetarianism at some point before this and have now returned to it.",
+      "embedding": [
+        0.69,
+        0.7238093671679029
+      ],
+      "entries": [
+        {
+          "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+          "text": "User is vegetarian.",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "id": "a3c1f7ca-0000-4000-8000-000000000000",
+          "text": "User decided to use glm-4.5-flash for memory extraction from now on.",
+          "embedding": [
+            0.0,
+            1.0
+          ]
+        }
+      ],
+      "expected": [
+        "45649345-c4d0-42e0-94bb-74027213bbfa"
+      ]
+    },
+    {
+      "name": "release_mentions",
+      "text": "User follows a vegetarian diet again as of November 2026",
+      "embedding": [
+        0.73,
+        0.6834471449936711
+      ],
+      "entries": [
+        {
+          "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+          "text": "User is vegetarian.",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": [
+        "45649345-c4d0-42e0-94bb-74027213bbfa"
+      ]
+    },
+    {
+      "name": "release_paraphrase_without_the_word_is_kept",
+      "text": "User eats a plant-based diet again",
+      "embedding": [
+        0.72,
+        0.6939740629158989
+      ],
+      "entries": [
+        {
+          "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+          "text": "User is vegetarian.",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "release_unrelated_text_keeps_everything",
+      "text": "User switched memory extraction back to glm-5.3-flash",
+      "embedding": [
+        0.5,
+        0.8660254037844386
+      ],
+      "entries": [
+        {
+          "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+          "text": "User is vegetarian.",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "id": "a3c1f7ca-0000-4000-8000-000000000000",
+          "text": "User decided to use glm-4.5-flash for memory extraction from now on.",
+          "embedding": [
+            0.0,
+            1.0
+          ]
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "release_exact_needs_no_embedding",
+      "text": "user is   VEGETARIAN.",
+      "embedding": null,
+      "entries": [
+        {
+          "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+          "text": "User is vegetarian."
+        }
+      ],
+      "expected": [
+        "45649345-c4d0-42e0-94bb-74027213bbfa"
+      ]
+    },
+    {
+      "name": "release_mentions_needs_embedding",
+      "text": "User follows a vegetarian diet again as of November 2026",
+      "embedding": null,
+      "entries": [
+        {
+          "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
+          "text": "User is vegetarian.",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": []
     }
   ]
 }

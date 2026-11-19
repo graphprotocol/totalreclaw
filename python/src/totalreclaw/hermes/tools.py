@@ -238,6 +238,22 @@ async def remember(
     # normalized strings; embedding dedup at storage time catches the
     # rest. Counter surfaces in `totalreclaw_status` for observability.
     force_write = bool(args.get("force", False))
+
+    # An explicit remember brings a forgotten fact back (#605, H13). Release
+    # the forget-ledger entry BEFORE the F7 suppression and the write gate:
+    # the user's intent to un-forget does not depend on whether a write
+    # happens (a duplicate-stopped or suppressed remember still releases).
+    # After the PII screen and the self-directive block above, so a blocked
+    # text never releases. The mirror path (a copy of a Hermes built-in memory
+    # write, not an explicit request) never releases; it embeds below, as
+    # before.
+    embedding = None
+    embedding_ready = False
+    if not kwargs.get("_from_mirror"):
+        embedding = _embed_for_remember(text, pii_result)
+        embedding_ready = True
+        _release_forgotten(client, text, embedding)
+
     if not force_write and state.manual_remember_is_dup_of_pending(text):
         state.increment_suppressed_writes()
         logger.info(
@@ -277,13 +293,8 @@ async def remember(
         reasoning = None
 
     try:
-        embedding = None
-        try:
-            from totalreclaw.embedding import get_embedding
-            embedding = get_embedding(text)
-        except Exception as e:
-            logger.debug("embed failed for remember %r: %s", log_label(text, pii_result, 40), e)
-            # degrade: store without embedding (search falls back to blind indices)
+        if not embedding_ready:
+            embedding = _embed_for_remember(text, pii_result)
 
         from totalreclaw.write_gate import check_store, record_write
 
@@ -310,10 +321,6 @@ async def remember(
             if why:
                 logger.info("memory mirror: not storing entry: %s", why)
                 return json.dumps({"stored": False, "skipped": "forgotten"})
-        else:
-            # An explicit remember brings a forgotten fact back: drop it from
-            # the forget ledger so auto-extraction may store it again (#605).
-            _release_forgotten(client, text, embedding)
 
         fact_id = await client.remember(
             text,
@@ -354,16 +361,29 @@ async def remember(
         return json.dumps({"error": str(e)})
 
 
+def _embed_for_remember(text: str, pii_result) -> Optional[list]:
+    """Embedding of *text*, or ``None`` when it cannot be computed (the write
+    degrades to blind indices only)."""
+    try:
+        from totalreclaw.embedding import get_embedding
+        return get_embedding(text)
+    except Exception as e:
+        logger.debug("embed failed for remember %r: %s", log_label(text, pii_result, 40), e)
+        return None
+
+
 def _release_forgotten(client, text: str, embedding) -> None:
-    """Best-effort: drop forget-ledger entries that *text* restates."""
+    """Best-effort: drop forget-ledger entries that an explicit remember of
+    *text* releases. Logs every time (counts only), also when it is 0; stays
+    silent only when the ledger is absent or empty."""
     from totalreclaw.forget_guard import ForgetLedger
 
     try:
         ledger = getattr(client, "forget_ledger", None)
         if isinstance(ledger, ForgetLedger):
-            released = ledger.release(text, embedding)
-            if released:
-                logger.info("forget ledger: explicit remember released %d entr%s", released, "y" if released == 1 else "ies")
+            released, total = ledger.release_counts(text, embedding)
+            if total:
+                logger.info("forget ledger: explicit remember released %d of %d entries", released, total)
     except Exception as e:
         logger.debug("forget ledger: release failed: %s", type(e).__name__)
 

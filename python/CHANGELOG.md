@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A forgotten fact restated with extra detail stays forgotten, and "remember X again" releases the forget-ledger entry (internal Hermes QA of 2.6.0rc1, H13).** Two bugs in the forget ledger (#605):
+  - Auto-extraction stored "User is vegetarian (does not eat meat) and always orders the lentil curry near Bolhão" even though "User is vegetarian." was forgotten: the padded text scored below the `superset` cosine floor. The matcher now has a `clause` rule (a clause of the candidate that states the forgotten fact), in the core library and in the Python fallback. The skip is logged as `Skipping extracted ADD: restates forgotten fact <id> (clause)`.
+  - An explicit `totalreclaw_remember` of the fact, also padded ("User is vegetarian again (does not eat meat), resuming as of ..."), released nothing, so the stale entry kept suppressing the extractor's short form one minute later. The release now uses the new core function `forget_release_ids` (the suppression matcher plus a more permissive "mentions every content word" rule). It also runs before the duplicate-suppression check and the write gate, so a remember that is skipped as a duplicate still releases. A text blocked by the PII screen or as an agent self-directive still releases nothing.
+  - The release is always logged, with counts only: `forget ledger: explicit remember released N of M entries` (also when N is 0; silent only when the ledger is empty).
+  - Needs a `totalreclaw-core` build with `forget_release_ids` and the `clause` rule (core 2.7.0); with an older core the client falls back to the Python port for the release, and uses the older core's `match_forgotten` (no `clause` rule) for suppression.
+
 - **A batch that partly fails no longer loses the facts it did store (#753).** When one group of a `remember_batch` call was stored and another failed for a reason other than the write quota, the call raised a plain `RuntimeError` that did not say which facts landed. Callers treated the whole batch as failed:
   - Auto-extraction logged stored facts as "not stored" and did not record them. An `UPDATE` whose replacement was stored kept its old fact, so both versions stayed in the vault.
   - The write-quota retry queue (#747) put stored facts back in the queue, where the next drain could write them a second time.

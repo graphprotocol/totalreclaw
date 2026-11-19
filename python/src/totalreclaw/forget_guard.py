@@ -13,15 +13,16 @@ This module holds two pieces:
   machine in one file encrypted with the vault's encryption key
   (XChaCha20-Poly1305, the same cipher as the on-chain blobs). Nothing is
   stored in plaintext and nothing new goes on-chain.
-* :func:`match_forgotten` / :func:`is_forget_request`: the pure write-time
-  checks. They call ``totalreclaw_core`` (``forget_guard`` module) when the
+* :func:`match_forgotten` / :func:`forget_release_ids` /
+  :func:`is_forget_request`: the pure write-time checks. They call ``totalreclaw_core`` (``forget_guard`` module) when the
   installed core has them and otherwise run the Python port below, which
   ``tests/parity/fixtures/forget-guard-v1.json`` keeps byte-for-byte in step.
 
 Resolution stays at write time and client-side. Recall never reads the ledger.
 
 What clears an entry: an explicit ``totalreclaw_remember`` of the same fact
-(the user wants it back). Auto-extraction never clears it.
+(the user wants it back), including a padded restatement (see
+:func:`forget_release_ids`). Auto-extraction never clears it.
 """
 from __future__ import annotations
 
@@ -43,6 +44,15 @@ SUBSET_MIN_COSINE = 0.70
 SUPERSET_MIN_COSINE = 0.80
 #: Minimum cosine for an ``anchor`` match (2+ shared names / products / places).
 ANCHOR_MIN_COSINE = 0.80
+#: Minimum cosine for a ``clause`` match (one clause states the forgotten fact).
+CLAUSE_MIN_COSINE = 0.60
+#: Minimum cosine for releasing an entry the remember text mentions.
+RELEASE_MIN_COSINE = 0.60
+
+#: Mirrors ``totalreclaw_core::forget_guard::CLAUSE_CONJUNCTIONS`` (whole words).
+_CLAUSE_CONJUNCTIONS = frozenset(("and", "but", "so", "because", "while", "which", "who"))
+#: Mirrors ``CLAUSE_PUNCTUATION``.
+_CLAUSE_PUNCTUATION_RE = re.compile("[()\\[\\]{},;:.!?\u2014\u2013]")
 
 #: Mirrors ``totalreclaw_core::forget_guard::STOPWORDS``. Keep sorted.
 STOPWORDS = frozenset((
@@ -146,6 +156,48 @@ def _cosine(a: Sequence[float], b: Sequence[float]) -> Optional[float]:
     return None if denom == 0.0 else dot / denom
 
 
+def _candidate_clauses(text: str) -> list[tuple[set[str], int]]:
+    """Clauses of *text* as ``(content tokens, word count)``.
+
+    Mirrors ``candidate_clauses`` in the core module. A clause is the stretch
+    between ``( ) [ ] { } , ; : . ! ? - -`` (the last two are the em and en
+    dash), the literal `` - `` (space, hyphen, space) and the whole words
+    ``and but so because while which who`` (case-insensitive). The word count
+    is the number of words the tokenizer sees (NFKD, combining marks dropped,
+    split on non-alphanumerics), before stopword and length filtering.
+    """
+    out: list[tuple[set[str], int]] = []
+    for part in text.split(" - "):
+        for seg in _CLAUSE_PUNCTUATION_RE.split(part):
+            stripped = "".join(
+                c for c in unicodedata.normalize("NFKD", seg) if not unicodedata.category(c).startswith("M")
+            )
+            words: list[str] = []
+            cur: list[str] = []
+            for c in stripped + " ":
+                if c.isalnum():
+                    cur.append(c)
+                    continue
+                if not cur:
+                    continue
+                w = "".join(cur)
+                cur = []
+                if w.lower() in _CLAUSE_CONJUNCTIONS:
+                    _flush_clause(words, out)
+                else:
+                    words.append(w)
+            _flush_clause(words, out)
+    return out
+
+
+def _flush_clause(words: list[str], out: list[tuple[set[str], int]]) -> None:
+    if words:
+        tokens = _tokens_and_anchors(" ".join(words))[0]
+        if tokens:
+            out.append((tokens, len(words)))
+        words.clear()
+
+
 def _py_match_forgotten(
     text: str, embedding: Optional[Sequence[float]], entries: Sequence[dict]
 ) -> Optional[dict]:
@@ -153,6 +205,7 @@ def _py_match_forgotten(
         return None
     norm = _normalize_text(text)
     cand = set(guard_tokens(text))
+    clauses = _candidate_clauses(text)
     for entry in entries:
         etext = entry.get("text") or ""
         eemb = entry.get("embedding")
@@ -171,7 +224,28 @@ def _py_match_forgotten(
         shared = len(anchors & cand)
         if len(anchors) >= 2 and shared >= 2 and shared * 2 >= len(anchors) and cos >= ANCHOR_MIN_COSINE:
             return {"id": entry.get("id", ""), "reason": "anchor", "cosine": cos}
+        if cos >= CLAUSE_MIN_COSINE and any(toks == ent and words > len(ent) for toks, words in clauses):
+            return {"id": entry.get("id", ""), "reason": "clause", "cosine": cos}
     return None
+
+
+def _py_forget_release_ids(
+    text: str, embedding: Optional[Sequence[float]], entries: Sequence[dict]
+) -> list[str]:
+    if not text or not text.strip() or not entries:
+        return []
+    cand = set(guard_tokens(text))
+    ids: list[str] = []
+    for entry in entries:
+        if _py_match_forgotten(text, embedding, [entry]) is not None:
+            ids.append(entry.get("id", ""))
+            continue
+        eemb = entry.get("embedding")
+        cos = _cosine(embedding, eemb) if embedding and eemb else None
+        ent = set(guard_tokens(entry.get("text") or ""))
+        if cos is not None and ent and ent <= cand and cos >= RELEASE_MIN_COSINE:
+            ids.append(entry.get("id", ""))
+    return ids
 
 
 def match_forgotten(
@@ -195,6 +269,31 @@ def match_forgotten(
         except Exception as e:  # pragma: no cover - defensive; fall back
             logger.debug("core match_forgotten failed, using Python port: %s", e)
     return _py_match_forgotten(text, embedding, entries)
+
+
+def forget_release_ids(
+    text: str, embedding: Optional[Sequence[float]], entries: Sequence[dict]
+) -> list[str]:
+    """Ids of the forgotten *entries* an explicit remember of *text* releases.
+
+    An entry is released when :func:`match_forgotten` matches it (any reason,
+    including ``clause``), or when *text* mentions it: every content token of
+    the entry is in *text* and the cosine is >= ``RELEASE_MIN_COSINE``. Without
+    an embedding (the text's or the entry's) only an ``exact`` match releases.
+    Uses the core binding when available, else the Python port.
+    """
+    if not entries:
+        return []
+    core = _core()
+    fn = getattr(core, "forget_release_ids", None) if core else None
+    if fn is not None:
+        try:
+            emb_json = json.dumps(list(embedding)) if embedding else "null"
+            out = fn(text or "", emb_json, json.dumps(list(entries)))
+            return [str(i) for i in json.loads(out)]
+        except Exception as e:  # pragma: no cover - defensive; fall back
+            logger.debug("core forget_release_ids failed, using Python port: %s", e)
+    return _py_forget_release_ids(text, embedding, entries)
 
 
 def is_forget_request(text: str) -> bool:
@@ -327,14 +426,23 @@ class ForgetLedger:
             return None
         return match_forgotten(text, embedding, entries)
 
-    def release(self, text: str, embedding: Optional[Sequence[float]] = None) -> int:
-        """Drop every entry *text* restates (an explicit remember brings the
-        fact back). Returns how many entries were dropped."""
+    def release_counts(self, text: str, embedding: Optional[Sequence[float]] = None) -> tuple[int, int]:
+        """Drop every entry an explicit remember of *text* releases (it brings
+        the fact back; see :func:`forget_release_ids`). Returns
+        ``(dropped, total)``: how many entries were dropped and how many the
+        ledger held before."""
         entries = self._load()
         if not entries:
-            return 0
-        kept = [e for e in entries if match_forgotten(text, embedding, [e]) is None]
-        dropped = len(entries) - len(kept)
+            return 0, 0
+        total = len(entries)
+        gone = set(forget_release_ids(text, embedding, entries))
+        kept = [e for e in entries if e.get("id") not in gone]
+        dropped = total - len(kept)
         if dropped:
             self._save(kept)
-        return dropped
+        return dropped, total
+
+    def release(self, text: str, embedding: Optional[Sequence[float]] = None) -> int:
+        """Like :meth:`release_counts`, returning only how many entries were
+        dropped."""
+        return self.release_counts(text, embedding)[0]

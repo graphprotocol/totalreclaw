@@ -26,6 +26,7 @@ FIXTURE = json.loads(
     )
 )
 HAS_CORE = hasattr(totalreclaw_core, "match_forgotten")
+HAS_CORE_RELEASE = hasattr(totalreclaw_core, "forget_release_ids")
 KEY = bytes(range(32))
 
 
@@ -38,6 +39,8 @@ def test_thresholds_match_fixture():
     assert FIXTURE["subset_min_cosine"] == fg.SUBSET_MIN_COSINE
     assert FIXTURE["superset_min_cosine"] == fg.SUPERSET_MIN_COSINE
     assert FIXTURE["anchor_min_cosine"] == fg.ANCHOR_MIN_COSINE
+    assert FIXTURE["clause_min_cosine"] == fg.CLAUSE_MIN_COSINE
+    assert FIXTURE["release_min_cosine"] == fg.RELEASE_MIN_COSINE
 
 
 def test_stopwords_match_core_source():
@@ -71,6 +74,30 @@ def test_core_binding_match_cases(case):
         assert out is None
     else:
         assert out["id"] == want["id"] and out["reason"] == want["reason"]
+
+
+RELEASE_CASES = FIXTURE["release_cases"]
+
+
+@pytest.mark.parametrize("case", RELEASE_CASES, ids=[c["name"] for c in RELEASE_CASES])
+def test_python_port_release_cases(case):
+    assert fg._py_forget_release_ids(case["text"], case["embedding"], case["entries"]) == case["expected"]
+
+
+@pytest.mark.skipif(not HAS_CORE_RELEASE, reason="installed totalreclaw_core has no forget_release_ids")
+@pytest.mark.parametrize("case", RELEASE_CASES, ids=[c["name"] for c in RELEASE_CASES])
+def test_core_binding_release_cases(case):
+    out = json.loads(
+        totalreclaw_core.forget_release_ids(case["text"], json.dumps(case["embedding"]), json.dumps(case["entries"]))
+    )
+    assert out == case["expected"]
+    assert fg.forget_release_ids(case["text"], case["embedding"], case["entries"]) == case["expected"]
+
+
+@pytest.mark.parametrize("case", RELEASE_CASES, ids=[c["name"] for c in RELEASE_CASES])
+def test_public_release_uses_python_port_without_core(monkeypatch, case):
+    monkeypatch.setattr(fg, "_core", lambda: None)
+    assert fg.forget_release_ids(case["text"], case["embedding"], case["entries"]) == case["expected"]
 
 
 @pytest.mark.parametrize("case", FIXTURE["request_cases"], ids=[c["text"][:40] or "empty" for c in FIXTURE["request_cases"]])
@@ -128,6 +155,48 @@ def test_ledger_release_and_dedupe(tmp_path):
     assert len(led) == 2
     assert led.release("User is vegetarian", [1.0, 0.0]) == 1
     assert [e["id"] for e in led.entries()] == ["f2"]
+
+
+H13_REMEMBER = (
+    "User is vegetarian again (does not eat meat), resuming as of November 18, 2026 — "
+    "they had lapsed from vegetarianism at some point before this and have now returned to it."
+)
+VEG_ID = "45649345-c4d0-42e0-94bb-74027213bbfa"
+GLM_ID = "a3c1f7ca-0000-4000-8000-000000000000"
+
+
+def _at(c):
+    import math
+
+    return [c, math.sqrt(1 - c * c)]
+
+
+def _h13_ledger(tmp_path):
+    led = fg.ForgetLedger(tmp_path / "l.enc", KEY)
+    led.record(VEG_ID, "User is vegetarian.", [1.0, 0.0])
+    led.record(GLM_ID, "User decided to use glm-4.5-flash for memory extraction from now on.", [0.0, 1.0])
+    return led
+
+
+def test_ledger_release_padded_remember_h13(tmp_path):
+    led = _h13_ledger(tmp_path)
+    assert led.release_counts(H13_REMEMBER, _at(0.69)) == (1, 2)
+    assert [e["id"] for e in led.entries()] == [GLM_ID]
+    # With the entry gone the short extractor form is no longer suppressed.
+    assert led.match("User is vegetarian again.", _at(0.9)) is None
+
+
+def test_ledger_release_keeps_unrelated_entry(tmp_path):
+    led = _h13_ledger(tmp_path)
+    # Restating the glm entry releases it; the vegetarian entry shares no
+    # content word and stays.
+    got = led.release_counts("User decided to use glm-5.3-flash for memory extraction from now on.", _at(0.1))
+    assert got == (1, 2)
+    assert [e["id"] for e in led.entries()] == [VEG_ID]
+
+
+def test_ledger_release_counts_empty_ledger(tmp_path):
+    assert fg.ForgetLedger(tmp_path / "none.enc", KEY).release_counts("User is vegetarian") == (0, 0)
 
 
 def test_ledger_caps_entries(tmp_path, monkeypatch):

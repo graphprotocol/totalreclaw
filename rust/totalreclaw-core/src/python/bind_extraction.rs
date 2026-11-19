@@ -71,7 +71,7 @@ pub(crate) fn py_get_compaction_system_prompt() -> &'static str {
 /// ``entries_json`` is a JSON array of ``{"id", "text", "embedding"?}``
 /// (the client's forgotten-facts ledger, decrypted in memory). Returns
 /// ``"null"`` or ``{"id", "reason", "cosine"}`` as JSON, where reason is
-/// ``exact`` / ``subset`` / ``superset`` / ``anchor``. Raises ``ValueError`` on bad JSON.
+/// ``exact`` / ``subset`` / ``superset`` / ``anchor`` / ``clause``. Raises ``ValueError`` on bad JSON.
 #[pyfunction]
 #[pyo3(name = "match_forgotten")]
 pub(crate) fn py_match_forgotten(
@@ -80,6 +80,23 @@ pub(crate) fn py_match_forgotten(
     entries_json: &str,
 ) -> PyResult<String> {
     crate::forget_guard::match_forgotten_json(text, embedding_json, entries_json)
+        .map_err(PyValueError::new_err)
+}
+
+/// Ids of the forgotten entries an explicit remember of ``text`` releases.
+///
+/// Same JSON inputs as ``match_forgotten``. Returns a JSON array of entry ids:
+/// entries ``match_forgotten`` matches (any reason, incl. ``clause``) plus
+/// entries the text mentions (all their content tokens, cosine >= 0.60).
+/// Raises ``ValueError`` on bad JSON.
+#[pyfunction]
+#[pyo3(name = "forget_release_ids")]
+pub(crate) fn py_forget_release_ids(
+    text: &str,
+    embedding_json: &str,
+    entries_json: &str,
+) -> PyResult<String> {
+    crate::forget_guard::forget_release_ids_json(text, embedding_json, entries_json)
         .map_err(PyValueError::new_err)
 }
 

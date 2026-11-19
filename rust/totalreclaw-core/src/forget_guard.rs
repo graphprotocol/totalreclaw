@@ -46,12 +46,40 @@
 //!      reworded restatement such as "Inês proposed putting PgBouncer in front
 //!      of Postgres", which both drops and adds ordinary words.
 //!
+//!    - `clause`: some clause of the candidate states the forgotten fact, with
+//!      extra words around it, and the cosine is >= [`CLAUSE_MIN_COSINE`].
+//!      Catches a padded restatement whose whole-sentence cosine is diluted
+//!      below the `superset` floor, such as "User is vegetarian (does not eat
+//!      meat) and always orders the lentil curry near Bolhão" against "User is
+//!      vegetarian." (internal Hermes QA of 2.6.0rc1, H13). A clause is the
+//!      stretch of the candidate between `( ) [ ] { } , ; : . ! ? — –`, the
+//!      literal ` - ` (space, hyphen, space) and the whole words `and`, `but`,
+//!      `so`, `because`, `while`, `which`, `who` (case-insensitive). A clause
+//!      matches when its content-token set EQUALS the forgotten text's
+//!      non-empty token set AND the clause has more words than that set. Words
+//!      are counted the way the tokenizer sees them (NFKD, combining marks
+//!      dropped, split on any non-alphanumeric character), before stopwords and
+//!      the 3-character floor are applied, so "User is vegetarian" (3 words,
+//!      1 token) counts and a bare "vegetarian" fragment does not. Equality
+//!      keeps value swaps and subject swaps out: their clause has a different
+//!      token set.
+//!
 //!    Otherwise a candidate that both drops and adds content words never
 //!    matches. That keeps value swaps out: "favorite color is green" after
 //!    "... blue" was forgotten, or "brother Rui lives in Berlin" after "sister
 //!    Ana lives in Berlin" (one shared anchor is not enough).
 //!
 //! The first matching entry, in list order, wins.
+//!
+//! ## Release
+//!
+//! An explicit remember of a forgotten fact brings it back, so the client
+//! drops the matching ledger entry. [`forget_release_ids`] is more permissive
+//! than [`match_forgotten`]: it releases an entry when `match_forgotten`
+//! matches it, or when the remember text "mentions" it (every content token of
+//! the entry is in the text and cosine >= [`RELEASE_MIN_COSINE`]). The agent
+//! writes long, padded remember texts, and a missed release silently blocks
+//! every later auto-extracted restatement of a fact the user just re-asserted.
 //!
 //! ## Content tokens
 //!
@@ -80,6 +108,20 @@ pub const SUPERSET_MIN_COSINE: f64 = 0.80;
 
 /// Minimum cosine for an `anchor` match (shared names / products / places).
 pub const ANCHOR_MIN_COSINE: f64 = 0.80;
+
+/// Minimum cosine for a `clause` match (one clause states the forgotten fact).
+pub const CLAUSE_MIN_COSINE: f64 = 0.60;
+
+/// Minimum cosine for releasing an entry the remember text mentions.
+pub const RELEASE_MIN_COSINE: f64 = 0.60;
+
+/// Words that end a clause (matched as whole words, case-insensitive).
+const CLAUSE_CONJUNCTIONS: &[&str] = &["and", "but", "so", "because", "while", "which", "who"];
+
+/// Characters that end a clause.
+const CLAUSE_PUNCTUATION: &[char] = &[
+    '(', ')', '[', ']', '{', '}', ',', ';', ':', '.', '!', '?', '—', '–',
+];
 
 /// Words ignored when comparing content tokens. Sorted; lookups use binary
 /// search. Mirrored byte-for-byte by the Python fallback.
@@ -225,7 +267,7 @@ pub struct ForgottenEntry {
 pub struct ForgottenMatch {
     /// Id of the forgotten fact the candidate restates.
     pub id: String,
-    /// `"exact"`, `"subset"`, `"superset"` or `"anchor"`.
+    /// `"exact"`, `"subset"`, `"superset"`, `"anchor"` or `"clause"`.
     pub reason: String,
     /// Cosine similarity, when both embeddings were usable.
     pub cosine: Option<f64>,
@@ -275,6 +317,40 @@ fn cosine(a: &[f64], b: &[f64]) -> Option<f64> {
     }
 }
 
+/// One clause of a candidate: its content tokens and its word count (words as
+/// the tokenizer splits them, before stopword / length filtering).
+fn candidate_clauses(text: &str) -> Vec<(BTreeSet<String>, usize)> {
+    let mut out = Vec::new();
+    for part in text.split(" - ") {
+        for seg in part.split(CLAUSE_PUNCTUATION) {
+            let stripped: String = seg.nfkd().filter(|c| !is_combining_mark(*c)).collect();
+            let mut words: Vec<&str> = Vec::new();
+            let mut flush = |words: &mut Vec<&str>| {
+                if !words.is_empty() {
+                    let tokens = guard_tokens(&words.join(" "));
+                    if !tokens.is_empty() {
+                        out.push((tokens, words.len()));
+                    }
+                    words.clear();
+                }
+            };
+            for w in stripped.split(|c: char| !c.is_alphanumeric()) {
+                if w.is_empty() {
+                    continue;
+                }
+                let lower = w.to_lowercase();
+                if CLAUSE_CONJUNCTIONS.contains(&lower.as_str()) {
+                    flush(&mut words);
+                } else {
+                    words.push(w);
+                }
+            }
+            flush(&mut words);
+        }
+    }
+    out
+}
+
 /// Return the first forgotten entry that `text` restates, or `None`.
 ///
 /// `embedding` is the candidate's embedding; pass `None` when it could not be
@@ -289,6 +365,7 @@ pub fn match_forgotten(
     }
     let norm = normalize_text(text);
     let cand_tokens = guard_tokens(text);
+    let clauses = candidate_clauses(text);
 
     for entry in entries {
         let cos = match (embedding, entry.embedding.as_deref()) {
@@ -336,8 +413,57 @@ pub fn match_forgotten(
                 cosine: Some(cos),
             });
         }
+        if cos >= CLAUSE_MIN_COSINE
+            && clauses
+                .iter()
+                .any(|(tokens, words)| *tokens == entry_tokens && *words > entry_tokens.len())
+        {
+            return Some(ForgottenMatch {
+                id: entry.id.clone(),
+                reason: "clause".to_string(),
+                cosine: Some(cos),
+            });
+        }
     }
     None
+}
+
+/// Ids of the forgotten entries an explicit remember of `text` releases.
+///
+/// An entry is released when [`match_forgotten`] matches it (any reason), or
+/// when `text` mentions it: the entry's content-token set is non-empty, is a
+/// subset of the text's, and cosine >= [`RELEASE_MIN_COSINE`]. Without an
+/// embedding (the text's or the entry's) only an `exact` match releases.
+pub fn forget_release_ids(
+    text: &str,
+    embedding: Option<&[f64]>,
+    entries: &[ForgottenEntry],
+) -> Vec<String> {
+    if text.trim().is_empty() || entries.is_empty() {
+        return Vec::new();
+    }
+    let cand_tokens = guard_tokens(text);
+    let mut ids = Vec::new();
+    for entry in entries {
+        if match_forgotten(text, embedding, std::slice::from_ref(entry)).is_some() {
+            ids.push(entry.id.clone());
+            continue;
+        }
+        let cos = match (embedding, entry.embedding.as_deref()) {
+            (Some(a), Some(b)) => cosine(a, b),
+            _ => None,
+        };
+        let entry_tokens = guard_tokens(&entry.text);
+        if let Some(cos) = cos {
+            if !entry_tokens.is_empty()
+                && entry_tokens.is_subset(&cand_tokens)
+                && cos >= RELEASE_MIN_COSINE
+            {
+                ids.push(entry.id.clone());
+            }
+        }
+    }
+    ids
 }
 
 /// JSON wrapper behind the PyO3 / WASM bindings.
@@ -356,6 +482,22 @@ pub fn match_forgotten_json(
         serde_json::from_str(entries_json).map_err(|e| format!("bad entries JSON: {e}"))?;
     let found = match_forgotten(text, embedding.as_deref(), &entries);
     serde_json::to_string(&found).map_err(|e| e.to_string())
+}
+
+/// JSON wrapper behind the PyO3 / WASM bindings for [`forget_release_ids`].
+///
+/// Same inputs as [`match_forgotten_json`]. Returns a JSON array of entry ids.
+pub fn forget_release_ids_json(
+    text: &str,
+    embedding_json: &str,
+    entries_json: &str,
+) -> Result<String, String> {
+    let embedding: Option<Vec<f64>> =
+        serde_json::from_str(embedding_json).map_err(|e| format!("bad embedding JSON: {e}"))?;
+    let entries: Vec<ForgottenEntry> =
+        serde_json::from_str(entries_json).map_err(|e| format!("bad entries JSON: {e}"))?;
+    let ids = forget_release_ids(text, embedding.as_deref(), &entries);
+    serde_json::to_string(&ids).map_err(|e| e.to_string())
 }
 
 const FORGET_REQUEST_PATTERNS: &[&str] = &[
@@ -479,6 +621,134 @@ mod tests {
         assert!(match_forgotten("User is not vegetarian", Some(&[1.0, 0.0]), &e).is_none());
     }
 
+    fn at(c: f64) -> Vec<f64> {
+        vec![c, (1.0 - c * c).sqrt()]
+    }
+
+    const H13_C1: &str = "User is vegetarian (does not eat meat) and always orders the lentil curry at their usual Indian restaurant near Bolhão.";
+    const H13_R: &str = "User is vegetarian again (does not eat meat), resuming as of November 18, 2026 — they had lapsed from vegetarianism at some point before this and have now returned to it.";
+    const VEG_ID: &str = "45649345-c4d0-42e0-94bb-74027213bbfa";
+
+    fn veg() -> Vec<ForgottenEntry> {
+        vec![entry(VEG_ID, "User is vegetarian.", Some(vec![1.0, 0.0]))]
+    }
+
+    #[test]
+    fn clause_padded_restatement_h13() {
+        let m = match_forgotten(H13_C1, Some(&at(0.71)), &veg()).unwrap();
+        assert_eq!(m.reason, "clause");
+        assert_eq!(m.id, VEG_ID);
+        assert!(match_forgotten(H13_C1, Some(&at(0.55)), &veg()).is_none());
+    }
+
+    #[test]
+    fn clause_padded_remember_h13() {
+        let m = match_forgotten(H13_R, Some(&at(0.69)), &veg()).unwrap();
+        assert_eq!(m.reason, "clause");
+    }
+
+    #[test]
+    fn clause_fragment_needs_more_than_the_tokens() {
+        assert!(match_forgotten(
+            "User's sister Ana is a nurse, and vegetarian.",
+            Some(&at(0.75)),
+            &veg()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn clause_value_swap() {
+        let e = vec![entry(
+            "c",
+            "User's favorite color is blue",
+            Some(vec![1.0, 0.0]),
+        )];
+        assert!(match_forgotten(
+            "User's favorite color is green, and they repainted the kitchen.",
+            Some(&at(0.70)),
+            &e
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn clause_subject_swap() {
+        let e = vec![entry("p", "User lives in Porto", Some(vec![1.0, 0.0]))];
+        assert!(match_forgotten(
+            "User's brother Rui lives in Porto and works at Farfetch.",
+            Some(&at(0.75)),
+            &e
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn clause_moved_from() {
+        let e = vec![entry("p", "User lives in Porto", Some(vec![1.0, 0.0]))];
+        assert!(match_forgotten(
+            "User lives in Lisbon (moved from Porto in 2024).",
+            Some(&at(0.79)),
+            &e
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn release_ids_h13() {
+        let entries = vec![
+            entry(VEG_ID, "User is vegetarian.", Some(vec![1.0, 0.0])),
+            entry(
+                "a3c1f7ca-0000-4000-8000-000000000000",
+                "User decided to use glm-4.5-flash for memory extraction from now on.",
+                Some(vec![0.0, 1.0]),
+            ),
+        ];
+        // The glm entry has a high cosine here (0.72) but shares no content token: kept.
+        let ids = forget_release_ids(H13_R, Some(&at(0.69)), &entries);
+        assert_eq!(ids, vec![VEG_ID.to_string()]);
+    }
+
+    #[test]
+    fn release_mentions() {
+        let ids = forget_release_ids(
+            "User follows a vegetarian diet again as of November 2026",
+            Some(&at(0.73)),
+            &veg(),
+        );
+        assert_eq!(ids, vec![VEG_ID.to_string()]);
+        assert!(forget_release_ids(
+            "User eats a plant-based diet again",
+            Some(&at(0.72)),
+            &veg()
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn release_needs_embedding_except_exact() {
+        let e = vec![
+            entry("a", "User is vegetarian.", None),
+            entry("b", "User follows a vegetarian diet", Some(vec![1.0, 0.0])),
+        ];
+        // No candidate embedding: only exact releases.
+        assert_eq!(
+            forget_release_ids("user is   VEGETARIAN.", None, &e),
+            vec!["a".to_string()]
+        );
+        assert!(
+            forget_release_ids("User follows a vegetarian diet again as of 2026", None, &e)
+                .is_empty()
+        );
+        // Candidate embedding, entry without one: not released (not exact).
+        assert!(forget_release_ids(
+            "User is vegetarian again as of 2026",
+            Some(&at(0.9)),
+            &e[..1]
+        )
+        .is_empty());
+    }
+
     #[test]
     fn forget_request_detection() {
         for yes in [
@@ -572,5 +842,25 @@ mod tests {
             fixture["anchor_min_cosine"].as_f64(),
             Some(ANCHOR_MIN_COSINE)
         );
+        assert_eq!(
+            fixture["clause_min_cosine"].as_f64(),
+            Some(CLAUSE_MIN_COSINE)
+        );
+        assert_eq!(
+            fixture["release_min_cosine"].as_f64(),
+            Some(RELEASE_MIN_COSINE)
+        );
+        for case in fixture["release_cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let out = forget_release_ids_json(
+                case["text"].as_str().unwrap(),
+                &case["embedding"].to_string(),
+                &case["entries"].to_string(),
+            )
+            .unwrap();
+            let got: Vec<String> = serde_json::from_str(&out).unwrap();
+            let want: Vec<String> = serde_json::from_value(case["expected"].clone()).unwrap();
+            assert_eq!(got, want, "release {name}");
+        }
     }
 }
