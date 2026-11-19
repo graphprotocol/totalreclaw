@@ -24,8 +24,9 @@ Usage::
     if state.turn_count % state.get_extraction_interval() == 0:
         auto_extract(state)
 
-    # At session end:
-    auto_extract(state, mode="full")
+    # At session end (the buffer is about to go away, so if relay reads are
+    # paused persist it to the pending queue instead of deferring in memory):
+    auto_extract(state, mode="full", on_paused="queue")
     session_debrief(state)
 """
 from __future__ import annotations

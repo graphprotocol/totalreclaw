@@ -529,6 +529,10 @@ def _defer_for_paused_reads(
     """
     n = len(messages)
     until = _paused_until_text(client, errors)
+    try:
+        state._extraction_requeued = False
+    except Exception:
+        pass
     if on_paused == ON_PAUSED_DEFER and n <= DEFER_MAX_MESSAGES:
         logger.info(
             "auto-extraction deferred: reads paused until %s UTC (%d messages kept)",
@@ -547,6 +551,7 @@ def _defer_for_paused_reads(
         state.mark_messages_processed()
         try:
             state._extraction_deferred = False
+            state._extraction_requeued = True  # the drain tells "re-queued" from "landed"
         except Exception:
             pass
         return True
@@ -743,18 +748,24 @@ def _auto_extract_inner(
     # PRD-04 DEP-4: automatic extraction stores only facts the core PII
     # filter allows — block AND flag are dropped (logged by category only).
     # Runs before every log line below that prints fact text.
+    #
+    # Per-cycle summary buckets: P is taken BEFORE this drop; ``other`` is the
+    # remainder (max_facts cap, contradiction / pin-guard removals, DELETE
+    # actions, failed writes), so the line always adds up.
+    n_proposals = len(facts)
     facts = drop_sensitive_facts(facts)
+    n_pii = n_proposals - len(facts)
 
     if not facts:
         state.mark_messages_processed()
         logger.info(
-            "auto-extract: 0 proposals, 0 noop, 0 gate-skipped, 0 forget-skipped, 0 stored"
+            "auto-extract: %d proposals, %d pii-dropped, 0 noop, 0 gate-skipped, "
+            "0 forget-skipped, 0 stored, 0 other", n_proposals, n_pii,
         )
         return []
 
     # Cap to max_facts
     facts = facts[:max_facts]
-    n_proposals = len(facts)
     n_noop = n_gate_skipped = n_forget_skipped = 0
 
     # Contradiction detection: filter out facts that lose to existing vault claims
@@ -966,8 +977,10 @@ def _auto_extract_inner(
 
     state.mark_messages_processed()
     logger.info(
-        "auto-extract: %d proposals, %d noop, %d gate-skipped, %d forget-skipped, %d stored",
-        n_proposals, n_noop, n_gate_skipped, n_forget_skipped, len(stored_texts),
+        "auto-extract: %d proposals, %d pii-dropped, %d noop, %d gate-skipped, "
+        "%d forget-skipped, %d stored, %d other",
+        n_proposals, n_pii, n_noop, n_gate_skipped, n_forget_skipped, len(stored_texts),
+        n_proposals - n_pii - n_noop - n_gate_skipped - n_forget_skipped - len(stored_texts),
     )
     if wrote_ok:
         # A write just went through, so the quota allows writes again: store

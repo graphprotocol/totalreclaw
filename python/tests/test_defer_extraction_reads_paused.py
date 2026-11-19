@@ -217,7 +217,8 @@ def test_drain_while_paused_requeues_not_drops(pending_path):
     with patch("totalreclaw.embedding.is_model_available_locally", return_value=False), \
          patch.object(hooks, "_get_hermes_llm_config", return_value=object()), \
          patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=env.fake_llm):
-        assert hooks._drain_into_state(env.state, [batch]) == 2
+        # nothing landed: the batch was queued again, so it is not counted
+        assert hooks._drain_into_state(env.state, [batch]) == 0
     assert env.llm_calls == []
     env.client.remember_batch.assert_not_called()
     again = pending_drain.drain_pending("0xabc", path=pending_path, with_meta=True)
@@ -286,6 +287,103 @@ def test_per_cycle_summary_counts(caplog):
     with caplog.at_level(logging.INFO, logger="totalreclaw"):
         stored = env.run()
     assert stored == ["User adopted a cat named Miso."]
-    assert any(r.getMessage() == "auto-extract: 2 proposals, 1 noop, 0 gate-skipped, 0 forget-skipped, 1 stored"
+    assert any(r.getMessage() == "auto-extract: 2 proposals, 0 pii-dropped, 1 noop, 0 gate-skipped, 0 forget-skipped, 1 stored, 0 other"
                for r in caplog.records), caplog.text
     assert "Miso" not in "".join(r.getMessage() for r in caplog.records if "auto-extract:" in r.getMessage())
+
+
+def test_summary_adds_up_with_pii_and_other(caplog):
+    env = _Env()
+    env.llm_facts = [_fact("User adopted a cat named Miso."), _fact("secret thing")]
+    env.turn("I adopted a cat named Miso", "Nice")
+    real = lifecycle.drop_sensitive_facts
+    with patch.object(lifecycle, "drop_sensitive_facts", side_effect=lambda fs: [f for f in fs if "secret" not in f.text]), \
+         caplog.at_level(logging.INFO, logger="totalreclaw"):
+        env.run()
+    assert any(r.getMessage() == "auto-extract: 2 proposals, 1 pii-dropped, 0 noop, 0 gate-skipped, "
+                                 "0 forget-skipped, 1 stored, 0 other" for r in caplog.records), caplog.text
+
+
+# --- review round (R72) -------------------------------------------------
+
+
+def test_deferral_flag_travels_with_its_conversation_slot():
+    env = _Env()
+    st = env.state
+    st.activate_conversation("chat-A")
+    env.paused = True
+    for i in range(TURN_MODE_WINDOW_MESSAGES):  # 12 messages in A
+        env.turn(f"A-user {i}", f"A-assistant {i}")
+    assert env.run() == []
+    assert env.llm_calls == []
+
+    st.activate_conversation("chat-B")
+    env.paused = False
+    env.turn("B-user", "B-assistant")
+    env.run()  # B extracts (its own, short buffer, turn mode)
+    assert env.llm_calls[-1]["mode"] == "turn"
+
+    st.activate_conversation("chat-A")
+    env.llm_calls.clear()
+    env.run()
+    (call,) = env.llm_calls
+    assert call["mode"] == "full"
+    contents = [m["content"] for m in call["messages"]]
+    assert "A-user 0" in contents and "A-assistant 5" in contents
+    assert len(contents) == 2 * TURN_MODE_WINDOW_MESSAGES
+
+
+def test_drain_queues_live_deferred_buffer_instead_of_consuming_it(pending_path):
+    from totalreclaw.hermes import hooks
+
+    env = _Env()
+    env.turn("live deferred user", "live deferred assistant")
+    batch = {"messages": [{"role": "user", "content": "old"}, {"role": "assistant", "content": "ok"}],
+             "session_id": "sess-orig"}
+    with patch("totalreclaw.embedding.is_model_available_locally", return_value=False), \
+         patch.object(hooks, "_get_hermes_llm_config", return_value=object()), \
+         patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=env.fake_llm), \
+         patch("totalreclaw.agent.lifecycle.extract_facts_heuristic", return_value=[]):
+        assert hooks._drain_into_state(env.state, [batch]) == 2
+    # the drained batch was extracted on its own ...
+    assert [m["content"] for m in env.llm_calls[0]["messages"]] == ["old", "ok"]
+    # ... and the live messages were queued, not lost
+    queued = pending_drain.drain_pending("0xabc", path=pending_path, with_meta=True)
+    assert [m["content"] for b in queued for m in b["messages"]] == [
+        "live deferred user", "live deferred assistant"]
+
+
+def test_ingest_turn_cadence_defers_when_reads_paused():
+    from totalreclaw.hermes import hooks
+
+    env = _Env()
+    env.paused = True
+    with patch.object(env.state, "get_extraction_interval", return_value=1), \
+         patch.object(env.state, "is_configured", return_value=True), \
+         patch.object(hooks, "_resolve_extraction_llm_config", return_value=object()), \
+         patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=env.fake_llm), \
+         patch("totalreclaw.embedding.is_model_available_locally", return_value=False):
+        hooks.ingest_turn(env.state, USER4, ASSIST4)
+    assert env.llm_calls == []
+    env.client.remember_batch.assert_not_called()
+    assert env.state.has_unprocessed_messages()
+
+
+def test_provider_on_pre_compress_extracts_blind_and_warns(caplog):
+    from totalreclaw.hermes import hooks
+    from totalreclaw.hermes.memory_provider import TotalReclawMemoryProvider
+
+    env = _Env()
+    env.paused = True
+    env.turn()
+    provider = TotalReclawMemoryProvider(env.state)
+    with patch.object(hooks, "_get_hermes_llm_config", return_value=object()), \
+         patch.object(env.state, "is_configured", return_value=True), \
+         patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=env.fake_llm), \
+         patch("totalreclaw.agent.lifecycle.extract_facts_heuristic", return_value=[]), \
+         patch("totalreclaw.embedding.is_model_available_locally", return_value=False), \
+         caplog.at_level(logging.WARNING, logger="totalreclaw"):
+        provider.on_pre_compress(messages=[])
+    assert len(env.llm_calls) == 1
+    assert any("auto-extraction ran without a vault view: reads paused and 2 messages waiting"
+               in r.getMessage() for r in caplog.records)

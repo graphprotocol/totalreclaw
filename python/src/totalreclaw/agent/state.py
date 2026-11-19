@@ -185,6 +185,7 @@ _SLOT_FIELDS = (
     "_session_id_from_host",
     "_last_activity",
     "_pending_extract_buffer",
+    "_extraction_deferred",
 )
 
 
@@ -232,6 +233,8 @@ class AgentState:
         self._session_id_from_host: bool = False
         # monotonic() of the last turn — drives idle-timeout session rollover.
         self._last_activity: float = 0.0
+        # Set when auto-extraction deferred (relay reads paused); per slot.
+        self._extraction_deferred: bool = False
         # Per-conversation session isolation (parallel-chat fix). When the host
         # supplies a per-conversation id every turn (Hermes
         # ``MemoryProvider.sync_turn`` / the per-turn hooks), each conversation
@@ -632,11 +635,11 @@ class AgentState:
             self._active_conversation_key = None
 
     def _capture_slot(self) -> dict:
-        return {f: getattr(self, f) for f in _SLOT_FIELDS}
+        return {f: getattr(self, f, False if f == "_extraction_deferred" else None) for f in _SLOT_FIELDS}
 
     def _restore_slot(self, slot: dict) -> None:
         for f in _SLOT_FIELDS:
-            setattr(self, f, slot[f])
+            setattr(self, f, slot.get(f, False) if f == "_extraction_deferred" else slot[f])
 
     def _blank_live_slot(self) -> None:
         """Reset the live conversation fields to a fresh, empty slot."""
@@ -647,6 +650,7 @@ class AgentState:
         self._session_id = None
         self._session_id_from_host = False
         self._last_activity = 0.0
+        self._extraction_deferred = False
 
     def activate_conversation(self, external_id: Optional[str]) -> None:
         """Route the live per-conversation state to the slot for *external_id*.
@@ -874,6 +878,7 @@ class AgentState:
         """Clear all messages and reset the processed index."""
         self._messages.clear()
         self._last_processed_idx = 0
+        self._extraction_deferred = False
 
     # ------------------------------------------------------------------
     # 2.4.4rc2 (F7) — pending-auto-extract buffer + suppression API.
