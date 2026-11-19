@@ -37,6 +37,7 @@ dies with the process. One ledger per client object.
 """
 from __future__ import annotations
 
+import array
 import json
 import logging
 import math
@@ -357,11 +358,132 @@ def ledger_for(client: Any) -> RecentWriteLedger:
             return RecentWriteLedger()
 
 
+# ---------------------------------------------------------------------------
+# Cached vault view (used when relay reads are paused)
+# ---------------------------------------------------------------------------
+
+VIEW_CACHE_TTL_SECONDS = 6 * 3600
+VIEW_CACHE_MAX_ENTRIES = 300
+
+
+class VaultViewCache:
+    """Facts (with embeddings) this process fetched or wrote, kept for
+    ``ttl_seconds`` (``VIEW_CACHE_TTL_SECONDS`` by default). When a read pause
+    makes the topical fetch fail, the gate checks these as well as the ledger.
+    In memory only, never persisted; thread-safe.
+
+    Embeddings are stored as float32 by design (``array('f')``; a Python float
+    list costs about 8x more memory), so they round-trip with float32
+    precision.
+
+    Limits: blind auto-extraction (past the deferral cap) still decides on the
+    ledger only, not on this cache. A forget or edit made on another device
+    cannot be seen, so a stale entry can stay for up to the TTL during a
+    pause.
+    """
+
+    def __init__(
+        self,
+        ttl_seconds: float = VIEW_CACHE_TTL_SECONDS,
+        max_entries: int = VIEW_CACHE_MAX_ENTRIES,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self._ttl = ttl_seconds
+        self._max = max_entries
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._entries: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
+
+    def _prune(self, now: float) -> None:
+        cutoff = now - self._ttl
+        for key in list(self._entries):
+            if self._entries[key][0] > cutoff:
+                break
+            del self._entries[key]
+        while len(self._entries) > self._max:
+            self._entries.popitem(last=False)
+
+    def update(self, candidates: Iterable[dict]) -> None:
+        now = self._clock()
+        with self._lock:
+            for c in candidates or []:
+                if not isinstance(c, dict):
+                    continue
+                fid = str(c.get("id") or "")
+                text = str(c.get("text") or "")
+                emb = c.get("embedding")
+                if not fid or not text or emb is None or len(emb) == 0:
+                    continue
+                self._entries.pop(fid, None)
+                self._entries[fid] = (now, {
+                    "id": fid,
+                    "text": text,
+                    "embedding": array.array("f", emb),
+                    "pinned": bool(c.get("pinned")),
+                })
+            self._prune(now)
+
+    def forget(self, fact_id: str) -> None:
+        if not fact_id:
+            return
+        with self._lock:
+            self._entries.pop(str(fact_id), None)
+
+    def rename(self, old_id: str, new_id: str, pinned: Optional[bool] = None) -> None:
+        """A rewrite (pin / unpin / retype / set_scope) tombstoned ``old_id``
+        and wrote ``new_id`` with the same text."""
+        if not old_id:
+            return
+        now = self._clock()
+        with self._lock:
+            item = self._entries.pop(str(old_id), None)
+            if item is not None and new_id:
+                entry = dict(item[1], id=str(new_id))
+                if pinned is not None:
+                    entry["pinned"] = bool(pinned)
+                self._entries.pop(str(new_id), None)
+                self._entries[str(new_id)] = (now, entry)
+            self._prune(now)
+
+    def candidates(self) -> list[dict]:
+        now = self._clock()
+        with self._lock:
+            self._prune(now)
+            return [
+                dict(e, embedding=list(e["embedding"]), section="cached")
+                for _, e in self._entries.values()
+            ]
+
+
+_VIEW_CACHES: "weakref.WeakKeyDictionary[Any, VaultViewCache]" = weakref.WeakKeyDictionary()
+_VIEW_CACHES_LOCK = threading.Lock()
+
+
+def view_cache_for(client: Any) -> VaultViewCache:
+    """The cached vault view for ``client`` (created on first use)."""
+    with _VIEW_CACHES_LOCK:
+        try:
+            cache = _VIEW_CACHES.get(client)
+            if cache is None:
+                cache = VaultViewCache()
+                _VIEW_CACHES[client] = cache
+            return cache
+        except TypeError:  # unhashable / not weak-referenceable: no memory
+            return VaultViewCache()
+
+
 def record_write(client: Any, fact_id: Optional[str], text: str, embedding: Optional[list[float]]) -> None:
     """Remember a confirmed write so the next gate check sees it before the
     subgraph does."""
     if fact_id:
         ledger_for(client).record(str(fact_id), text, embedding)
+        if text and embedding:
+            try:  # outlives the ledger TTL during a long read pause
+                view_cache_for(client).update(
+                    [{"id": str(fact_id), "text": text, "embedding": embedding}]
+                )
+            except Exception:  # noqa: BLE001 - never fail a write over the cache
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -425,14 +547,19 @@ async def check_store(
     """Gate one write: fetch topical candidates, add the ledger, decide.
 
     A failed subgraph read (reads paused, network) degrades to the ledger
-    alone, so writes are never blocked by a read failure. Interpreter
-    shutdown errors propagate.
+    plus the cached view of facts this process saw
+    (``VIEW_CACHE_TTL_SECONDS``), so writes are never blocked by a read
+    failure. Interpreter shutdown errors propagate.
     """
     from .agent.loop_runner import InterpreterShutdownError, is_interpreter_shutdown_error
 
     topical: list[dict] = []
     try:
         topical = await fetch_topical_candidates(client, text, embedding)
+        try:
+            view_cache_for(client).update(topical)
+        except Exception:  # noqa: BLE001 - the cache must never break a write
+            pass
     except InterpreterShutdownError:
         raise
     except Exception as e:  # noqa: BLE001 - best effort
@@ -440,10 +567,17 @@ async def check_store(
             raise InterpreterShutdownError(str(e)) from e
         from .relay import RelayReadBlocked
 
+        # Decide on what this process already saw (last 6 h) plus the ledger.
+        topical = view_cache_for(client).candidates()
         if isinstance(e, RelayReadBlocked):
-            logger.info("vault view degraded: reads paused (write gate: ledger only)")
+            logger.info(
+                "vault view degraded: reads paused (write gate: ledger + %d cached)", len(topical),
+            )
         else:
-            logger.debug("write gate: topical candidate fetch failed (%s); ledger only", type(e).__name__)
+            logger.debug(
+                "write gate: topical candidate fetch failed (%s); ledger + %d cached",
+                type(e).__name__, len(topical),
+            )
     candidates = merge_candidates(client, topical, exclude_ids=exclude_ids)
     decision = decide_write(text, embedding, candidates, mode=mode)
     if decision.match is not None:
