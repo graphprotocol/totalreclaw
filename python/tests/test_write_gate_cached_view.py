@@ -17,7 +17,10 @@ import pytest
 from totalreclaw.agent import lifecycle
 from totalreclaw.relay import RelayReadBlocked
 from totalreclaw.reranker import RerankerResult
+from totalreclaw import write_gate
 from totalreclaw.write_gate import (
+    RecentWriteLedger,
+    record_write,
     VIEW_CACHE_MAX_ENTRIES,
     VIEW_CACHE_TTL_SECONDS,
     VaultViewCache,
@@ -151,7 +154,8 @@ async def test_client_forget_and_rename_invalidate_cache():
     result = {"success": True, "fact_id": "g1", "new_fact_id": "g2"}
     with patch("totalreclaw.client.pin_fact", return_value=result):
         await TotalReclaw.pin_fact(stub, "g1")
-    assert cache.candidates() == []
+    (entry,) = cache.candidates()
+    assert entry["id"] == "g2" and entry["pinned"] is True and entry["text"] == "b"
 
 
 # 4. TTL, size, embeddings
@@ -184,9 +188,10 @@ def test_ttl_and_size_pruning_and_embedding_filter():
 
 def test_embedding_round_trip_floats_and_section_tag():
     cache = VaultViewCache()
-    cache.update([{"id": "a", "text": "a", "embedding": [0.25, -0.5, 1.0], "pinned": True}])
+    cache.update([{"id": "a", "text": "a", "embedding": [0.1, -0.5, 1.0], "pinned": True}])
     (c,) = cache.candidates()
-    assert c["embedding"] == [0.25, -0.5, 1.0]
+    assert c["embedding"] == pytest.approx([0.1, -0.5, 1.0], abs=1e-7)
+    assert c["embedding"][0] != 0.1  # float32 by design
     assert type(c["embedding"]) is list and all(type(x) is float for x in c["embedding"])
     assert c["section"] == "cached" and c["pinned"] is True
 
@@ -210,3 +215,44 @@ def test_two_clients_have_separate_caches():
     view_cache_for(c1).update([{"id": "a", "text": "a", "embedding": VEG}])
     assert view_cache_for(c1) is view_cache_for(c1)
     assert view_cache_for(c2).candidates() == []
+
+
+def test_rename_moves_entry_and_sets_pin():
+    cache = VaultViewCache()
+    cache.update([{"id": "a", "text": "t", "embedding": [1.0]}])
+    cache.rename("a", "b", pinned=True)
+    (c,) = cache.candidates()
+    assert (c["id"], c["text"], c["pinned"]) == ("b", "t", True)
+    cache.rename("missing", "z")
+    assert [c["id"] for c in cache.candidates()] == ["b"]
+    cache.rename("b", "c")
+    assert cache.candidates()[0]["pinned"] is True
+
+
+def test_write_during_pause_still_caught_after_ledger_ttl():
+    now = [0.0]
+    client = _Client(exc=_blocked())
+    write_gate._LEDGERS[client] = RecentWriteLedger(clock=lambda: now[0])
+    write_gate._VIEW_CACHES[client] = VaultViewCache(clock=lambda: now[0])
+    record_write(client, "f1", "User is vegetarian", VEG)
+    now[0] = 20 * 60  # past the 15 min ledger TTL
+    assert ledger_for(client).candidates() == []
+    d = _check(client, "The user follows a vegetarian diet", VEG_PARA)
+    assert d.action == "confirm" and d.match.fact_id == "f1"
+
+
+def test_record_write_without_embedding_skips_cache():
+    client = _Client()
+    record_write(client, "f1", "text", None)
+    assert view_cache_for(client).candidates() == []
+
+
+def test_generic_exception_uses_cache_and_logs_count(caplog):
+    client = _Client(results=[_res("f1", "User is vegetarian", VEG)])
+    _check(client, "User likes tea", TEA)
+    client.exc = RuntimeError("boom")
+    with caplog.at_level(logging.DEBUG, logger="totalreclaw.write_gate"):
+        d = _check(client, "The user follows a vegetarian diet", VEG_PARA)
+    assert d.action == "confirm" and d.match.fact_id == "f1"
+    assert "ledger + 1 cached" in caplog.text
+    assert "RuntimeError" in caplog.text

@@ -193,7 +193,7 @@ def _ledger_rename(client, fact_id: str, result, pinned) -> None:
     try:
         if isinstance(result, dict) and result.get("success") and result.get("new_fact_id"):
             ledger_for(client).rename(fact_id, str(result["new_fact_id"]), pinned=pinned)
-            view_cache_for(client).forget(fact_id)
+            view_cache_for(client).rename(fact_id, str(result["new_fact_id"]), pinned=pinned)
     except Exception:  # never fail a mutation over the ledger
         pass
 

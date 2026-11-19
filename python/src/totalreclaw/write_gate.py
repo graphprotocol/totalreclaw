@@ -367,11 +367,20 @@ VIEW_CACHE_MAX_ENTRIES = 300
 
 
 class VaultViewCache:
-    """Facts (with embeddings) this process fetched from the vault in the last
-    ``ttl_seconds``. When a read pause makes the topical fetch fail, the gate
-    checks these as well as the ledger. In memory only, never persisted;
-    thread-safe. Embeddings are stored as ``array('f')`` (a Python float list
-    costs about 8x more memory)."""
+    """Facts (with embeddings) this process fetched or wrote, kept for
+    ``ttl_seconds`` (``VIEW_CACHE_TTL_SECONDS`` by default). When a read pause
+    makes the topical fetch fail, the gate checks these as well as the ledger.
+    In memory only, never persisted; thread-safe.
+
+    Embeddings are stored as float32 by design (``array('f')``; a Python float
+    list costs about 8x more memory), so they round-trip with float32
+    precision.
+
+    Limits: blind auto-extraction (past the deferral cap) still decides on the
+    ledger only, not on this cache. A forget or edit made on another device
+    cannot be seen, so a stale entry can stay for up to the TTL during a
+    pause.
+    """
 
     def __init__(
         self,
@@ -420,6 +429,22 @@ class VaultViewCache:
         with self._lock:
             self._entries.pop(str(fact_id), None)
 
+    def rename(self, old_id: str, new_id: str, pinned: Optional[bool] = None) -> None:
+        """A rewrite (pin / unpin / retype / set_scope) tombstoned ``old_id``
+        and wrote ``new_id`` with the same text."""
+        if not old_id:
+            return
+        now = self._clock()
+        with self._lock:
+            item = self._entries.pop(str(old_id), None)
+            if item is not None and new_id:
+                entry = dict(item[1], id=str(new_id))
+                if pinned is not None:
+                    entry["pinned"] = bool(pinned)
+                self._entries.pop(str(new_id), None)
+                self._entries[str(new_id)] = (now, entry)
+            self._prune(now)
+
     def candidates(self) -> list[dict]:
         now = self._clock()
         with self._lock:
@@ -452,6 +477,13 @@ def record_write(client: Any, fact_id: Optional[str], text: str, embedding: Opti
     subgraph does."""
     if fact_id:
         ledger_for(client).record(str(fact_id), text, embedding)
+        if text and embedding:
+            try:  # outlives the ledger TTL during a long read pause
+                view_cache_for(client).update(
+                    [{"id": str(fact_id), "text": text, "embedding": embedding}]
+                )
+            except Exception:  # noqa: BLE001 - never fail a write over the cache
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -515,7 +547,7 @@ async def check_store(
     """Gate one write: fetch topical candidates, add the ledger, decide.
 
     A failed subgraph read (reads paused, network) degrades to the ledger
-    plus the cached view of facts this process saw in the last 6 hours, so writes are never blocked by a read failure. Interpreter
+    plus the cached view of facts this process saw (``VIEW_CACHE_TTL_SECONDS``), so writes are never blocked by a read failure. Interpreter
     shutdown errors propagate.
     """
     from .agent.loop_runner import InterpreterShutdownError, is_interpreter_shutdown_error
