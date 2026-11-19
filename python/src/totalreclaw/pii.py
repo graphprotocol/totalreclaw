@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -122,20 +123,24 @@ class ConfirmationStore:
         self._clock = clock
         self._tokens: "OrderedDict[str, tuple[str, float, int]]" = OrderedDict()
         self._turns = 0
+        self._lock = threading.Lock()
 
     @property
     def turn_seq(self) -> int:
-        return self._turns
+        with self._lock:
+            return self._turns
 
     def note_turn_completed(self) -> None:
-        self._turns += 1
+        with self._lock:
+            self._turns += 1
 
     def issue(self, category: Optional[str]) -> str:
-        token = secrets.token_hex(8)
-        self._tokens[token] = (str(category), self._clock(), self._turns)
-        while len(self._tokens) > CONFIRM_TOKEN_MAX_LIVE:
-            self._tokens.popitem(last=False)
-        return token
+        with self._lock:
+            token = secrets.token_hex(8)
+            self._tokens[token] = (str(category), self._clock(), self._turns)
+            while len(self._tokens) > CONFIRM_TOKEN_MAX_LIVE:
+                self._tokens.popitem(last=False)
+            return token
 
     def redeem(
         self,
@@ -145,23 +150,24 @@ class ConfirmationStore:
         turn_seq: Optional[int] = None,
     ) -> Optional[str]:
         """Return ``None`` and consume the token if valid, else the reject reason."""
-        if not token:
+        if not isinstance(token, str) or not token:
             return "no_token"
-        entry = self._tokens.get(token)
-        if entry is None:
-            return "unknown_token"
-        tok_category, issued_at, issued_turn = entry
-        now = self._clock() if now is None else now
-        turn_seq = self._turns if turn_seq is None else turn_seq
-        if now - issued_at > CONFIRM_TOKEN_TTL_SECONDS:
+        with self._lock:
+            entry = self._tokens.get(token)
+            if entry is None:
+                return "unknown_token"
+            tok_category, issued_at, issued_turn = entry
+            now = self._clock() if now is None else now
+            turn_seq = self._turns if turn_seq is None else turn_seq
+            if now - issued_at >= CONFIRM_TOKEN_TTL_SECONDS:
+                del self._tokens[token]
+                return "expired"
+            if turn_seq <= issued_turn:
+                return "same_turn"
+            if tok_category != str(category):
+                return "category_mismatch"
             del self._tokens[token]
-            return "expired"
-        if turn_seq <= issued_turn:
-            return "same_turn"
-        if tok_category != str(category):
-            return "category_mismatch"
-        del self._tokens[token]
-        return None
+            return None
 
 
 #: Shared by every conversation slot (the gateway is one process).
@@ -214,24 +220,31 @@ def screen_explicit(
     """
     result = check(text)
     if result.decision == "block":
-        if allow_sensitive:
-            reason = confirmations.redeem(confirm_token, result.category)
-            if reason is None:
+        try:
+            if allow_sensitive:
+                reason = confirmations.redeem(confirm_token, result.category)
+                if reason is None:
+                    logger.info(
+                        "remember storing sensitive text on explicit request (decision=%s category=%s)",
+                        result.decision,
+                        result.category,
+                    )
+                    return result, None
                 logger.info(
-                    "remember storing sensitive text on explicit request (decision=%s category=%s)",
-                    result.decision,
+                    "remember blocked: allow_sensitive without a valid confirmation "
+                    "(reason=%s, category=%s)",
+                    reason,
                     result.category,
                 )
-                return result, None
-            logger.info(
-                "remember blocked: allow_sensitive without a valid confirmation "
-                "(reason=%s, category=%s)",
-                reason,
-                result.category,
-            )
-        else:
-            logger.info("remember blocked: sensitive text (category=%s)", result.category)
-        return result, block_notice(result, confirmations.issue(result.category))
+            else:
+                logger.info("remember blocked: sensitive text (category=%s)", result.category)
+            return result, block_notice(result, confirmations.issue(result.category))
+        except Exception as exc:  # noqa: BLE001 — fail closed: never store, never raise
+            logger.warning("remember blocked: confirmation store error (%s)", type(exc).__name__)
+            try:
+                return result, block_notice(result, confirmations.issue(result.category))
+            except Exception:  # noqa: BLE001
+                return result, block_notice(result)
     if not result.is_allow:
         logger.info(
             "remember storing sensitive text on explicit request (decision=%s category=%s)",

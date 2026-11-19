@@ -290,7 +290,7 @@ class TestConfirmToken:
         caplog.set_level(logging.DEBUG)
         first = await _remember({"text": CARD_TEXT}, state)
         store.note_turn_completed()
-        store.clock.t += 31 * 60
+        store.clock.t += 30 * 60  # expired at exactly 30:00
         res = await _remember(
             {"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": first["confirm_token"]}, state
         )
@@ -339,11 +339,133 @@ class TestConfirmToken:
         assert len(store._tokens) == pii.CONFIRM_TOKEN_MAX_LIVE
         assert tokens[0] not in store._tokens and tokens[-1] in store._tokens
 
-    def test_sync_turn_counts_completed_turn(self, store) -> None:
-        import inspect
+    def test_non_string_confirm_token_is_no_token(self, store, caplog) -> None:
+        import asyncio
+
+        client = _remember_client()
+        state = _plugin_state(client)
+        caplog.set_level(logging.DEBUG)
+        for bad in (123, ["x"]):
+            res = asyncio.run(
+                _remember({"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": bad}, state)
+            )
+            assert res["blocked"] == "sensitive"
+        assert caplog.text.count("reason=no_token") == 2
+        client.remember.assert_not_called()
+
+    async def test_store_error_fails_closed(self, store, caplog) -> None:
+        client = _remember_client()
+        state = _plugin_state(client)
+        caplog.set_level(logging.DEBUG)
+        first = await _remember({"text": CARD_TEXT}, state)
+        store.note_turn_completed()
+
+        def boom(*a, **k):
+            raise KeyError("x")
+
+        store.redeem = boom
+        res = await _remember(
+            {"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": first["confirm_token"]}, state
+        )
+        assert res["blocked"] == "sensitive"
+        assert "remember blocked: confirmation store error (KeyError)" in caplog.text
+        client.remember.assert_not_called()
+
+        store.issue = boom
+        res = await _remember({"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": "t"}, state)
+        assert res["blocked"] == "sensitive" and "confirm_token" not in res
+        client.remember.assert_not_called()
+
+
+def _hook_state() -> PluginState:
+    return _plugin_state(_remember_client())
+
+
+class TestTurnCounterWiring:
+    def test_ingest_turn_increments_once(self, store) -> None:
         from totalreclaw.hermes import hooks
 
-        assert "note_turn_completed" in inspect.getsource(hooks)
+        state = _hook_state()
+        before = store.turn_seq
+        hooks.ingest_turn(state, "u", "a")
+        assert store.turn_seq == before + 1
+
+    def test_provider_sync_turn_increments_once_no_double_count(self, store) -> None:
+        from totalreclaw.hermes import hooks
+
+        state = _hook_state()
+        provider = TotalReclawMemoryProvider(state)
+        state._provider_active = True  # single-driver gate: provider drives the turn
+        before = store.turn_seq
+        provider.sync_turn("u", "a", session_id="s1")
+        hooks.post_llm_call(state, user_message="u", assistant_response="a", session_id="s1")
+        assert store.turn_seq == before + 1
+
+    def test_hook_drives_turn_when_provider_inactive(self, store) -> None:
+        from totalreclaw.hermes import hooks
+
+        state = _hook_state()
+        state._provider_active = False
+        before = store.turn_seq
+        hooks.post_llm_call(state, user_message="u", assistant_response="a", session_id="s1")
+        assert store.turn_seq == before + 1
+
+
+# ---------------------------------------------------------------------------
+# Import engine: sensitive facts are dropped before any store call
+# ---------------------------------------------------------------------------
+
+
+def _import_client() -> MagicMock:
+    client = MagicMock()
+    client.remember = AsyncMock(return_value="id-1")
+    client._ensure_chain_id = AsyncMock(return_value=1)  # per-fact path
+    return client
+
+
+class TestImportDropsSensitive:
+    @pytest.fixture(autouse=True)
+    def _emb(self, monkeypatch):
+        import totalreclaw.embedding as emb
+
+        monkeypatch.setattr(emb, "get_embedding", lambda _t: [0.0] * 640)
+
+    async def test_mem0_batch_drops_card_fact(self, caplog) -> None:
+        from totalreclaw.import_engine import ImportEngine
+
+        client = _import_client()
+        caplog.set_level(logging.DEBUG)
+        content = json.dumps({"memories": [
+            {"memory": CARD_TEXT}, {"memory": CLEAN_TEXT},
+        ]})
+        result = await ImportEngine(client=client).process_batch(source="mem0", content=content)
+        texts = [c.args[0] for c in client.remember.call_args_list]
+        assert texts == [CLEAN_TEXT]
+        assert result.facts_stored == 1
+        assert "import: dropped 1 sensitive fact(s) (categories=payment_card)" in caplog.text
+        assert "4111" not in caplog.text
+
+    async def test_chunk_extraction_path_drops_card_fact(self, caplog) -> None:
+        from tests.test_import_crystals import _GEMINI_ONE_CONVO
+        from totalreclaw.import_engine import ImportEngine
+
+        client = _import_client()
+        caplog.set_level(logging.DEBUG)
+
+        async def fake_extract(messages, timestamp):
+            return [
+                {"text": CARD_TEXT, "type": "claim", "importance": 8},
+                {"text": CLEAN_TEXT, "type": "claim", "importance": 8},
+            ]
+
+        result = await ImportEngine(client=client, llm_extract=fake_extract).process_batch(
+            source="gemini", content=_GEMINI_ONE_CONVO
+        )
+        texts = [c.args[0] for c in client.remember.call_args_list]
+        assert CLEAN_TEXT in texts and not any("4111" in t for t in texts)
+        assert result.facts_stored == len(texts)
+        assert "sensitive fact(s) (categories=payment_card)" in caplog.text
+        assert "4111" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
