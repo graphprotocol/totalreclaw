@@ -31,6 +31,7 @@ from .extraction import (
     heuristic_fallback_facts,
 )
 from .contradiction import detect_and_resolve_contradictions
+from .llm_client import detect_llm_config
 from .pin_guard import apply_pin_guard, fail_closed_actions
 from .debrief import Crystal, generate_crystal
 from .loop_runner import (
@@ -785,8 +786,21 @@ def _auto_extract_inner(
     n_noop = n_gate_skipped = n_forget_skipped = 0
 
     # Contradiction detection: filter out facts that lose to existing vault claims
+    # The pinned-conflict check reuses the extraction LLM config. When
+    # auto_extract was called without one, resolve it once the same way
+    # extract_facts_llm does, so the Hermes and generic paths behave alike.
+    pin_llm_config = llm_config
+    if pin_llm_config is None:
+        try:
+            pin_llm_config = detect_llm_config()
+        except Exception:
+            pin_llm_config = None
     try:
-        facts = run_sync(detect_and_resolve_contradictions(facts, client, logger))
+        facts = run_sync(
+            detect_and_resolve_contradictions(
+                facts, client, logger, llm_config=pin_llm_config
+            )
+        )
     except InterpreterShutdownError:
         raise
     except Exception as exc:

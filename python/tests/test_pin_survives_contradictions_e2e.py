@@ -177,7 +177,7 @@ def _embed(text: str) -> list[float]:
     return list(PINNED_EMBEDDING) if text == PINNED_TEXT else list(CONTRADICTION_EMBEDDING)
 
 
-def _extract_round(state, fact) -> list[str]:
+def _extract_round(state, fact, llm_config=None) -> list[str]:
     from totalreclaw.agent.lifecycle import auto_extract
 
     facts = list(fact) if isinstance(fact, (list, tuple)) else [fact]
@@ -191,7 +191,7 @@ def _extract_round(state, fact) -> list[str]:
          patch.object(operations, "get_embedding_dims", return_value=DIMS):
         state.add_message("user", "Actually, about where I live...")
         state.add_message("assistant", "Noted.")
-        return auto_extract(state)
+        return auto_extract(state, llm_config=llm_config)
 
 
 PEDRO = [ExtractedEntity(name="Pedro", type="person")]
@@ -355,3 +355,35 @@ async def test_h14_out_of_band_pinned_candidate_is_counted(caplog) -> None:
         auto_extract(state)
     assert "pinned conflicts 0" in caplog.text
     assert "pinned_candidates=1 no_shared_entity=0 out_of_band=1" in caplog.text
+
+
+# S41: the pinned-conflict LLM check is wired through the real auto_extract.
+def _llm_cfg():
+    from totalreclaw.agent.llm_client import LLMConfig
+
+    return LLMConfig(api_key="k", base_url="https://llm.invalid/v1", model="m", api_format="openai")
+
+
+async def _no_answer_stub(*a, **k):
+    return '{"answer": "NO"}'
+
+
+async def test_llm_no_keeps_the_fact_with_explicit_config() -> None:
+    from totalreclaw.agent import pin_check
+
+    chain, client = _vault(pinned=True)
+    with patch.object(pin_check, "chat_completion", new=_no_answer_stub), \
+         patch("totalreclaw.agent.lifecycle.detect_llm_config", side_effect=AssertionError("unused")):
+        _extract_round(_state_with(client), CONTRADICTIONS[1][0], llm_config=_llm_cfg())
+    assert chain.stored == ["Pedro's home city is Madrid"]
+    assert chain.facts[PINNED_ID]["isActive"] is True
+
+
+async def test_llm_no_keeps_the_fact_with_detect_llm_config_fallback() -> None:
+    from totalreclaw.agent import pin_check
+
+    chain, client = _vault(pinned=True)
+    with patch.object(pin_check, "chat_completion", new=_no_answer_stub), \
+         patch("totalreclaw.agent.lifecycle.detect_llm_config", return_value=_llm_cfg()):
+        _extract_round(_state_with(client), CONTRADICTIONS[1][0])
+    assert chain.stored == ["Pedro's home city is Madrid"]
