@@ -111,6 +111,11 @@ class TestPiiModule:
     def test_block_notice_shape_matches_mcp_contract(self) -> None:
         notice = pii.block_notice(pii.check(CARD_TEXT))
         assert list(notice) == ["stored", "blocked", "category", "message", "override"]
+        with_token = pii.block_notice(pii.check(CARD_TEXT), "abc")
+        assert list(with_token) == [
+            "stored", "blocked", "category", "message", "override", "confirm_token", "next_step",
+        ]
+        assert with_token["confirm_token"] == "abc"
         assert notice["stored"] is False
         assert notice["blocked"] == "sensitive"
         assert notice["category"] == "payment_card"
@@ -146,20 +151,11 @@ class TestRememberBlockAndTell:
         state = _plugin_state(client)
         caplog.set_level(logging.DEBUG)
         result = json.loads(await remember({"text": CARD_TEXT}, state))
+        assert result.pop("confirm_token")
+        assert result.pop("next_step")
         assert result == pii.block_notice(pii.check(CARD_TEXT))
         client.remember.assert_not_called()
         assert "4111" not in caplog.text
-
-    async def test_allow_sensitive_true_stores_blocked_text(self) -> None:
-        from totalreclaw.hermes.tools import remember
-
-        client = _remember_client()
-        state = _plugin_state(client)
-        with patch("totalreclaw.embedding.get_embedding", return_value=None):
-            result = json.loads(await remember({"text": CARD_TEXT, "allow_sensitive": True}, state))
-        assert result["stored"] is True
-        client.remember.assert_called_once()
-        assert client.remember.call_args.args[0] == CARD_TEXT
 
     async def test_allow_sensitive_string_false_does_not_override(self) -> None:
         from totalreclaw.hermes.tools import remember
@@ -210,6 +206,266 @@ class TestRememberBlockAndTell:
         assert prop["default"] is False
         assert "allow_sensitive" not in REMEMBER["parameters"]["required"]
         assert "allow_sensitive" in REMEMBER["description"]
+
+    def test_schema_declares_confirm_token(self) -> None:
+        from totalreclaw.hermes.schemas import REMEMBER
+
+        props = REMEMBER["parameters"]["properties"]
+        assert props["confirm_token"]["type"] == "string"
+        assert "confirm_token" not in REMEMBER["parameters"]["required"]
+        assert "confirm_token" in props["allow_sensitive"]["description"]
+
+
+IBAN_TEXT = "My IBAN is GB82 WEST 1234 5698 7654 32"  # public documentation IBAN
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+@pytest.fixture
+def store(monkeypatch):
+    clock = _Clock()
+    s = pii.ConfirmationStore(clock=clock)
+    s.clock = clock
+    monkeypatch.setattr(pii, "confirmations", s)
+    return s
+
+
+async def _remember(args, state):
+    from totalreclaw.hermes.tools import remember
+
+    with patch("totalreclaw.embedding.get_embedding", return_value=None):
+        return json.loads(await remember(args, state))
+
+
+class TestConfirmToken:
+    async def test_first_call_with_allow_sensitive_is_rejected(self, store, caplog) -> None:
+        client = _remember_client()
+        state = _plugin_state(client)
+        caplog.set_level(logging.DEBUG)
+        res = await _remember({"text": CARD_TEXT, "allow_sensitive": True}, state)
+        assert res["blocked"] == "sensitive" and res["confirm_token"]
+        client.remember.assert_not_called()
+        assert "reason=no_token, category=payment_card" in caplog.text
+        assert "4111" not in caplog.text
+
+    async def test_same_turn_retry_rejected_with_new_token(self, store, caplog) -> None:
+        client = _remember_client()
+        state = _plugin_state(client)
+        caplog.set_level(logging.DEBUG)
+        first = await _remember({"text": CARD_TEXT}, state)
+        again = await _remember(
+            {"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": first["confirm_token"]}, state
+        )
+        assert again["blocked"] == "sensitive"
+        assert again["confirm_token"] != first["confirm_token"]
+        client.remember.assert_not_called()
+        assert "reason=same_turn" in caplog.text
+
+    async def test_retry_after_turn_stores_and_consumes_token(self, store, caplog) -> None:
+        client = _remember_client()
+        state = _plugin_state(client)
+        caplog.set_level(logging.DEBUG)
+        first = await _remember({"text": CARD_TEXT}, state)
+        store.note_turn_completed()
+        args = {"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": first["confirm_token"]}
+        res = await _remember(args, state)
+        assert res["stored"] is True
+        assert client.remember.call_args.args[0] == CARD_TEXT
+        assert "remember storing sensitive text on explicit request" in caplog.text
+        again = await _remember(args, state)
+        assert again["blocked"] == "sensitive"
+        assert "reason=unknown_token" in caplog.text
+        assert client.remember.call_count == 1
+        assert "4111" not in caplog.text
+
+    async def test_expired_token(self, store, caplog) -> None:
+        client = _remember_client()
+        state = _plugin_state(client)
+        caplog.set_level(logging.DEBUG)
+        first = await _remember({"text": CARD_TEXT}, state)
+        store.note_turn_completed()
+        store.clock.t += 30 * 60  # expired at exactly 30:00
+        res = await _remember(
+            {"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": first["confirm_token"]}, state
+        )
+        assert res["blocked"] == "sensitive"
+        assert "reason=expired" in caplog.text
+        client.remember.assert_not_called()
+
+    async def test_category_mismatch(self, store, caplog) -> None:
+        client = _remember_client()
+        state = _plugin_state(client)
+        caplog.set_level(logging.DEBUG)
+        first = await _remember({"text": CARD_TEXT}, state)
+        assert first["category"] == "payment_card"
+        store.note_turn_completed()
+        res = await _remember(
+            {"text": IBAN_TEXT, "allow_sensitive": True, "confirm_token": first["confirm_token"]}, state
+        )
+        assert res["blocked"] == "sensitive" and res["category"] == "bank_account"
+        assert "reason=category_mismatch, category=bank_account" in caplog.text
+        assert "GB82" not in caplog.text
+        client.remember.assert_not_called()
+
+    async def test_rephrased_allow_text_stores_normally(self, store) -> None:
+        client = _remember_client()
+        state = _plugin_state(client)
+        first = await _remember({"text": CARD_TEXT}, state)
+        store.note_turn_completed()
+        res = await _remember(
+            {"text": CLEAN_TEXT, "allow_sensitive": True, "confirm_token": first["confirm_token"]}, state
+        )
+        assert res["stored"] is True
+
+    async def test_string_false_with_valid_token_still_blocks(self, store) -> None:
+        client = _remember_client()
+        state = _plugin_state(client)
+        first = await _remember({"text": CARD_TEXT}, state)
+        store.note_turn_completed()
+        res = await _remember(
+            {"text": CARD_TEXT, "allow_sensitive": "false", "confirm_token": first["confirm_token"]}, state
+        )
+        assert res["blocked"] == "sensitive"
+        client.remember.assert_not_called()
+
+    def test_live_token_cap(self, store) -> None:
+        tokens = [store.issue("payment_card") for _ in range(40)]
+        assert len(store._tokens) == pii.CONFIRM_TOKEN_MAX_LIVE
+        assert tokens[0] not in store._tokens and tokens[-1] in store._tokens
+
+    def test_non_string_confirm_token_is_no_token(self, store, caplog) -> None:
+        import asyncio
+
+        client = _remember_client()
+        state = _plugin_state(client)
+        caplog.set_level(logging.DEBUG)
+        for bad in (123, ["x"]):
+            res = asyncio.run(
+                _remember({"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": bad}, state)
+            )
+            assert res["blocked"] == "sensitive"
+        assert caplog.text.count("reason=no_token") == 2
+        client.remember.assert_not_called()
+
+    async def test_store_error_fails_closed(self, store, caplog) -> None:
+        client = _remember_client()
+        state = _plugin_state(client)
+        caplog.set_level(logging.DEBUG)
+        first = await _remember({"text": CARD_TEXT}, state)
+        store.note_turn_completed()
+
+        def boom(*a, **k):
+            raise KeyError("x")
+
+        store.redeem = boom
+        res = await _remember(
+            {"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": first["confirm_token"]}, state
+        )
+        assert res["blocked"] == "sensitive"
+        assert "remember blocked: confirmation store error (KeyError)" in caplog.text
+        client.remember.assert_not_called()
+
+        store.issue = boom
+        res = await _remember({"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": "t"}, state)
+        assert res["blocked"] == "sensitive" and "confirm_token" not in res
+        client.remember.assert_not_called()
+
+
+def _hook_state() -> PluginState:
+    return _plugin_state(_remember_client())
+
+
+class TestTurnCounterWiring:
+    def test_ingest_turn_increments_once(self, store) -> None:
+        from totalreclaw.hermes import hooks
+
+        state = _hook_state()
+        before = store.turn_seq
+        hooks.ingest_turn(state, "u", "a")
+        assert store.turn_seq == before + 1
+
+    def test_provider_sync_turn_increments_once_no_double_count(self, store) -> None:
+        from totalreclaw.hermes import hooks
+
+        state = _hook_state()
+        provider = TotalReclawMemoryProvider(state)
+        state._provider_active = True  # single-driver gate: provider drives the turn
+        before = store.turn_seq
+        provider.sync_turn("u", "a", session_id="s1")
+        hooks.post_llm_call(state, user_message="u", assistant_response="a", session_id="s1")
+        assert store.turn_seq == before + 1
+
+    def test_hook_drives_turn_when_provider_inactive(self, store) -> None:
+        from totalreclaw.hermes import hooks
+
+        state = _hook_state()
+        state._provider_active = False
+        before = store.turn_seq
+        hooks.post_llm_call(state, user_message="u", assistant_response="a", session_id="s1")
+        assert store.turn_seq == before + 1
+
+
+# ---------------------------------------------------------------------------
+# Import engine: sensitive facts are dropped before any store call
+# ---------------------------------------------------------------------------
+
+
+def _import_client() -> MagicMock:
+    client = MagicMock()
+    client.remember = AsyncMock(return_value="id-1")
+    client._ensure_chain_id = AsyncMock(return_value=1)  # per-fact path
+    return client
+
+
+class TestImportDropsSensitive:
+    @pytest.fixture(autouse=True)
+    def _emb(self, monkeypatch):
+        import totalreclaw.embedding as emb
+
+        monkeypatch.setattr(emb, "get_embedding", lambda _t: [0.0] * 640)
+
+    async def test_mem0_batch_drops_card_fact(self, caplog) -> None:
+        from totalreclaw.import_engine import ImportEngine
+
+        client = _import_client()
+        caplog.set_level(logging.DEBUG)
+        content = json.dumps({"memories": [
+            {"memory": CARD_TEXT}, {"memory": CLEAN_TEXT},
+        ]})
+        result = await ImportEngine(client=client).process_batch(source="mem0", content=content)
+        texts = [c.args[0] for c in client.remember.call_args_list]
+        assert texts == [CLEAN_TEXT]
+        assert result.facts_stored == 1
+        assert "import: dropped 1 sensitive fact(s) (categories=payment_card)" in caplog.text
+        assert "4111" not in caplog.text
+
+    async def test_chunk_extraction_path_drops_card_fact(self, caplog) -> None:
+        from tests.test_import_crystals import _GEMINI_ONE_CONVO
+        from totalreclaw.import_engine import ImportEngine
+
+        client = _import_client()
+        caplog.set_level(logging.DEBUG)
+
+        async def fake_extract(messages, timestamp):
+            return [
+                {"text": CARD_TEXT, "type": "claim", "importance": 8},
+                {"text": CLEAN_TEXT, "type": "claim", "importance": 8},
+            ]
+
+        result = await ImportEngine(client=client, llm_extract=fake_extract).process_batch(
+            source="gemini", content=_GEMINI_ONE_CONVO
+        )
+        texts = [c.args[0] for c in client.remember.call_args_list]
+        assert CLEAN_TEXT in texts and not any("4111" in t for t in texts)
+        assert result.facts_stored == len(texts)
+        assert "sensitive fact(s) (categories=payment_card)" in caplog.text
+        assert "4111" not in caplog.text
 
 
 # ---------------------------------------------------------------------------

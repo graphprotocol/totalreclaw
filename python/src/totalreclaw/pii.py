@@ -11,7 +11,10 @@ Semantics (PRD-04 Q2, "block-and-tell"):
   :func:`auto_storable`);
 * an explicit ``totalreclaw_remember`` stores ``allow`` and ``flag``; for
   ``block`` it returns :func:`block_notice` instead of storing, unless the
-  call carries ``allow_sensitive=true`` (see :func:`screen_explicit`).
+  call carries ``allow_sensitive=true`` AND a ``confirm_token`` issued by an
+  earlier block, redeemed in a later conversation turn (see
+  :func:`screen_explicit` and :class:`ConfirmationStore`). The tool enforces
+  this, so the contract does not depend on the chat model's discretion.
 
 Logging rule: never log the screened text — log the decision and category
 only. :func:`log_label` gives a log-safe stand-in for the text.
@@ -25,6 +28,10 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
+import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional, TypeVar
 
@@ -90,19 +97,108 @@ def parse_allow_sensitive(value: Any) -> bool:
     return isinstance(value, str) and value.strip().lower() == "true"
 
 
-def block_notice(result: PiiResult) -> dict:
+#: Confirmation tokens live this long (seconds).
+CONFIRM_TOKEN_TTL_SECONDS = 30 * 60
+#: At most this many live tokens are kept; the oldest is dropped first.
+CONFIRM_TOKEN_MAX_LIVE = 32
+
+CONFIRM_NEXT_STEP = (
+    "Relay message to the user and wait for their answer. Only if they confirm "
+    "in a later message, call totalreclaw_remember again with "
+    "allow_sensitive=true and this confirm_token."
+)
+
+
+class ConfirmationStore:
+    """Process-wide store of single-use confirmation tokens for sensitive writes.
+
+    A token is issued with a block and records the category and the completed
+    turn count at issue time. :meth:`redeem` accepts it only if it is known,
+    unexpired, the category matches, and at least one turn completed since
+    issue (:meth:`note_turn_completed`), so the user had a chance to answer.
+    The clock is injectable for tests.
+    """
+
+    def __init__(self, clock=time.time) -> None:
+        self._clock = clock
+        self._tokens: "OrderedDict[str, tuple[str, float, int]]" = OrderedDict()
+        self._turns = 0
+        self._lock = threading.Lock()
+
+    @property
+    def turn_seq(self) -> int:
+        with self._lock:
+            return self._turns
+
+    def note_turn_completed(self) -> None:
+        with self._lock:
+            self._turns += 1
+
+    def issue(self, category: Optional[str]) -> str:
+        with self._lock:
+            token = secrets.token_hex(8)
+            self._tokens[token] = (str(category), self._clock(), self._turns)
+            while len(self._tokens) > CONFIRM_TOKEN_MAX_LIVE:
+                self._tokens.popitem(last=False)
+            return token
+
+    def redeem(
+        self,
+        token: Optional[str],
+        category: Optional[str],
+        now: Optional[float] = None,
+        turn_seq: Optional[int] = None,
+    ) -> Optional[str]:
+        """Return ``None`` and consume the token if valid, else the reject reason."""
+        if not isinstance(token, str) or not token:
+            return "no_token"
+        with self._lock:
+            entry = self._tokens.get(token)
+            if entry is None:
+                return "unknown_token"
+            tok_category, issued_at, issued_turn = entry
+            now = self._clock() if now is None else now
+            turn_seq = self._turns if turn_seq is None else turn_seq
+            if now - issued_at >= CONFIRM_TOKEN_TTL_SECONDS:
+                del self._tokens[token]
+                return "expired"
+            if turn_seq <= issued_turn:
+                return "same_turn"
+            if tok_category != str(category):
+                return "category_mismatch"
+            del self._tokens[token]
+            return None
+
+
+#: Shared by every conversation slot (the gateway is one process).
+confirmations = ConfirmationStore()
+
+
+def note_turn_completed() -> None:
+    """Record a completed conversation turn (called from the per-turn sync)."""
+    confirmations.note_turn_completed()
+
+
+def block_notice(result: PiiResult, confirm_token: Optional[str] = None) -> dict:
     """Block-and-tell tool result.
 
-    Keys and order are identical to the MCP server's ``sensitiveBlockNotice``
-    (``mcp/src/pii.ts``) so every client returns the same object.
+    Keys and order match the planned MCP ``sensitiveBlockNotice``
+    (``mcp/src/pii.ts`` does not exist yet; the MCP client must adopt this
+    same shape, including ``confirm_token`` and ``next_step``, when it adds
+    the filter). ``confirm_token`` and ``next_step`` are appended only when a
+    token is given.
     """
-    return {
+    notice = {
         "stored": False,
         "blocked": "sensitive",
         "category": result.category,
         "message": result.message,
         "override": ALLOW_SENSITIVE_PARAM,
     }
+    if confirm_token is not None:
+        notice["confirm_token"] = confirm_token
+        notice["next_step"] = CONFIRM_NEXT_STEP
+    return notice
 
 
 def log_label(text: str, result: PiiResult, limit: int = 200) -> str:
@@ -112,16 +208,43 @@ def log_label(text: str, result: PiiResult, limit: int = 200) -> str:
     return f"<redacted:{result.category}>"
 
 
-def screen_explicit(text: str, allow_sensitive: bool) -> tuple[PiiResult, Optional[dict]]:
+def screen_explicit(
+    text: str, allow_sensitive: bool, confirm_token: Optional[str] = None
+) -> tuple[PiiResult, Optional[dict]]:
     """Gate for an explicit remember.
 
     Returns ``(result, notice)``. ``notice`` is the block-and-tell dict to
     return instead of storing, or ``None`` when the write may proceed.
+    ``allow_sensitive`` overrides a block only with a valid ``confirm_token``
+    (see :class:`ConfirmationStore`); otherwise it is ignored.
     """
     result = check(text)
-    if result.decision == "block" and not allow_sensitive:
-        logger.info("remember blocked: sensitive text (category=%s)", result.category)
-        return result, block_notice(result)
+    if result.decision == "block":
+        try:
+            if allow_sensitive:
+                reason = confirmations.redeem(confirm_token, result.category)
+                if reason is None:
+                    logger.info(
+                        "remember storing sensitive text on explicit request (decision=%s category=%s)",
+                        result.decision,
+                        result.category,
+                    )
+                    return result, None
+                logger.info(
+                    "remember blocked: allow_sensitive without a valid confirmation "
+                    "(reason=%s, category=%s)",
+                    reason,
+                    result.category,
+                )
+            else:
+                logger.info("remember blocked: sensitive text (category=%s)", result.category)
+            return result, block_notice(result, confirmations.issue(result.category))
+        except Exception as exc:  # noqa: BLE001 — fail closed: never store, never raise
+            logger.warning("remember blocked: confirmation store error (%s)", type(exc).__name__)
+            try:
+                return result, block_notice(result, confirmations.issue(result.category))
+            except Exception:  # noqa: BLE001
+                return result, block_notice(result)
     if not result.is_allow:
         logger.info(
             "remember storing sensitive text on explicit request (decision=%s category=%s)",

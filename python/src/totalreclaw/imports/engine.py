@@ -1761,6 +1761,35 @@ class ImportEngine:
 
         dups_skipped = 0
 
+        # Sensitive-data gate (PRD-04 DEP-4). Imports are automatic-path
+        # writes, and this is the single choke point for every import store
+        # (pre-structured facts, extracted chunks, Crystals; Gnosis batch and
+        # per-fact paths), so only ``allow`` text is stored. Dropped facts are
+        # counted with the skipped ones, never as stored. Log counts and
+        # categories only, never text.
+        from totalreclaw import pii as _pii
+
+        screened: list[dict] = []
+        sensitive_categories: dict[str, int] = {}
+        for f in facts:
+            res = _pii.check(str(f.get("text") or ""))
+            if res.is_allow:
+                screened.append(f)
+            else:
+                cat = str(res.category)
+                sensitive_categories[cat] = sensitive_categories.get(cat, 0) + 1
+        if sensitive_categories:
+            n_dropped = len(facts) - len(screened)
+            logger.info(
+                "import: dropped %d sensitive fact(s) (categories=%s)",
+                n_dropped,
+                ",".join(sorted(sensitive_categories)),
+            )
+            dups_skipped += n_dropped
+            facts = screened
+            if not facts:
+                return 0, [], dups_skipped, stored_conv_ids
+
         # (1) cross-vault dedup via content fingerprints (#422)
         try:
             find_dups = getattr(self._client, "find_duplicate_texts", None)
