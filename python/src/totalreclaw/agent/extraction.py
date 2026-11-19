@@ -1143,8 +1143,16 @@ async def extract_facts_llm(
     llm_config: Optional[LLMConfig] = None,
     *,
     dedup_context: Optional[str] = None,
+    outcome: Optional[dict] = None,
 ) -> list[ExtractedFact]:
     """Extract facts using the v1 G-pipeline. Returns [] if no LLM available.
+
+    ``[]`` is ambiguous (no LLM vs. the LLM correctly found nothing new), so
+    callers that must tell them apart pass ``outcome``: a dict that gets
+    ``outcome["llm"]`` set to ``"unavailable"`` (no LLM config), ``"error"``
+    (the call raised), ``"empty"`` (every candidate answered empty), ``"ok"``
+    (a response arrived, whatever it parsed to) or ``"skipped"`` (nothing to
+    process).
 
     Pipeline: single merged-topic LLM call → ``apply_provenance_filter_lax``
     → ``comparative_rescore_v1`` (forces re-rank when >= 5 facts) →
@@ -1167,7 +1175,13 @@ async def extract_facts_llm(
     llm_config : LLMConfig, optional
         Pre-resolved LLM config (e.g. from Hermes). Falls back to env-var
         detection via :func:`detect_llm_config` when not provided.
+    outcome : dict, optional
+        Out-parameter, see above.
     """
+    def _set(state: str) -> None:
+        if isinstance(outcome, dict):
+            outcome["llm"] = state
+
     chat_config = llm_config or detect_llm_config()
     if not chat_config:
         # Bug #5: loud, actionable warning — no more silent extraction disable.
@@ -1177,10 +1191,12 @@ async def extract_facts_llm(
             "other agents can set OPENAI_MODEL + OPENAI_API_KEY (or an equivalent "
             "provider pair). See docs/guides/env-vars-reference.md."
         )
+        _set("unavailable")
         return []
 
     if not messages:
         logger.info("extract_facts_llm: no messages to process")
+        _set("skipped")
         return []
 
     # 'turn' mode trims to the last TURN_MODE_WINDOW_MESSAGES (6) messages
@@ -1195,6 +1211,7 @@ async def extract_facts_llm(
             len(messages),
             mode,
         )
+        _set("skipped")
         return []
 
     memories_ctx = _memories_prompt_suffix(existing_memories, dedup_context)
@@ -1219,6 +1236,7 @@ async def extract_facts_llm(
         )
     except Exception as e:
         logger.warning("extract_facts_llm: chat_completion threw: %s", e)
+        _set("error")
         return []
 
     if not response:
@@ -1241,8 +1259,10 @@ async def extract_facts_llm(
             chat_config.model,
             config.base_url,
         )
+        _set("empty")
         return []
 
+    _set("ok")
     logger.info(
         "extract_facts_llm: LLM returned %d chars; parsing merged response",
         len(response),
@@ -1420,30 +1440,61 @@ async def extract_facts_compaction(
 def extract_facts_heuristic(messages: list[dict], max_facts: int) -> list[ExtractedFact]:
     """Simple heuristic extraction (no LLM needed).
 
-    Used only when the LLM path is unavailable. Emits v1-shaped facts with
+    Used only when no LLM is configured (see :func:`heuristic_fallback_facts`,
+    which adds the post-filters and dedup). Emits v1-shaped facts with
     ``source="user"`` (patterns all match on the user's own turns) and a
     best-guess v1 type.
     """
     facts: list[ExtractedFact] = []
-    # (pattern, v1 type, importance)
-    patterns: list[tuple[str, str, int]] = [
-        (r"(?:I|my)\s+(?:prefer|like|want|need|use|enjoy|love|hate)\s+(.+)", "preference", 7),
-        (r"(?:my name is|I'm called|call me)\s+(.+)", "claim", 8),
-        (r"(?:remember|don't forget|keep in mind)\s+(?:that\s+)?(.+)", "claim", 7),
-        (r"(?:I chose|I decided|we decided|decision:)\s+(.+)", "claim", 7),
-        (r"(?:I work|I'm a|my job|my role)\s+(.+)", "claim", 7),
+    # (pattern, v1 type, importance, template), tried in this order. The
+    # pattern's LAST group is the capture: it stops at the first sentence end
+    # and before a following " and I " clause. Patterns are ASCII-only so
+    # Unicode case variants (e.g. a dotted capital I) never match, and no
+    # template is looked up by matched text. When two patterns match
+    # overlapping spans of a message, only the first (pattern order) is kept.
+    # First-person lead-ins ("I ...") must start a clause: start of text, after
+    # . ! ? or a newline, after , ; : plus whitespace, or after "and ". This
+    # keeps relative clauses ("The tool I use daily ...") from matching.
+    lead = r"(?:^|(?<=[.!?\n])[ \t]*|(?<=[,;:])\s+|\band\s+)"
+    cap = r"((?:(?!\s+and\s+I\b)[^.!?\n])+)"
+
+    def _verb(m: "re.Match[str]") -> str:
+        return f"User {m.group(1).lower()}s {m.group(2).strip()}"
+
+    def _fixed(prefix: str) -> Any:
+        return lambda m: f"{prefix} {m.group(1).strip()}"
+
+    patterns: list[tuple[str, str, int, Any]] = [
+        (lead + r"I\s+(prefer|like|want|need|use|enjoy|love|hate)\s+" + cap,
+         "preference", 7, _verb),
+        (r"\bmy name is\s+" + cap, "claim", 8, _fixed("User's name is")),
+        (lead + r"I'm called\s+" + cap, "claim", 8, _fixed("User's name is")),
+        (r"\b(?:remember|don't forget|keep in mind)\s+(?:that\s+)?" + cap, "claim", 7,
+         _fixed("User wants to remember:")),
+        (lead + r"I chose\s+" + cap, "claim", 7, _fixed("User chose")),
+        (lead + r"I decided\s+" + cap, "claim", 7, _fixed("User decided")),
+        (lead + r"I work\s+" + cap, "claim", 7, _fixed("User works")),
+        (lead + r"I'm a\s+" + cap, "claim", 7, _fixed("User is a")),
+        (r"\bmy job\s+" + cap, "claim", 7, _fixed("User's job")),
+        (r"\bmy role\s+" + cap, "claim", 7, _fixed("User's role")),
     ]
+    flags = re.IGNORECASE | re.ASCII
     for msg in messages:
         if msg.get("role") != "user":
             continue
         content = msg.get("content", "")
-        for pattern, fact_type, importance in patterns:
-            for match in re.findall(pattern, content, re.IGNORECASE):
-                text = match.strip().rstrip(".")
-                if len(text) > 10 and len(facts) < max_facts:
+        claimed: list[tuple[int, int]] = []
+        for pattern, fact_type, importance, template in patterns:
+            for match in re.finditer(pattern, content, flags):
+                span = match.span()
+                if any(span[0] < e and s_ < span[1] for s_, e in claimed):
+                    continue
+                capture = match.group(match.lastindex).strip()
+                if len(capture) > 10 and len(facts) < max_facts:
+                    claimed.append(span)
                     facts.append(
                         ExtractedFact(
-                            text=text[:512],
+                            text=template(match)[:512],
                             type=fact_type,
                             importance=importance,
                             action="ADD",
@@ -1453,6 +1504,26 @@ def extract_facts_heuristic(messages: list[dict], max_facts: int) -> list[Extrac
                         )
                     )
     return facts
+
+
+def heuristic_fallback_facts(
+    messages: list[dict],
+    max_facts: int,
+    existing_memories: Optional[list[dict]] = None,
+) -> list[ExtractedFact]:
+    """Pattern extractor plus the same guards the LLM path applies.
+
+    Runs only when no LLM is configured. Its output goes through the
+    product-meta, instruction-fragment and sentence-fragment filters and the
+    embedding dedup (in-batch and against ``existing_memories``).
+    """
+    facts = extract_facts_heuristic(messages, max_facts)
+    facts = _filter_product_meta_facts(facts)
+    facts = _filter_instruction_fragment_facts(facts)
+    facts = _filter_sentence_fragment_facts(facts)
+    return deduplicate_facts_by_embedding(
+        facts, existing_memories or [], threshold=STORE_DEDUP_THRESHOLD,
+    )
 
 
 # ---------------------------------------------------------------------------

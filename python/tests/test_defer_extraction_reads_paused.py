@@ -76,7 +76,7 @@ class _Env:
             raise _paused_error()
         return [{"id": ORIG_ID, "text": ORIG, "embedding": None}]
 
-    async def fake_llm(self, messages, mode="turn", existing_memories=None, llm_config=None, dedup_context=None):
+    async def fake_llm(self, messages, mode="turn", existing_memories=None, llm_config=None, dedup_context=None, outcome=None):
         self.llm_calls.append({"messages": list(messages), "mode": mode, "ctx": dedup_context})
         return list(self.llm_facts)
 
@@ -87,7 +87,7 @@ class _Env:
         with patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=self.fake_llm), \
              patch("totalreclaw.agent.lifecycle.detect_and_resolve_contradictions", new=passthrough), \
              patch("totalreclaw.agent.lifecycle.apply_pin_guard", new=passthrough), \
-             patch("totalreclaw.agent.lifecycle.extract_facts_heuristic", return_value=[]), \
+             patch("totalreclaw.agent.lifecycle.heuristic_fallback_facts", return_value=[]), \
              patch("totalreclaw.embedding.is_model_available_locally", return_value=False), \
              patch("totalreclaw.embedding.get_embedding", return_value=None):
             return lifecycle.auto_extract(self.state, llm_config=object(), **kw)
@@ -343,7 +343,7 @@ def test_drain_queues_live_deferred_buffer_instead_of_consuming_it(pending_path)
     with patch("totalreclaw.embedding.is_model_available_locally", return_value=False), \
          patch.object(hooks, "_get_hermes_llm_config", return_value=object()), \
          patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=env.fake_llm), \
-         patch("totalreclaw.agent.lifecycle.extract_facts_heuristic", return_value=[]):
+         patch("totalreclaw.agent.lifecycle.heuristic_fallback_facts", return_value=[]):
         assert hooks._drain_into_state(env.state, [batch]) == 2
     # the drained batch was extracted on its own ...
     assert [m["content"] for m in env.llm_calls[0]["messages"]] == ["old", "ok"]
@@ -380,7 +380,7 @@ def test_provider_on_pre_compress_extracts_blind_and_warns(caplog):
     with patch.object(hooks, "_get_hermes_llm_config", return_value=object()), \
          patch.object(env.state, "is_configured", return_value=True), \
          patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=env.fake_llm), \
-         patch("totalreclaw.agent.lifecycle.extract_facts_heuristic", return_value=[]), \
+         patch("totalreclaw.agent.lifecycle.heuristic_fallback_facts", return_value=[]), \
          patch("totalreclaw.embedding.is_model_available_locally", return_value=False), \
          caplog.at_level(logging.WARNING, logger="totalreclaw"):
         provider.on_pre_compress(messages=[])
