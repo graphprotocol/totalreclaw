@@ -85,6 +85,7 @@ Pattern is always **recall first → mutate second**, because the mutation tools
 - `forget X` → `totalreclaw_recall("X")` → pick the right `fact_id` → `totalreclaw_forget(fact_id)`. Tombstones the fact (still retained for audit; recall filters it out). If X is also in Hermes' built-in memory, remove it there too (`memory` tool, action `remove`).
 - `pin X as canonical` → recall → `totalreclaw_pin(fact_id)`. Automatic extraction never updates or deletes a pinned fact, and pinned facts rank higher in recall when they match the query — pinning does not add a fact to every recall.
 - `unpin X` → recall → `totalreclaw_unpin(fact_id)`.
+- Memories marked `pinned: true` are ones the user chose to protect. Never forget a pinned memory unless the user asked to forget that specific memory. When the user reverses a pinned decision, remember the new decision and ask whether to unpin or remove the old one.
 - `change type of X to <type>` → recall → `totalreclaw_retype(fact_id, type)`. Use when the extractor misclassified.
 - `change scope of X to <scope>` → recall → `totalreclaw_set_scope(fact_id, scope)`.
 

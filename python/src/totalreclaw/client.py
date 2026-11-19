@@ -1300,7 +1300,12 @@ class TotalReclaw:
                 )
             except Exception as e:  # never fail a forget over the ledger
                 logger.warning("forget ledger: record failed: %s", type(e).__name__)
-        return ForgetResult(success=success, fact_id=fact_id)
+        result = ForgetResult(success=success, fact_id=fact_id)
+        # Pin state comes from the blob already decrypted for the ledger
+        # snapshot (no extra network call). Absent when no snapshot was taken.
+        if snapshot and "pinned" in snapshot:
+            result["pinned"] = bool(snapshot["pinned"])
+        return result
 
     async def pin_fact(self, fact_id: str) -> dict:
         """Pin a claim so auto-resolution cannot supersede it.

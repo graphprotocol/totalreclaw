@@ -82,11 +82,33 @@ async def test_same_conflict_with_an_unpinned_fact_is_kept() -> None:
     assert [f.text for f in kept] == [NEW_TEXT]
 
 
-async def test_pinned_fact_without_shared_entity_cannot_block() -> None:
-    # Core only compares claims that share an entity.
+async def test_pinned_fact_without_shared_entity_or_name_cannot_block() -> None:
+    # No shared entity and no new-fact entity name appears in the pinned text.
+    # (Before H14 any pinned fact with no shared entity id passed; now a name
+    # found in the pinned text also counts, see the next test.)
+    fact = _new_fact()
+    fact.entities = [ExtractedEntity(name="Porto", type="place")]
+    with patch("totalreclaw.embedding.get_embedding", return_value=list(NEW_EMBEDDING)):
+        kept = await detect_and_resolve_contradictions(
+            [fact], _client([_existing(pinned=True, entities=[])]),
+        )
+    assert [f.text for f in kept] == [NEW_TEXT]
+
+
+async def test_pinned_fact_without_entities_blocks_by_name_in_its_text() -> None:
+    # H14: the pinned blob has no entities, but the new fact's "Pedro" appears
+    # in the pinned text as a whole word.
     with patch("totalreclaw.embedding.get_embedding", return_value=list(NEW_EMBEDDING)):
         kept = await detect_and_resolve_contradictions(
             [_new_fact()], _client([_existing(pinned=True, entities=[])]),
+        )
+    assert kept == []
+
+
+async def test_unpinned_fact_without_entities_is_unaffected_by_name_in_text() -> None:
+    with patch("totalreclaw.embedding.get_embedding", return_value=list(NEW_EMBEDDING)):
+        kept = await detect_and_resolve_contradictions(
+            [_new_fact()], _client([_existing(pinned=False, entities=[])]),
         )
     assert [f.text for f in kept] == [NEW_TEXT]
 

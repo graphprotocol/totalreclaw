@@ -1,6 +1,6 @@
 //! Contradiction detection and resolution primitives (Phase 2 Slice 2a).
 
-use crate::claims::{deterministic_entity_id, Claim};
+use crate::claims::{deterministic_entity_id, is_pinned_claim, normalize_entity_name, Claim};
 use crate::reranker::cosine_similarity_f32;
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
@@ -188,6 +188,57 @@ pub fn resolve_pair(
     }
 }
 
+/// True when `needle` (already normalized, lowercase) occurs in `haystack`
+/// (lowercased here) with a non-alphanumeric character, or the string edge,
+/// on both sides.
+fn contains_whole_word(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let hay = haystack.to_lowercase();
+    let mut from = 0;
+    while let Some(pos) = hay[from..].find(needle) {
+        let start = from + pos;
+        let end = start + needle.len();
+        let before_ok = hay[..start]
+            .chars()
+            .next_back()
+            .map_or(true, |c| !c.is_alphanumeric());
+        let after_ok = hay[end..]
+            .chars()
+            .next()
+            .map_or(true, |c| !c.is_alphanumeric());
+        if before_ok && after_ok {
+            return true;
+        }
+        // advance by one char past `start`
+        let step = hay[start..].chars().next().map_or(1, |c| c.len_utf8());
+        from = start + step;
+    }
+    false
+}
+
+/// Name-in-text fallback for a pinned existing claim that shares no
+/// normalized entity name with the new claim. Returns the deterministic
+/// entity id of the first matching name: a new-claim entity name found as a
+/// whole word in the pinned claim's text, else a pinned-claim entity name
+/// found as a whole word in the new claim's text.
+fn pinned_name_match(new_claim: &Claim, pinned: &Claim) -> Option<String> {
+    for e in &new_claim.entities {
+        let n = normalize_entity_name(&e.name);
+        if contains_whole_word(&pinned.text, &n) {
+            return Some(deterministic_entity_id(&e.name));
+        }
+    }
+    for e in &pinned.entities {
+        let n = normalize_entity_name(&e.name);
+        if contains_whole_word(&new_claim.text, &n) {
+            return Some(deterministic_entity_id(&e.name));
+        }
+    }
+    None
+}
+
 /// Detect contradictions between a new claim and existing claims that share at least one entity.
 ///
 /// Returns contradictions where cosine similarity is in `[lower_threshold, upper_threshold)`.
@@ -196,6 +247,13 @@ pub fn resolve_pair(
 ///
 /// Existing claims with an empty embedding vector are skipped (cannot be evaluated).
 /// If the new claim has no entities, returns an empty vec.
+///
+/// Shared-entity precondition: normally a shared normalized entity name. For a
+/// **pinned** existing claim with no shared name, a match is also counted when
+/// any new-claim entity name appears as a whole word (case-folded) in the
+/// pinned claim's text, or any pinned-claim entity name appears as a whole
+/// word in the new claim's text (H14: two LLM extractions rarely agree on
+/// entity names). Same cosine band; unpinned candidates are unaffected.
 pub fn detect_contradictions(
     new_claim: &Claim,
     new_claim_id: &str,
@@ -233,8 +291,20 @@ pub fn detect_contradictions(
             .iter()
             .find(|id| existing_entity_ids.iter().any(|eid| eid == *id));
 
-        let Some(entity_id) = shared_entity else {
-            continue;
+        let entity_id = match shared_entity {
+            Some(id) => id.clone(),
+            None => {
+                // Pinned candidates only: also match by entity name appearing
+                // as a whole word in the other claim's text (H14). Unpinned
+                // behaviour is unchanged.
+                if !is_pinned_claim(existing_claim) {
+                    continue;
+                }
+                match pinned_name_match(new_claim, existing_claim) {
+                    Some(id) => id,
+                    None => continue,
+                }
+            }
         };
 
         let sim = cosine_similarity_f32(new_embedding, existing_emb);
@@ -242,7 +312,7 @@ pub fn detect_contradictions(
             out.push(Contradiction {
                 claim_a_id: new_claim_id.to_string(),
                 claim_b_id: existing_id.clone(),
-                entity_id: entity_id.clone(),
+                entity_id,
                 similarity: sim,
             });
         }
@@ -1806,5 +1876,95 @@ mod tests {
         }];
         let entries = build_decision_log_entries(&actions, "{}", &std::collections::HashMap::new(), "active", NOW);
         assert_eq!(entries[0].reason.as_deref(), Some("existing_pinned"));
+    }
+
+    // ---- H14: pinned candidates match by entity name in text ----
+
+    const H14_PINNED: &str = "Tidewater is moving analytics workloads off Postgres to ClickHouse; Postgres will be retained for transactional workloads only.";
+    const H14_NEW: &str = "The standing plan for Tidewater's analytics is now dashboards reading incrementally refreshed rollup/summary tables (not raw events), with monthly partitioned raw event tables, in the same Postgres instance as OLTP.";
+
+    fn h14_embeddings(cos: f32) -> (Vec<f32>, Vec<f32>) {
+        (vec![1.0, 0.0], vec![cos, (1.0 - cos * cos).sqrt()])
+    }
+
+    fn h14_run(
+        new_text: &str,
+        new_ents: Vec<&str>,
+        pin_text: &str,
+        pin_ents: Vec<&str>,
+        pinned: bool,
+        cos: f32,
+    ) -> Vec<crate::claims::ResolutionAction> {
+        let new = make_claim(new_text, 0.85, 1, "hermes-auto", Some(&iso_days_ago(0)), new_ents);
+        let mut existing = make_claim(pin_text, 0.85, 1, "unknown", Some(&iso_days_ago(30)), pin_ents);
+        if pinned {
+            existing.status = ClaimStatus::Pinned;
+        }
+        let (ne, ee) = h14_embeddings(cos);
+        let candidates = vec![(existing, "655a229d".to_string(), ee)];
+        resolve_with_candidates(
+            &new, "ce4602b3", &ne, &candidates, &default_weights(),
+            0.30, 0.85, NOW, 0.01,
+        )
+    }
+
+    fn assert_skip_pinned(actions: &[crate::claims::ResolutionAction]) {
+        assert_eq!(actions.len(), 1, "{:?}", actions);
+        match &actions[0] {
+            crate::claims::ResolutionAction::SkipNew { reason, existing_id, .. } => {
+                assert_eq!(*reason, crate::claims::SkipReason::ExistingPinned);
+                assert_eq!(existing_id, "655a229d");
+            }
+            other => panic!("expected SkipNew ExistingPinned, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_h14_pinned_no_entities_matched_by_new_entity_name_in_text() {
+        let a = h14_run(H14_NEW, vec!["Postgres"], H14_PINNED, vec![], true, 0.76);
+        assert_skip_pinned(&a);
+    }
+
+    #[test]
+    fn test_h14_pinned_variant_entities_matched_by_name_in_text() {
+        let a = h14_run(H14_NEW, vec!["Postgres"], H14_PINNED, vec!["PostgreSQL", "ClickHouse"], true, 0.75);
+        assert_skip_pinned(&a);
+    }
+
+    #[test]
+    fn test_h14_pinned_entity_name_in_new_text() {
+        // New claim entity is unrelated to the pinned text; the pinned claim's
+        // entity name appears in the new claim's text.
+        let a = h14_run(H14_NEW, vec!["OLTP"], H14_PINNED, vec!["Tidewater"], true, 0.76);
+        assert_skip_pinned(&a);
+    }
+
+    #[test]
+    fn test_h14_unpinned_control_no_action() {
+        let a = h14_run(H14_NEW, vec!["Postgres"], H14_PINNED, vec![], false, 0.76);
+        assert!(a.is_empty(), "{:?}", a);
+    }
+
+    #[test]
+    fn test_h14_pinned_no_shared_name_no_action() {
+        let a = h14_run(H14_NEW, vec!["Kubernetes"], H14_PINNED, vec!["Redis"], true, 0.76);
+        assert!(a.is_empty(), "{:?}", a);
+    }
+
+    #[test]
+    fn test_h14_pinned_name_match_respects_band() {
+        assert!(h14_run(H14_NEW, vec!["Postgres"], H14_PINNED, vec![], true, 0.90).is_empty());
+        assert!(h14_run(H14_NEW, vec!["Postgres"], H14_PINNED, vec![], true, 0.10).is_empty());
+    }
+
+    #[test]
+    fn test_h14_whole_word_only() {
+        // "Post" is a substring of "Postgres" but not a whole word.
+        let a = h14_run(H14_NEW, vec!["Post"], H14_PINNED, vec![], true, 0.76);
+        assert!(a.is_empty(), "{:?}", a);
+        assert!(contains_whole_word("uses Postgres.", "postgres"));
+        assert!(!contains_whole_word("uses PostgreSQL", "postgres"));
+        assert!(contains_whole_word("xpostgresx postgres", "postgres"));
+        assert!(!contains_whole_word("anything", ""));
     }
 }

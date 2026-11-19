@@ -1359,7 +1359,8 @@ async def fetch_fact_plaintext(
 ) -> Optional[dict]:
     """Fetch one fact by id and decrypt it in memory.
 
-    Returns ``{"id", "text", "embedding"}`` (``embedding`` may be ``None``),
+    Returns ``{"id", "text", "embedding", "pinned"}`` (``embedding`` may be
+    ``None``; ``pinned`` is read from the blob already decrypted here),
     or ``None`` when the fact is missing, belongs to another owner, is a
     digest blob, or cannot be decrypted. Used by ``forget`` to snapshot the
     fact for the client-side forget ledger (internal#605) before it is
@@ -1395,7 +1396,13 @@ async def fetch_fact_plaintext(
                 embedding = None
         if embedding and len(embedding) != get_embedding_dims():
             embedding = None
-        return {"id": fact_id, "text": text, "embedding": embedding}
+        try:
+            pinned = bool(_core.is_pinned_claim(decrypted)) or _has_raw_pin_sentinel(
+                decrypted
+            )
+        except Exception:
+            pinned = False
+        return {"id": fact_id, "text": text, "embedding": embedding, "pinned": pinned}
     except Exception as e:
         logger.debug("fetch_fact_plaintext(%s) failed: %s", fact_id, type(e).__name__)
         return None
