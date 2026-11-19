@@ -188,14 +188,17 @@ pub fn resolve_pair(
     }
 }
 
-/// True when `needle` (already normalized, lowercase) occurs in `haystack`
-/// (lowercased here) with a non-alphanumeric character, or the string edge,
-/// on both sides.
-fn contains_whole_word(haystack: &str, needle: &str) -> bool {
+/// Names shorter than this (in chars, after normalization) never match by
+/// text in the pinned-only fallback ("Go", "AI" are ordinary words).
+const MIN_NAME_MATCH_CHARS: usize = 3;
+
+/// True when `needle` occurs in `hay` with a non-alphanumeric character, or
+/// the string edge, on both sides. Both must already be normalized with
+/// `normalize_entity_name` (NFC, lowercase, single-spaced).
+fn contains_whole_word(hay: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
     }
-    let hay = haystack.to_lowercase();
     let mut from = 0;
     while let Some(pos) = hay[from..].find(needle) {
         let start = from + pos;
@@ -222,17 +225,21 @@ fn contains_whole_word(haystack: &str, needle: &str) -> bool {
 /// normalized entity name with the new claim. Returns the deterministic
 /// entity id of the first matching name: a new-claim entity name found as a
 /// whole word in the pinned claim's text, else a pinned-claim entity name
-/// found as a whole word in the new claim's text.
+/// found as a whole word in the new claim's text. Texts are normalized once
+/// (NFC, lowercase, whitespace collapsed) like the names; names shorter than
+/// [`MIN_NAME_MATCH_CHARS`] are ignored.
 fn pinned_name_match(new_claim: &Claim, pinned: &Claim) -> Option<String> {
+    let pinned_text = normalize_entity_name(&pinned.text);
     for e in &new_claim.entities {
         let n = normalize_entity_name(&e.name);
-        if contains_whole_word(&pinned.text, &n) {
+        if n.chars().count() >= MIN_NAME_MATCH_CHARS && contains_whole_word(&pinned_text, &n) {
             return Some(deterministic_entity_id(&e.name));
         }
     }
+    let new_text = normalize_entity_name(&new_claim.text);
     for e in &pinned.entities {
         let n = normalize_entity_name(&e.name);
-        if contains_whole_word(&new_claim.text, &n) {
+        if n.chars().count() >= MIN_NAME_MATCH_CHARS && contains_whole_word(&new_text, &n) {
             return Some(deterministic_entity_id(&e.name));
         }
     }
@@ -1962,9 +1969,42 @@ mod tests {
         // "Post" is a substring of "Postgres" but not a whole word.
         let a = h14_run(H14_NEW, vec!["Post"], H14_PINNED, vec![], true, 0.76);
         assert!(a.is_empty(), "{:?}", a);
-        assert!(contains_whole_word("uses Postgres.", "postgres"));
-        assert!(!contains_whole_word("uses PostgreSQL", "postgres"));
+        assert!(contains_whole_word("uses postgres.", "postgres"));
+        assert!(!contains_whole_word("uses postgresql", "postgres"));
         assert!(contains_whole_word("xpostgresx postgres", "postgres"));
         assert!(!contains_whole_word("anything", ""));
+    }
+
+    #[test]
+    fn test_h14_nfd_haystack_matches_nfc_name() {
+        // "Jose" with a combining acute (NFD) in the pinned text; NFC name.
+        let pin_text = "Team lead is Jose\u{0301} and he owns the ClickHouse plan";
+        let a = h14_run(H14_NEW, vec!["Jos\u{00e9}"], pin_text, vec![], true, 0.76);
+        assert_skip_pinned(&a);
+    }
+
+    #[test]
+    fn test_h14_double_spaced_multiword_name_matches() {
+        let pin_text = "We chose  Apache   Kafka for the ingest path";
+        let a = h14_run(H14_NEW, vec!["Apache Kafka"], pin_text, vec![], true, 0.76);
+        assert_skip_pinned(&a);
+    }
+
+    #[test]
+    fn test_h14_short_names_ignored_for_pinned_text_match() {
+        let pin_text = "We go live tomorrow with the new dashboard";
+        let a = h14_run(H14_NEW, vec!["Go"], pin_text, vec![], true, 0.76);
+        assert!(a.is_empty(), "{:?}", a);
+        // reverse direction: a short pinned-claim entity name in the new text
+        let new_text = "Rewrite the service in Go next quarter";
+        let b = h14_run(new_text, vec!["service"], "Unrelated pinned note", vec!["Go"], true, 0.76);
+        assert!(b.is_empty(), "{:?}", b);
+        // a 3-char name still matches
+        let pin3 = "We run Rust in production";
+        let c = h14_run(H14_NEW, vec!["Rust"], pin3, vec![], true, 0.76);
+        assert_skip_pinned(&c);
+        let pin3b = "We use the API gateway";
+        let d = h14_run("The API changed", vec!["API"], pin3b, vec![], true, 0.76);
+        assert_skip_pinned(&d);
     }
 }

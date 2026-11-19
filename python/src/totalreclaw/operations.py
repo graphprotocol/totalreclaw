@@ -2095,6 +2095,15 @@ async def export_facts(
                     val = doc_meta.get(key)
                     if isinstance(val, str) and val:
                         entry[key] = val
+                # H14 — mark pinned facts (same test as get_fact_pin_status),
+                # from the blob already decrypted here. Key absent otherwise.
+                try:
+                    if _core.is_pinned_claim(decrypted_blob) or _has_raw_pin_sentinel(
+                        decrypted_blob
+                    ):
+                        entry["pinned"] = True
+                except Exception:
+                    pass
                 results.append(entry)
             except Exception:
                 continue

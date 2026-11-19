@@ -71,3 +71,41 @@ async def test_forget_unknown_pin_state_and_mirror(caplog) -> None:
     out = json.loads(await tools.forget({"fact_id": "x1"}, _state(client), _from_mirror=True))
     assert "was_pinned" not in out
     assert "forget: tombstoned (pinned=unknown, via=mirror)" in caplog.text
+
+
+async def test_forget_failure_has_no_was_pinned(caplog) -> None:
+    client = _forget_client(ForgetResult(success=False, fact_id=PINNED_ID, pinned=True))
+    caplog.set_level(logging.INFO, logger="totalreclaw.hermes.tools")
+    out = json.loads(await tools.forget({"fact_id": PINNED_ID}, _state(client)))
+    assert out == {"deleted": False, "fact_id": PINNED_ID}
+    assert "forget: tombstoned" not in caplog.text
+
+
+async def test_export_marks_pinned_facts() -> None:
+    import base64
+
+    from totalreclaw.crypto import derive_keys_from_mnemonic, encrypt
+    from totalreclaw.operations import export_facts
+
+    keys = derive_keys_from_mnemonic(
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+    )
+
+    def fact(fid: str, text: str, pinned: bool) -> dict:
+        claim = {
+            "id": fid, "text": text, "type": "claim", "source": "user",
+            "created_at": "2026-09-01T00:00:00Z", "schema_version": "1.0", "importance": 8,
+        }
+        if pinned:
+            claim["pin_status"] = "pinned"
+        blob = "0x" + base64.b64decode(encrypt(json.dumps(claim), keys.encryption_key)).hex()
+        return {"id": fid, "encryptedBlob": blob, "decayScore": "0.9", "createdAt": "1700000000"}
+
+    relay = MagicMock()
+    relay.query_subgraph = AsyncMock(return_value={"data": {"facts": [
+        fact("p1", "Tidewater moves analytics to ClickHouse", True),
+        fact("u1", "User likes jazz", False),
+    ]}})
+    out = {e["id"]: e for e in await export_facts(keys, "0xabc", relay)}
+    assert out["p1"]["pinned"] is True
+    assert "pinned" not in out["u1"]

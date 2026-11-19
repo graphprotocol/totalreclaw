@@ -325,3 +325,33 @@ async def test_h14_pinned_without_any_name_match_logs_no_shared_entity(caplog) -
     assert "pinned conflicts 0" in caplog.text
     assert "pinned_candidates=1 no_shared_entity=1 out_of_band=0" in caplog.text
     assert len(chain.stored) == 1
+
+
+async def test_h14_out_of_band_pinned_candidate_is_counted(caplog) -> None:
+    """A pinned candidate at cosine >= 0.85 is not a contradiction: the fact
+    is stored and the summary line says out_of_band=1."""
+    chain, client = _vault(pinned=True, entities=[])
+    caplog.set_level(logging.INFO, logger="totalreclaw")
+    fact = ExtractedFact(text="Pedro's home city is still Lisbon", type="claim", importance=8,
+                         action="ADD", source="user",
+                         entities=[ExtractedEntity(name="Lisbon", type="place")])
+
+    def embed(text: str) -> list[float]:
+        # cosine 0.9 with PINNED_EMBEDDING: above the resolver band.
+        return list(PINNED_EMBEDDING) if text == PINNED_TEXT else [0.9, 0.43589, 0.0, 0.0]
+
+    from totalreclaw.agent.lifecycle import auto_extract
+
+    async def scripted_llm(*args, **kwargs):
+        return [fact]
+
+    state = _state_with(client)
+    with patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=scripted_llm), \
+         patch("totalreclaw.embedding.get_embedding", side_effect=embed), \
+         patch.object(operations, "get_embedding", side_effect=embed), \
+         patch.object(operations, "get_embedding_dims", return_value=DIMS):
+        state.add_message("user", "Still in Lisbon")
+        state.add_message("assistant", "Noted.")
+        auto_extract(state)
+    assert "pinned conflicts 0" in caplog.text
+    assert "pinned_candidates=1 no_shared_entity=0 out_of_band=1" in caplog.text

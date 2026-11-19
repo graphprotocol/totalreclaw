@@ -480,7 +480,7 @@ async def forget(args: dict, state: "PluginState", **kwargs) -> str:
         )
         out = {"deleted": result["success"], "fact_id": fact_id}
         pin_state = result.get("pinned") if hasattr(result, "get") else None
-        if pin_state is True:
+        if result["success"] and pin_state is True:
             out["was_pinned"] = True
         if result["success"]:
             logger.info(
