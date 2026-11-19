@@ -75,7 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **New INFO log lines make extraction auditable.** `vault view degraded: reads paused ...` (extraction dedup context and write gate; it was DEBUG), `auto-extraction deferred: reads paused until HH:MM UTC (N messages kept)`, and one summary per cycle: `auto-extract: P proposals, k noop, j gate-skipped, f forget-skipped, s stored` (counts only, never fact text).
+- **New INFO log lines make extraction auditable.** `vault view degraded: reads paused ...` (extraction dedup context and write gate; it was DEBUG), `auto-extraction deferred: reads paused until HH:MM UTC (N messages kept)`, and one summary per cycle: `auto-extract: P proposals, d pii-dropped, k noop, j gate-skipped, f forget-skipped, s stored, o other` (P counted before the sensitive-data drop; `other` = cap, contradiction and pin-guard removals, DELETEs and failed writes, so the parts add up to P) (counts only, never fact text).
 
 - **Auto-extraction stores fewer non-facts** once the client runs on a core release with the new extraction prompt (see the core changelog): no assistant advice recorded as the user's decision, no traits inferred from a single request, no past activity typed as `commitment`. On a held-out set of real chats, precision of stored facts rises about 10 points at a recall cost of about 2 to 3 points.
 
