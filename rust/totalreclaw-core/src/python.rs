@@ -127,6 +127,7 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Forget guard: keep auto-extraction from re-creating forgotten facts (internal#605).
     m.add_function(wrap_pyfunction!(py_match_forgotten, m)?)?;
+    m.add_function(wrap_pyfunction!(py_forget_release_ids, m)?)?;
     m.add_function(wrap_pyfunction!(py_is_forget_request, m)?)?;
 
     // Canonical extraction + compaction system prompts (core 2.2.0 hoist).

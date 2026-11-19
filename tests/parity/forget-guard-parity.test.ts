@@ -2,7 +2,7 @@
  * Forget-guard cross-language parity test (TypeScript / WASM side).
  *
  * internal#605 / #640. Loads `fixtures/forget-guard-v1.json` (hand-written)
- * and checks the WASM exports `matchForgotten` and `isForgetRequest` against
+ * and checks the WASM exports `matchForgotten`, `forgetReleaseIds` and `isForgetRequest` against
  * every case. Siblings: Rust `rust/totalreclaw-core/src/forget_guard.rs`
  * (`tests::parity_fixture_vectors`) and Python `python/tests/test_forget_guard.py`
  * (core binding + pure-Python fallback).
@@ -24,6 +24,7 @@ const wasm = require(
   join(__dirname, '..', '..', 'rust', 'totalreclaw-core', 'pkg', 'totalreclaw_core.js'),
 ) as {
   matchForgotten(text: string, embeddingJson: string, entriesJson: string): string;
+  forgetReleaseIds(text: string, embeddingJson: string, entriesJson: string): string;
   isForgetRequest(text: string): boolean;
 };
 
@@ -40,6 +41,13 @@ const fixture = JSON.parse(
 ) as {
   match_cases: MatchCase[];
   request_cases: Array<{ text: string; expected: boolean }>;
+  release_cases: Array<{
+    name: string;
+    text: string;
+    embedding: number[] | null;
+    entries: Array<{ id: string; text: string; embedding?: number[] }>;
+    expected: string[];
+  }>;
 };
 
 let passed = 0;
@@ -67,6 +75,17 @@ for (const c of fixture.match_cases) {
       `got ${JSON.stringify(out)}`,
     );
   }
+}
+
+for (const c of fixture.release_cases) {
+  const out = JSON.parse(
+    wasm.forgetReleaseIds(c.text, JSON.stringify(c.embedding), JSON.stringify(c.entries)),
+  ) as string[];
+  check(
+    JSON.stringify(out) === JSON.stringify(c.expected),
+    `release:${c.name}`,
+    `got ${JSON.stringify(out)}`,
+  );
 }
 
 for (const c of fixture.request_cases) {

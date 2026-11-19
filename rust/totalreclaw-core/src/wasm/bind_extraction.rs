@@ -149,7 +149,7 @@ pub fn wasm_debrief_source() -> String {
 /// JSON array of `{ id, text, embedding? }` (the client's forgotten-facts
 /// ledger, decrypted in memory). Returns `"null"` or
 /// `{ id, reason, cosine }` as JSON, where reason is `exact` / `subset` /
-/// `superset` / `anchor`. Malformed JSON → `JsError`.
+/// `superset` / `anchor` / `clause`. Malformed JSON → `JsError`.
 #[wasm_bindgen(js_name = "matchForgotten")]
 pub fn wasm_match_forgotten(
     text: &str,
@@ -157,6 +157,20 @@ pub fn wasm_match_forgotten(
     entries_json: &str,
 ) -> Result<String, JsError> {
     crate::forget_guard::match_forgotten_json(text, embedding_json, entries_json)
+        .map_err(|e| JsError::new(&e))
+}
+
+/// Ids of the forgotten entries an explicit remember of `text` releases.
+///
+/// Same JSON inputs as `matchForgotten`. Returns a JSON array of entry ids.
+/// Malformed JSON → `JsError`.
+#[wasm_bindgen(js_name = "forgetReleaseIds")]
+pub fn wasm_forget_release_ids(
+    text: &str,
+    embedding_json: &str,
+    entries_json: &str,
+) -> Result<String, JsError> {
+    crate::forget_guard::forget_release_ids_json(text, embedding_json, entries_json)
         .map_err(|e| JsError::new(&e))
 }
 
