@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .state import PluginState
 
 from totalreclaw.agent.lifecycle import (
+    on_paused_policy as _on_paused_policy,
     auto_extract as _auto_extract,
     crystal_gate_passes,
     drain_pending_stores,
@@ -697,6 +698,14 @@ def _maybe_queue_update_notice(state: "PluginState", billing: dict) -> None:
         pass
 
 
+def _auto_extract_queueing(state, **kwargs):
+    """``_auto_extract`` for paths whose message buffer is about to go away
+    (finalize, idle roll, drain): if relay reads are paused, the messages are
+    persisted to the pending queue instead of being extracted blind."""
+    with _on_paused_policy("queue"):
+        return _auto_extract(state, **kwargs)
+
+
 def _drain_into_state(state: "PluginState", batches: list) -> int:
     """Replay drained message batches into the agent state and run a
     full-mode auto-extract to land the facts.
@@ -748,7 +757,7 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
             continue
 
         try:
-            _auto_extract(
+            _auto_extract_queueing(
                 state,
                 mode="full",
                 llm_config=_get_hermes_llm_config(),
@@ -787,7 +796,9 @@ def _maybe_roll_idle_session(state: "PluginState") -> None:
         stored: list[str] = []
         if state.has_unprocessed_messages():
             try:
-                stored = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config())
+                stored = _auto_extract_queueing(
+                    state, mode="full", llm_config=_get_hermes_llm_config(),
+                )
             except Exception as e:
                 logger.warning("TotalReclaw idle-roll flush failed: %s", e)
         try:
@@ -1244,7 +1255,9 @@ def _finalize_one_conversation(state: "PluginState") -> bool:
     stored_fact_texts: list[str] = []
     if state.has_unprocessed_messages():
         try:
-            stored_fact_texts = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config()) or []
+            stored_fact_texts = _auto_extract_queueing(
+                state, mode="full", llm_config=_get_hermes_llm_config(),
+            ) or []
         except Exception as e:
             logger.warning("TotalReclaw on_session_finalize flush failed: %s", e)
 

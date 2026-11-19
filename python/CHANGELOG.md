@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The agent can now see which memories are pinned, and a forget reports it (H14, Hermes QA of 2.6.0rc1).** In the H14 run the chat model forgot a pinned memory because nothing told it the memory was pinned. `totalreclaw_recall` now adds `"pinned": true` to pinned memories (the key is left out otherwise). `totalreclaw_export` entries carry `"pinned": true` for pinned facts. `totalreclaw_forget` adds `"was_pinned": true` when the memory it deleted was pinned, read from the blob already fetched for the forget ledger (no extra network call; explicit forget still deletes pinned memories, as before). SKILL.md tells the agent not to forget a pinned memory unless the user asked to forget that specific memory, and to ask about unpinning or removing when the user reverses a pinned decision. More INFO logging: the contradiction summary line ends with `pinned_candidates=N no_shared_entity=N out_of_band=N`, and an explicit forget logs `forget: tombstoned (pinned=<true|false|unknown>, via=tool|mirror)` (no ids or text).
 
+- **Auto-extraction no longer writes while relay reads are paused (found by Hermes QA of 2.6.0rc1, H15).** During a read pause (free-tier read throttle, about 35 minutes) extraction still ran with no view of the vault. The LLM dedup context, the embedding dedup and the store-time gate all fell back to the last few local writes, so restatements of an existing fact were stored. Now, when reads are paused, auto-extraction waits: it does not call the LLM, stores nothing and keeps the messages. The first extraction after the pause covers the deferred turns (in `mode="full"` when the buffer is longer than the turn window), with the vault in view.
+  - Past 40 waiting messages it extracts anyway and logs a WARNING (`auto-extraction ran without a vault view`), so facts are never dropped.
+  - At session finalize, idle roll and pending-queue drain the messages are persisted to the pending queue (#148) and extracted at the next session start. Context compaction cannot wait, so it extracts as before and logs the WARNING.
+  - Explicit `totalreclaw_remember` is unchanged.
+
 - **A batch that partly fails no longer loses the facts it did store (#753).** When one group of a `remember_batch` call was stored and another failed for a reason other than the write quota, the call raised a plain `RuntimeError` that did not say which facts landed. Callers treated the whole batch as failed:
   - Auto-extraction logged stored facts as "not stored" and did not record them. An `UPDATE` whose replacement was stored kept its old fact, so both versions stayed in the vault.
   - The write-quota retry queue (#747) put stored facts back in the queue, where the next drain could write them a second time.
@@ -69,6 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Requires a core release with `pii_filter` (2.7.0). See `docs/guides/sensitive-data-filter.md`.
 
 ### Changed
+
+- **New INFO log lines make extraction auditable.** `vault view degraded: reads paused ...` (extraction dedup context and write gate; it was DEBUG), `auto-extraction deferred: reads paused until HH:MM UTC (N messages kept)`, and one summary per cycle: `auto-extract: P proposals, k noop, j gate-skipped, f forget-skipped, s stored` (counts only, never fact text).
 
 - **Auto-extraction stores fewer non-facts** once the client runs on a core release with the new extraction prompt (see the core changelog): no assistant advice recorded as the user's decision, no traits inferred from a single request, no past activity typed as `commitment`. On a held-out set of real chats, precision of stored facts rises about 10 points at a recall cost of about 2 to 3 points.
 

@@ -669,14 +669,18 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
             return ""
 
         from totalreclaw.agent.lifecycle import auto_extract as _auto_extract
+        from totalreclaw.agent.lifecycle import on_paused_policy
         from .hooks import _get_hermes_llm_config
 
         try:
-            stored = _auto_extract(
-                self._state,
-                mode="full",
-                llm_config=_get_hermes_llm_config(),
-            )
+            # Compaction may discard the messages: extract now even when reads
+            # are paused (WARNING logged), never wait.
+            with on_paused_policy("blind"):
+                stored = _auto_extract(
+                    self._state,
+                    mode="full",
+                    llm_config=_get_hermes_llm_config(),
+                )
         except Exception as exc:
             logger.warning("TotalReclaw on_pre_compress extraction failed: %s", exc)
             return ""
