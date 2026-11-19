@@ -93,6 +93,46 @@ def _short_key_claim_for_resolver(
     return claim
 
 
+def _cosine(a: List[float], b: List[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _pinned_candidate_stats(
+    embedding: List[float],
+    candidates: List[dict],
+    actions: List[dict],
+) -> "tuple[int, int, int]":
+    """Count, for one fact, its pinned candidates and why they did not match.
+
+    Returns ``(pinned_candidates, no_shared_entity, out_of_band)``. A pinned
+    candidate is ``out_of_band`` when its cosine is outside the resolver band,
+    ``no_shared_entity`` when it is in band but core raised no pinned skip for
+    it (no shared name), and neither when core skipped the new fact because of it.
+    Observability only: nothing here changes what is stored.
+    """
+    skipped_ids = {
+        a.get("existing_id")
+        for a in actions
+        if a.get("type") == "skip_new" and a.get("reason") == SKIP_REASON_EXISTING_PINNED
+    }
+    pinned_n = no_share = oob = 0
+    for cand in candidates:
+        if (cand.get("claim") or {}).get("st") != "p":
+            continue
+        pinned_n += 1
+        sim = _cosine(embedding, cand.get("embedding") or [])
+        if not (CONTRADICTION_THRESHOLD_LOWER <= sim < CONTRADICTION_THRESHOLD_UPPER):
+            oob += 1
+        elif cand.get("id") not in skipped_ids:
+            no_share += 1
+    return pinned_n, no_share, oob
+
+
 async def detect_and_resolve_contradictions(
     new_facts: List["ExtractedFact"],
     client: "TotalReclaw",
@@ -159,6 +199,9 @@ async def detect_and_resolve_contradictions(
     now_unix = int(time.time())
     kept: List["ExtractedFact"] = []
     pinned_conflicts = 0
+    pinned_candidates = 0
+    no_shared_entity = 0
+    out_of_band = 0
 
     for fact_idx, fact in enumerate(new_facts):
         # Only run contradiction detection on facts with entities
@@ -294,6 +337,14 @@ async def detect_and_resolve_contradictions(
 
             actions = json.loads(actions_json)
 
+            # F3 observability: why did pinned candidates not (or did) trigger.
+            _pin_n, _no_share, _oob = _pinned_candidate_stats(
+                embedding, candidates, actions
+            )
+            pinned_candidates += _pin_n
+            no_shared_entity += _no_share
+            out_of_band += _oob
+
             if any(
                 action.get("type") == "skip_new"
                 and action.get("reason") == SKIP_REASON_EXISTING_PINNED
@@ -323,10 +374,14 @@ async def detect_and_resolve_contradictions(
             kept.append(fact)
 
     log.info(
-        "Contradiction detection: %d/%d facts passed (removed %d, pinned conflicts %d)",
+        "Contradiction detection: %d/%d facts passed (removed %d, pinned conflicts %d)"
+        " pinned_candidates=%d no_shared_entity=%d out_of_band=%d",
         len(kept),
         len(new_facts),
         len(new_facts) - len(kept),
         pinned_conflicts,
+        pinned_candidates,
+        no_shared_entity,
+        out_of_band,
     )
     return kept

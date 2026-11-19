@@ -430,6 +430,10 @@ async def recall(args: dict, state: "PluginState", **kwargs) -> str:
                 "date": _fmt_date(getattr(r, "created_at", None)),
                 "score": round(r.rrf_score, 4),
             }
+            # H14 — show the agent which memories the user pinned, so it does
+            # not forget one blindly. Key omitted when not pinned.
+            if getattr(r, "pinned", False) is True:
+                mem["pinned"] = True
             # #425 — surface provenance so the agent can answer "where does
             # this memory come from?" (imported memories carry
             # import_source + a per-conversation session_id since #356/#363).
@@ -474,7 +478,17 @@ async def forget(args: dict, state: "PluginState", **kwargs) -> str:
         result = await client.forget(
             fact_id, suppress_reextraction=not kwargs.get("_from_mirror", False)
         )
-        return json.dumps({"deleted": result["success"], "fact_id": fact_id})
+        out = {"deleted": result["success"], "fact_id": fact_id}
+        pin_state = result.get("pinned") if hasattr(result, "get") else None
+        if result["success"] and pin_state is True:
+            out["was_pinned"] = True
+        if result["success"]:
+            logger.info(
+                "forget: tombstoned (pinned=%s, via=%s)",
+                "unknown" if pin_state is None else str(bool(pin_state)).lower(),
+                "mirror" if kwargs.get("_from_mirror") else "tool",
+            )
+        return json.dumps(out)
     except Exception as e:
         logger.error("totalreclaw_forget failed: %s", e)
         return json.dumps({"error": str(e)})

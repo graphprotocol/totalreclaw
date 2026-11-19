@@ -151,11 +151,13 @@ class ChainBackedClient:
         return ids
 
 
-def _vault(pinned: bool) -> tuple[FakeChain, ChainBackedClient]:
+def _vault(pinned: bool, entities=None) -> tuple[FakeChain, ChainBackedClient]:
     chain = FakeChain(secrets.token_bytes(32))
+    if entities is None:
+        entities = [{"name": "Pedro", "type": "person"}]
     chain.put(
         PINNED_ID,
-        _blob(PINNED_ID, PINNED_TEXT, pinned=pinned, entities=[{"name": "Pedro", "type": "person"}]),
+        _blob(PINNED_ID, PINNED_TEXT, pinned=pinned, entities=entities),
         PINNED_EMBEDDING,
     )
     return chain, ChainBackedClient(chain)
@@ -175,11 +177,13 @@ def _embed(text: str) -> list[float]:
     return list(PINNED_EMBEDDING) if text == PINNED_TEXT else list(CONTRADICTION_EMBEDDING)
 
 
-def _extract_round(state, fact: ExtractedFact) -> list[str]:
+def _extract_round(state, fact) -> list[str]:
     from totalreclaw.agent.lifecycle import auto_extract
 
+    facts = list(fact) if isinstance(fact, (list, tuple)) else [fact]
+
     async def scripted_llm(*args, **kwargs):
-        return [fact]
+        return facts
 
     with patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=scripted_llm), \
          patch("totalreclaw.embedding.get_embedding", side_effect=_embed), \
@@ -272,3 +276,82 @@ async def test_unreadable_pin_state_never_tombstones() -> None:
     assert chain.forgotten == []
     assert chain.stored == ["Pedro's home city is Porto"]
     assert chain.facts[PINNED_ID]["isActive"] is True
+
+
+# H14: the pinned blob has no entities (or different names) and the new facts
+# carry LLM-style names. The resolver matches the pinned fact by a new-fact
+# entity name that appears as a whole word in the pinned text.
+H14_FACTS = [
+    ExtractedFact(text="Pedro is moving from Lisbon to Madrid next spring", type="claim",
+                  importance=8, action="ADD", source="user",
+                  entities=[ExtractedEntity(name="Lisbon", type="place")]),
+    ExtractedFact(text="Pedro's home city is changing away from Lisbon", type="claim",
+                  importance=8, action="ADD", source="user",
+                  entities=[ExtractedEntity(name="lisbon", type="place")]),
+]
+
+
+@pytest.mark.parametrize("pinned_entities", [[], [{"name": "Portugal", "type": "place"}]])
+async def test_h14_pinned_blob_without_shared_entity_still_blocks_contradictions(
+    pinned_entities, caplog
+) -> None:
+    chain, client = _vault(pinned=True, entities=pinned_entities)
+    caplog.set_level(logging.INFO, logger="totalreclaw")
+    _extract_round(_state_with(client), H14_FACTS)
+    assert "pinned conflicts 2" in caplog.text
+    assert "pinned_candidates=2" in caplog.text
+    assert "no_shared_entity=0 out_of_band=0" in caplog.text
+    assert chain.stored == []
+    assert chain.forgotten == []
+    assert chain.facts[PINNED_ID]["isActive"] is True
+
+
+async def test_h14_control_unpinned_without_shared_entity_is_stored(caplog) -> None:
+    chain, client = _vault(pinned=False, entities=[])
+    caplog.set_level(logging.INFO, logger="totalreclaw")
+    _extract_round(_state_with(client), H14_FACTS)
+    assert "pinned conflicts 0" in caplog.text
+    # (the store-time write gate drops the second near-identical fact)
+    assert chain.stored and chain.stored[0] == H14_FACTS[0].text
+
+
+async def test_h14_pinned_without_any_name_match_logs_no_shared_entity(caplog) -> None:
+    chain, client = _vault(pinned=True, entities=[])
+    caplog.set_level(logging.INFO, logger="totalreclaw")
+    unrelated = ExtractedFact(text="Pedro is learning Kubernetes", type="claim", importance=8,
+                              action="ADD", source="user",
+                              entities=[ExtractedEntity(name="Kubernetes", type="tool")])
+    _extract_round(_state_with(client), [unrelated])
+    assert "pinned conflicts 0" in caplog.text
+    assert "pinned_candidates=1 no_shared_entity=1 out_of_band=0" in caplog.text
+    assert len(chain.stored) == 1
+
+
+async def test_h14_out_of_band_pinned_candidate_is_counted(caplog) -> None:
+    """A pinned candidate at cosine >= 0.85 is not a contradiction: the fact
+    is stored and the summary line says out_of_band=1."""
+    chain, client = _vault(pinned=True, entities=[])
+    caplog.set_level(logging.INFO, logger="totalreclaw")
+    fact = ExtractedFact(text="Pedro's home city is still Lisbon", type="claim", importance=8,
+                         action="ADD", source="user",
+                         entities=[ExtractedEntity(name="Lisbon", type="place")])
+
+    def embed(text: str) -> list[float]:
+        # cosine 0.9 with PINNED_EMBEDDING: above the resolver band.
+        return list(PINNED_EMBEDDING) if text == PINNED_TEXT else [0.9, 0.43589, 0.0, 0.0]
+
+    from totalreclaw.agent.lifecycle import auto_extract
+
+    async def scripted_llm(*args, **kwargs):
+        return [fact]
+
+    state = _state_with(client)
+    with patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=scripted_llm), \
+         patch("totalreclaw.embedding.get_embedding", side_effect=embed), \
+         patch.object(operations, "get_embedding", side_effect=embed), \
+         patch.object(operations, "get_embedding_dims", return_value=DIMS):
+        state.add_message("user", "Still in Lisbon")
+        state.add_message("assistant", "Noted.")
+        auto_extract(state)
+    assert "pinned conflicts 0" in caplog.text
+    assert "pinned_candidates=1 no_shared_entity=0 out_of_band=1" in caplog.text
