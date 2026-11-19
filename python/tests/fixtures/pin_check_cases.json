@@ -1,0 +1,1308 @@
+{
+ "description": "Cases for scripts/eval_pin_check.py (not collected by pytest). Measured offline with the Harrier embedder against the rc2 pin; see internal INV-B report.",
+ "pinned_text": "Tidewater is splitting OLTP/OLAP: Postgres stays for transactions only; the analytics workload is being migrated to ClickHouse.",
+ "cases": [
+  {
+   "id": "D1a",
+   "group": "DROP",
+   "label": "meta: pin request (03:16:40)",
+   "text": "User explicitly requested pinning the ClickHouse analytics decision.",
+   "entities": [
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.585,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "D1b",
+   "group": "DROP",
+   "label": "meta: pin request, long",
+   "text": "User explicitly requested pinning the ClickHouse analytics decision (Tidewater: Postgres for transactions, ClickHouse for analytics) as the canonical direction.",
+   "entities": [
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    },
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.765,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "D2a",
+   "group": "DROP",
+   "label": "pgxpool monitoring (03:23:50)",
+   "text": "User's Tidewater backend monitors pool exhaustion via pgxpool.Stat() metrics (EmptyAcquireCount, CanceledAcquireCount, AcquireDuration) scraped into Prometheus/Grafana, plus Postgres-side backend headroom and idle-in-transaction counts.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "pgxpool",
+     "tp": "tool"
+    },
+    {
+     "n": "Prometheus",
+     "tp": "tool"
+    },
+    {
+     "n": "Grafana",
+     "tp": "tool"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.671,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "D2b",
+   "group": "DROP",
+   "label": "pgxpool monitoring, short",
+   "text": "User's Tidewater backend monitors pool exhaustion via pgxpool.Stat() metrics such as EmptyAcquireCount and CanceledAcquireCount.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "pgxpool",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.62,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "D3a",
+   "group": "DROP",
+   "label": "pool sizing untested, premise explicit (04:16:59)",
+   "text": "Tidewater's pool-sizing guidance is untested for analytics-shaped load: with analytics staying in Postgres, MaxConns 20 per instance must be revalidated before relying on it.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "pgxpool",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.752,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "D3b",
+   "group": "DROP",
+   "label": "pool sizing untested, premise implicit",
+   "text": "Tidewater's pool-sizing guidance is untested for analytics-shaped load; if raw scans return, analytics should get its own small pgxpool (4-8 MaxConns).",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "pgxpool",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.671,
+   "expect": "either",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "D4",
+   "group": "DROP",
+   "label": "open follow-up (04:19:43)",
+   "text": "An open follow-up at Tidewater: since analytics stayed in Postgres, pool sizing should be revalidated with analytics load in the mix; the cheapest guard is a second pgxpool dedicated to analytics queries.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "pgxpool",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.776,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "D5",
+   "group": "DROP",
+   "label": "User works at Tidewater (05:04:54, 05:13:02)",
+   "text": "User works at Tidewater.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.598,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "R1",
+   "group": "REV",
+   "label": "rc1 7e8f9bee auto",
+   "text": "Tidewater's carbon-accounting dashboard analytics involve moderate aggregation workloads, making a Postgres rollup approach (materialized views, partitioning) a viable alternative to ClickHouse per the user's reconsideration.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.737,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R2",
+   "group": "REV",
+   "label": "rc1 ce4602b3 auto",
+   "text": "The standing plan for Tidewater's analytics is now dashboards reading incrementally refreshed rollup/summary tables (not raw events), with monthly partitioned raw event tables, in the same Postgres instance as OLTP.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.794,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R3",
+   "group": "REV",
+   "label": "rc1 plain user turn",
+   "text": "Decision is made: analytics stays on Postgres and we are dropping the ClickHouse plan for good.",
+   "entities": [
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.802,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R4",
+   "group": "REV",
+   "label": "rc1 6ca56724 explicit (long)",
+   "text": "Decision (2026-11-18, with teammate Inês): Tidewater is keeping analytics on Postgres and has dropped the ClickHouse plan for good. Self-hosted ClickHouse was too much to operate for the small team, and the user prefers keeping everything in one database. New plan: dashboards read incrementally refreshed rollup/summary tables (never raw events), raw event tables are partitioned monthly, all in the same Postgres instance as OLTP — with a dedicated read-only analytics role (statement_timeout, work_mem caps) and a separate small analytics pool in Go alongside the OLTP pool. A read replica is the designated next step if load ever demands a split.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.785,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R5",
+   "group": "REV",
+   "label": "rc1 3018d8a4 auto (considering)",
+   "text": "User is considering moving Tidewater's analytics workloads back from ClickHouse to Postgres because self-hosted ClickHouse is too much to operate for the team.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.85,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R6",
+   "group": "REV",
+   "label": "rc1 terse",
+   "text": "Tidewater is keeping analytics on Postgres and has dropped the ClickHouse plan.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.882,
+   "expect": "yes",
+   "band": "high",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R7",
+   "group": "REV",
+   "label": "rc2 user turn 04:13",
+   "text": "We might move analytics back to Postgres after all, ClickHouse is a lot to operate.",
+   "entities": [
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.784,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R8",
+   "group": "REV",
+   "label": "rc2 user turn 04:14 (no names)",
+   "text": "Honestly I'd rather keep everything in one database.",
+   "entities": [],
+   "cosine_to_rc2_pin": 0.581,
+   "expect": "yes",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "R9",
+   "group": "REV",
+   "label": "rc2 04:14:15 auto (deduped at 0.861)",
+   "text": "User is leaning toward moving Tidewater's analytics workloads back from ClickHouse to Postgres because ClickHouse is a lot to operate.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.875,
+   "expect": "yes",
+   "band": "high",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R10",
+   "group": "REV",
+   "label": "rc2 f955ed42 explicit",
+   "text": "Tidewater analytics direction (as of 2026-11-19, tentative): user is considering moving analytics back to Postgres instead of ClickHouse because ClickHouse is a lot to operate. Not yet decided. This would undermine the earlier PgBouncer verdict, which relied partly on analytics load leaving Postgres via the ClickHouse migration.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.815,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R11",
+   "group": "REV",
+   "label": "rc2 a8e5dba4 explicit",
+   "text": "Update to the analytics-direction claim (f955ed42): no longer tentative. On 2026-11-19 the user stated a clear preference — \"I'd rather keep everything in one database.\" Analytics stays in Postgres; the ClickHouse migration is effectively shelved. Consequence: the earlier no-PgBouncer verdict lost its \"analytics is leaving Postgres\" pillar, so pool sizing should be revalidated with analytics load in the mix (a second pgxpool for analytics is the cheapest guard).",
+   "entities": [
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    },
+    {
+     "n": "pgxpool",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.733,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R12",
+   "group": "REV",
+   "label": "terse (brief example)",
+   "text": "Tidewater is keeping analytics in Postgres; the ClickHouse migration is shelved.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.893,
+   "expect": "yes",
+   "band": "high",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R13",
+   "group": "REV",
+   "label": "terse",
+   "text": "Analytics stays in Postgres; Tidewater dropped the ClickHouse migration.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.873,
+   "expect": "yes",
+   "band": "high",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R14",
+   "group": "REV",
+   "label": "terse",
+   "text": "Tidewater decided against ClickHouse: analytics will remain in Postgres alongside OLTP.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.901,
+   "expect": "yes",
+   "band": "high",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R15",
+   "group": "REV",
+   "label": "pref-style",
+   "text": "User prefers keeping everything in one database: Tidewater's analytics stays in Postgres instead of moving to ClickHouse.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.862,
+   "expect": "yes",
+   "band": "high",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R16",
+   "group": "REV",
+   "label": "terse, no Postgres",
+   "text": "Tidewater shelved the ClickHouse migration because it is too much to operate.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.734,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R17",
+   "group": "REV",
+   "label": "very terse",
+   "text": "The ClickHouse migration at Tidewater is cancelled.",
+   "entities": [
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    },
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.732,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R18",
+   "group": "REV",
+   "label": "terse",
+   "text": "Tidewater will run analytics on Postgres, not ClickHouse.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.846,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "R19",
+   "group": "REV",
+   "label": "plan-style",
+   "text": "User wants to keep Tidewater's analytics on a single Postgres database with rollup tables instead of a separate ClickHouse cluster.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.805,
+   "expect": "yes",
+   "band": "in",
+   "gate_legit": false,
+   "gate_reversal": true
+  },
+  {
+   "id": "C1",
+   "group": "CTRL",
+   "label": "User lives in Porto (05:04:54)",
+   "text": "User lives in Porto.",
+   "entities": [
+    {
+     "n": "Porto",
+     "tp": "place"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.466,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "C2",
+   "group": "CTRL",
+   "label": "dinner with Inês (04:06:16)",
+   "text": "User regularly has dinner with Inês, and their usual spot is the same Indian restaurant near Bolhão.",
+   "entities": [
+    {
+     "n": "Inês",
+     "tp": "person"
+    },
+    {
+     "n": "Bolhão",
+     "tp": "place"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.455,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "C3",
+   "group": "CTRL",
+   "label": "friendship with Inês (04:06:16)",
+   "text": "User and Inês have a social friendship outside of work, including regular dinners.",
+   "entities": [
+    {
+     "n": "Inês",
+     "tp": "person"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.421,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "C4",
+   "group": "CTRL",
+   "label": "lentil curry order (04:07:00)",
+   "text": "User's usual order at the Indian restaurant near Bolhão is the lentil curry, since they don't eat meat.",
+   "entities": [
+    {
+     "n": "Bolhão",
+     "tp": "place"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.374,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "K1",
+   "group": "REAL",
+   "label": "f56787fe",
+   "text": "User's Tidewater backend runs on a 4-core managed Postgres, with a target total of roughly 10-40 connections split across service instances (MaxConns 20 each on two instances), aligned with an expected 200 concurrent users.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.703,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "K2",
+   "group": "REAL",
+   "label": "3006a8d3",
+   "text": "Tidewater picked Grafana Cloud for the carbon-accounting dashboard's alerting (decision made Nov 2026).",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Grafana Cloud",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.621,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "K3",
+   "group": "REAL",
+   "label": "fd470cad (agrees with pin)",
+   "text": "User decided not to add PgBouncer to their Go/Postgres backend at Tidewater, reasoning that pgxpool already multiplexes connections within the service, ~200 concurrent users only needs MaxConns 20-40 per instance, and the ClickHouse migration removes the analytics load that likely caused pool exhaustion.",
+   "entities": [
+    {
+     "n": "PgBouncer",
+     "tp": "tool"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "pgxpool",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.726,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "K4",
+   "group": "REAL",
+   "label": "94121ff9",
+   "text": "User's fallback plan if they ever adopt PgBouncer: pgx v5 named prepared statements break under transaction-pooling mode, requiring default_query_exec_mode=exec or simple_protocol, and session-scoped features (SET, advisory locks, LISTEN/NOTIFY, temp tables) misbehave.",
+   "entities": [
+    {
+     "n": "PgBouncer",
+     "tp": "tool"
+    },
+    {
+     "n": "pgx",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.583,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "K5",
+   "group": "REAL",
+   "label": "f4df0943",
+   "text": "User's teammate at work is named Inês, who suggested adding PgBouncer in front of the Postgres database.",
+   "entities": [
+    {
+     "n": "Inês",
+     "tp": "person"
+    },
+    {
+     "n": "PgBouncer",
+     "tp": "tool"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.582,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "K6",
+   "group": "REAL",
+   "label": "7627bca4",
+   "text": "User's Go/Postgres service at Tidewater is expected to serve around 200 concurrent users.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "Go",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.715,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "K7",
+   "group": "REAL",
+   "label": "47f16c3d sum",
+   "text": "New session where the user (recently moved to Porto, working at Tidewater) asked for help debugging connection pool exhaustion in their Go/Postgres backend; the assistant provided a diagnostic-first playbook rather than immediate fixes.",
+   "entities": [
+    {
+     "n": "Porto",
+     "tp": "place"
+    },
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.608,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "K8",
+   "group": "REAL",
+   "label": "f8e46870",
+   "text": "User's Go/Postgres backend experiences connection pool exhaustion under load.",
+   "entities": [
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "Go",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.603,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "K9",
+   "group": "REAL",
+   "label": "42f15c71 sum",
+   "text": "User consulted on a teammate's PgBouncer suggestion, then revealed a ClickHouse migration for analytics and shared personal context (bouldering schedule, sister's wedding in Braga) plus asked for a recap of the PgBouncer verdict.",
+   "entities": [
+    {
+     "n": "PgBouncer",
+     "tp": "tool"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    },
+    {
+     "n": "Braga",
+     "tp": "place"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.546,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "K10",
+   "group": "REAL",
+   "label": "1bcdac1e sum",
+   "text": "The user asked for a series of ~150-word explainers covering Postgres connection pooling, first alert priorities for Grafana Cloud, PgBouncer transaction vs session modes, and pool sizing for 200 concurrent users; a side note mentioned Thursday-morning unavailability for a vet appointment.",
+   "entities": [
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "Grafana Cloud",
+     "tp": "tool"
+    },
+    {
+     "n": "PgBouncer",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.509,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "K11",
+   "group": "REAL",
+   "label": "2cea2bc2",
+   "text": "User has a 1:1 meeting with Inês every Monday at 10:00 (local time, Porto).",
+   "entities": [
+    {
+     "n": "Inês",
+     "tp": "person"
+    },
+    {
+     "n": "Porto",
+     "tp": "place"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.446,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "K12",
+   "group": "REAL",
+   "label": "8a584cbf",
+   "text": "User's laptop is a ThinkPad X1 Carbon running Fedora.",
+   "entities": [
+    {
+     "n": "ThinkPad X1 Carbon",
+     "tp": "tool"
+    },
+    {
+     "n": "Fedora",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.498,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "K13",
+   "group": "REAL",
+   "label": "683beb3e",
+   "text": "User plays the cello on Sundays.",
+   "entities": [
+    {
+     "n": "cello",
+     "tp": "concept"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.377,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "K14",
+   "group": "REAL",
+   "label": "93c6b9ee",
+   "text": "User is offline Thursday morning, Nov 19, 2026: their dog Biscuit has a vet appointment.",
+   "entities": [
+    {
+     "n": "Biscuit",
+     "tp": "person"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.463,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "K15",
+   "group": "REAL",
+   "label": "01b0ee6b",
+   "text": "Beatriz's wedding venue changed: it is now at Sé Catedral do Porto (no longer Braga), still on June 14, 2027; user will be off work the entire week of it.",
+   "entities": [
+    {
+     "n": "Beatriz",
+     "tp": "person"
+    },
+    {
+     "n": "Sé Catedral do Porto",
+     "tp": "place"
+    },
+    {
+     "n": "Braga",
+     "tp": "place"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.478,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "K16",
+   "group": "REAL",
+   "label": "97dcf35b",
+   "text": "User boulders twice a week near Bolhão (Porto) — Tuesdays and Thursdays. Started around November 2026; still getting forearm soreness as a newer climber.",
+   "entities": [
+    {
+     "n": "Bolhão",
+     "tp": "place"
+    },
+    {
+     "n": "Porto",
+     "tp": "place"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.417,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "K17",
+   "group": "REAL",
+   "label": "65f479d7",
+   "text": "User drinks coffee with oat milk instead of regular milk (switched around November 2026).",
+   "entities": [
+    {
+     "n": "oat milk",
+     "tp": "concept"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.436,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "K18",
+   "group": "REAL",
+   "label": "5e528384",
+   "text": "User prefers Fenix over direct flights to Braga, via Lisbon.",
+   "entities": [
+    {
+     "n": "Fenix",
+     "tp": "company"
+    },
+    {
+     "n": "Braga",
+     "tp": "place"
+    },
+    {
+     "n": "Lisbon",
+     "tp": "place"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.409,
+   "expect": "no",
+   "band": "none",
+   "gate_legit": false,
+   "gate_reversal": false
+  },
+  {
+   "id": "S1",
+   "group": "SYN",
+   "label": "same company, unrelated",
+   "text": "Tidewater's carbon-accounting dashboard launches to customers in January 2027.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.591,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "S2",
+   "group": "SYN",
+   "label": "same company, unrelated",
+   "text": "User's manager at Tidewater is called Rui.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Rui",
+     "tp": "person"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.573,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "S3",
+   "group": "SYN",
+   "label": "same company, unrelated",
+   "text": "Tidewater uses GitHub Actions for CI.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "GitHub Actions",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.62,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "S4",
+   "group": "SYN",
+   "label": "Postgres ops, unrelated",
+   "text": "The Postgres 17 upgrade at Tidewater is scheduled for December.",
+   "entities": [
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    },
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.725,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "S5",
+   "group": "SYN",
+   "label": "Postgres ops, unrelated",
+   "text": "User's Tidewater backend uses Postgres row-level security for multi-tenant isolation.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "Postgres",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.72,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "S6",
+   "group": "SYN",
+   "label": "pin-consistent update",
+   "text": "ClickHouse Cloud was quoted at about 400 USD per month for Tidewater's analytics volume.",
+   "entities": [
+    {
+     "n": "ClickHouse Cloud",
+     "tp": "tool"
+    },
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.668,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "S7",
+   "group": "SYN",
+   "label": "pin-consistent update",
+   "text": "The ClickHouse migration for analytics is scheduled to finish by the end of Q1 2027.",
+   "entities": [
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.641,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "S8",
+   "group": "SYN",
+   "label": "pin-consistent update",
+   "text": "Tidewater's analytics events will be streamed into ClickHouse through Kafka.",
+   "entities": [
+    {
+     "n": "Tidewater",
+     "tp": "company"
+    },
+    {
+     "n": "ClickHouse",
+     "tp": "tool"
+    },
+    {
+     "n": "Kafka",
+     "tp": "tool"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.748,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "S9",
+   "group": "SYN",
+   "label": "concept-name collision",
+   "text": "User wants weekly analytics reports emailed every Friday.",
+   "entities": [
+    {
+     "n": "analytics",
+     "tp": "concept"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.516,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  },
+  {
+   "id": "S10",
+   "group": "SYN",
+   "label": "concept-name collision",
+   "text": "User's bank transactions are exported monthly for the accountant.",
+   "entities": [
+    {
+     "n": "transactions",
+     "tp": "concept"
+    }
+   ],
+   "cosine_to_rc2_pin": 0.486,
+   "expect": "no",
+   "band": "in",
+   "gate_legit": true,
+   "gate_reversal": false
+  }
+ ]
+}

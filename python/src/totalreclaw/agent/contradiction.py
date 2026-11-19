@@ -28,10 +28,13 @@ import time
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from ..relay import RelayReadBlocked
+from .loop_runner import InterpreterShutdownError
+from . import pin_check
 
 if TYPE_CHECKING:
     from totalreclaw.client import TotalReclaw
     from .extraction import ExtractedFact
+    from .llm_client import LLMConfig
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,9 @@ logger = logging.getLogger(__name__)
 # (handled by store-time dedup). The contradiction band is [lower, upper).
 CONTRADICTION_THRESHOLD_LOWER = 0.30
 CONTRADICTION_THRESHOLD_UPPER = 0.85
+
+#: Exclusive upper bound of the high-band pinned check (cosines are <= 1).
+PIN_HIGH_BAND_UPPER = 1.01
 
 #: Resolver ``skip_new`` reason for a new claim that contradicts a pinned claim.
 SKIP_REASON_EXISTING_PINNED = "existing_pinned"
@@ -112,7 +118,7 @@ def _pinned_candidate_stats(
     Returns ``(pinned_candidates, no_shared_entity, out_of_band)``. A pinned
     candidate is ``out_of_band`` when its cosine is outside the resolver band,
     ``no_shared_entity`` when it is in band but core raised no pinned skip for
-    it (no shared name), and neither when core skipped the new fact because of it.
+    it (no name or entity link), and neither when core skipped the new fact because of it.
     Observability only: nothing here changes what is stored.
     """
     skipped_ids = {
@@ -137,6 +143,8 @@ async def detect_and_resolve_contradictions(
     new_facts: List["ExtractedFact"],
     client: "TotalReclaw",
     log: Optional[Any] = None,
+    *,
+    llm_config: Optional["LLMConfig"] = None,
 ) -> List["ExtractedFact"]:
     """Filter out new facts that contradict a pinned vault claim.
 
@@ -146,8 +154,12 @@ async def detect_and_resolve_contradictions(
     2. Projects the new fact and each candidate to short-key claims carrying
        entity refs and (candidates only) pin state.
     3. Calls ``totalreclaw_core.resolve_with_candidates()``.
-    4. Drops the fact if any action is ``skip_new`` with reason
-       ``existing_pinned``. Other actions are logged, not applied (DEP-12).
+    4. For each pinned hit (core's ``skip_new`` / ``existing_pinned`` in the
+       band, then pinned candidates at cosine >= 0.85 with a name link), asks
+       the extraction LLM whether the new fact says the pin is no longer
+       true (``pin_check``). In-band: YES or no answer drops the fact, NO
+       keeps it. High band: only a clear YES drops it. Other actions are
+       logged, not applied (DEP-12).
 
     Returns the subset of ``new_facts`` that should proceed to storage.
 
@@ -164,6 +176,9 @@ async def detect_and_resolve_contradictions(
         Configured client instance (used for recall queries).
     log : logger-like, optional
         Falls back to module-level ``logger`` if not provided.
+    llm_config : LLMConfig, optional
+        Config for the pinned-conflict check. Without it a pinned hit behaves
+        as in 2.6.0rc2 (in-band hit drops the fact, no high-band check).
     """
     if log is None:
         log = logger
@@ -202,6 +217,9 @@ async def detect_and_resolve_contradictions(
     pinned_candidates = 0
     no_shared_entity = 0
     out_of_band = 0
+    pinned_llm_no = pinned_unconfirmed = pinned_high_checked = 0
+    calls_left = pin_check.PIN_CHECK_MAX_CALLS_PER_CYCLE
+    deadline = time.monotonic() + pin_check.PIN_CHECK_CYCLE_BUDGET_S
 
     for fact_idx, fact in enumerate(new_facts):
         # Only run contradiction detection on facts with entities
@@ -345,16 +363,92 @@ async def detect_and_resolve_contradictions(
             no_shared_entity += _no_share
             out_of_band += _oob
 
-            if any(
-                action.get("type") == "skip_new"
-                and action.get("reason") == SKIP_REASON_EXISTING_PINNED
-                for action in actions
-            ):
-                pinned_conflicts += 1
-                log.info(
-                    "Contradiction: new fact not stored, it contradicts a pinned fact (reason=%s)",
-                    SKIP_REASON_EXISTING_PINNED,
+            # Pinned hits: core's in-band skips, then pinned candidates at
+            # cosine >= the upper bound that core never reports.
+            cand_by_id = {c["id"]: c for c in candidates}
+            hits: List[tuple] = [
+                (a.get("existing_id"), False)
+                for a in actions
+                if a.get("type") == "skip_new"
+                and a.get("reason") == SKIP_REASON_EXISTING_PINNED
+            ]
+            pinned_only = [
+                c for c in candidates if (c.get("claim") or {}).get("st") == "p"
+            ]
+            if pinned_only:
+                high_actions = json.loads(totalreclaw_core.resolve_with_candidates(
+                    new_claim_json,
+                    new_claim_id,
+                    json.dumps(embedding),
+                    json.dumps(pinned_only, ensure_ascii=False, separators=(",", ":")),
+                    weights_json,
+                    CONTRADICTION_THRESHOLD_UPPER,
+                    PIN_HIGH_BAND_UPPER,
+                    now_unix,
+                    tie_tolerance,
+                ))
+                hits.extend(
+                    (a.get("existing_id"), True)
+                    for a in high_actions
+                    if a.get("type") == "skip_new"
+                    and a.get("reason") == SKIP_REASON_EXISTING_PINNED
                 )
+
+            new_names = {
+                totalreclaw_core.normalize_entity_name(r.get("n", ""))
+                for r in new_claim_json_obj.get("e", [])
+            }
+            dropped = False
+            for cand_id, high in hits:
+                cand = cand_by_id.get(cand_id) or {}
+                pid = str(cand_id)[:8] if cand_id else "unknown"
+                cand_names = {
+                    totalreclaw_core.normalize_entity_name(r.get("n", ""))
+                    for r in (cand.get("claim") or {}).get("e", [])
+                }
+                link = "entity" if new_names & cand_names else "name"
+                sim = _cosine(embedding, cand.get("embedding") or [])
+                verdict = None
+                if llm_config is not None and calls_left > 0:
+                    remaining = deadline - time.monotonic()
+                    if remaining >= pin_check.PIN_CHECK_MIN_REMAINING_S:
+                        calls_left -= 1
+                        if high:
+                            pinned_high_checked += 1
+                        verdict = await pin_check.llm_confirms_pin_conflict(
+                            llm_config,
+                            (cand.get("claim") or {}).get("t", ""),
+                            fact.text,
+                            timeout=min(pin_check.PIN_CHECK_TIMEOUT_S, remaining),
+                        )
+                if verdict is False:
+                    if high:
+                        log.debug(
+                            "Contradiction: high-band pinned fact %s checked (link=%s, sim=%.3f), "
+                            "no conflict (check=llm_no)", pid, link, sim,
+                        )
+                    else:
+                        pinned_llm_no += 1
+                        log.info(
+                            "Contradiction: pinned fact %s matched (link=%s, sim=%.3f) but the "
+                            "LLM check found no conflict; fact kept (check=llm_no)",
+                            pid, link, sim,
+                        )
+                    continue
+                if verdict is None and high:
+                    continue  # rc2 behaviour: no clear YES, store
+                if verdict is None:
+                    pinned_unconfirmed += 1
+                check = "llm_yes" if verdict is True else "unconfirmed"
+                log.info(
+                    "Contradiction: new fact not stored, it contradicts a pinned fact "
+                    "(reason=%s, pinned=%s, check=%s, link=%s, sim=%.3f)",
+                    SKIP_REASON_EXISTING_PINNED, pid, check, link, sim,
+                )
+                dropped = True
+                break
+            if dropped:
+                pinned_conflicts += 1
                 continue
 
             # Every other outcome is observed only; PRD-04 DEP-12 owns applying
@@ -368,6 +462,8 @@ async def detect_and_resolve_contradictions(
 
             kept.append(fact)
 
+        except InterpreterShutdownError:
+            raise
         except Exception as exc:
             # Any per-fact error: keep the fact and continue
             log.debug("Contradiction check failed for a fact (%s); keeping it", type(exc).__name__)
@@ -375,7 +471,8 @@ async def detect_and_resolve_contradictions(
 
     log.info(
         "Contradiction detection: %d/%d facts passed (removed %d, pinned conflicts %d)"
-        " pinned_candidates=%d no_shared_entity=%d out_of_band=%d",
+        " pinned_candidates=%d no_shared_entity=%d out_of_band=%d"
+        " pinned_llm_no=%d pinned_unconfirmed=%d pinned_high_checked=%d",
         len(kept),
         len(new_facts),
         len(new_facts) - len(kept),
@@ -383,5 +480,8 @@ async def detect_and_resolve_contradictions(
         pinned_candidates,
         no_shared_entity,
         out_of_band,
+        pinned_llm_no,
+        pinned_unconfirmed,
+        pinned_high_checked,
     )
     return kept

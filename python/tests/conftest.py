@@ -150,3 +150,18 @@ def _route_import_engine_store_to_fake_recorder(monkeypatch):
 
     monkeypatch.setattr(_engine, "store_fact_batch", _store)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_real_pin_check_llm_call(monkeypatch):
+    """S41: ``auto_extract`` resolves an LLM config with ``detect_llm_config()``
+    for the pinned-conflict check, which on a developer machine can find a real
+    key. No test may reach a real LLM through it: the default stub answers
+    nothing, so a pinned hit keeps its 2.6.0rc2 behaviour. Tests of the check
+    patch ``pin_check.chat_completion`` themselves."""
+    from totalreclaw.agent import pin_check
+
+    async def _no_answer(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(pin_check, "chat_completion", _no_answer)
