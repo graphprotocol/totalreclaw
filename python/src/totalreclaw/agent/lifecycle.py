@@ -61,6 +61,7 @@ from ..write_gate import (
     merge_candidates,
     record_write,
     results_to_candidates,
+    view_cache_for,
 )
 
 logger = logging.getLogger(__name__)
@@ -331,6 +332,10 @@ def _fetch_recent_memories(
     topical = _tag(_best_effort("topical recall", _topical, blocked), "topical")
     ledger = _tag(ledger_for(client).candidates(), "ledger")
     recent = _tag(_best_effort("recent fetch", _recent, blocked), "recent")
+    try:  # keep the gate's cached vault view fresh (best effort)
+        view_cache_for(client).update([*topical, *recent])
+    except Exception:  # noqa: BLE001
+        pass
     memories = merge_candidates(client, topical, ledger, recent)
     logger.info(
         "dedup_context topical=%d ledger=%d recent=%d union=%d pinned=%d",

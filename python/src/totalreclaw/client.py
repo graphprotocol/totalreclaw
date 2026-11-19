@@ -60,7 +60,7 @@ from .operations import (
     MAX_BATCH_GROUP_COUNT,
 )
 from .retype_setscope import execute_retype, execute_set_scope
-from .write_gate import ledger_for
+from .write_gate import ledger_for, view_cache_for
 from .userop import DATA_EDGE_ADDRESS as _PROD_DATA_EDGE_ADDRESS_DEFAULT
 
 if TYPE_CHECKING:
@@ -193,6 +193,7 @@ def _ledger_rename(client, fact_id: str, result, pinned) -> None:
     try:
         if isinstance(result, dict) and result.get("success") and result.get("new_fact_id"):
             ledger_for(client).rename(fact_id, str(result["new_fact_id"]), pinned=pinned)
+            view_cache_for(client).forget(fact_id)
     except Exception:  # never fail a mutation over the ledger
         pass
 
@@ -1293,6 +1294,7 @@ class TotalReclaw:
             # Store-time write gate: the subgraph keeps listing this fact until
             # it indexes the tombstone; the ledger knows it is gone.
             ledger_for(self).forget(fact_id)
+            view_cache_for(self).forget(fact_id)
         if success and snapshot:
             try:
                 self.forget_ledger.record(
