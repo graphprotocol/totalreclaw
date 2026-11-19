@@ -189,6 +189,33 @@ jobs:
           print('\n'.join(new_text.splitlines()[:8]))
           PY
 
+      # Same drift as SKILL.md: plugin.yaml carried a hardcoded stale
+      # `version:` (2.3.1rc26) in installed packages. Sync it too.
+      - name: Sync plugin.yaml version field to pyproject.toml version
+        run: |
+          python3 <<'PY'
+          import re, pathlib
+          pyproject = pathlib.Path('python/pyproject.toml').read_text()
+          m = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, flags=re.MULTILINE)
+          if not m:
+              raise SystemExit("pyproject.toml version line not found")
+          target_version = m.group(1)
+          manifest = pathlib.Path('python/src/totalreclaw/hermes/plugin.yaml')
+          text = manifest.read_text()
+          new_text, n = re.subn(
+              r'(^version:[ \t]*).*$',
+              lambda mm: f'{mm.group(1)}{target_version}',
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if n != 1:
+              raise SystemExit("plugin.yaml top-level `version:` line not found")
+          manifest.write_text(new_text)
+          print(f"plugin.yaml version field synced to {target_version}")
+          print([l for l in new_text.splitlines() if l.startswith('version:')][0])
+          PY
+
       # 2.3.12-rc.1 (F flip): no URL rewrite needed — the source at
       # `_HARDCODED_DEFAULT_URL` already binds to production for both
       # release types.
