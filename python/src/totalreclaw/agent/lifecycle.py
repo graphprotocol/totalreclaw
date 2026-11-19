@@ -14,6 +14,8 @@ closed" bug).
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import logging
 import re
 from typing import Optional, TYPE_CHECKING
@@ -47,7 +49,12 @@ from .write_quota import (
 from ..forget_guard import ForgetLedger, is_forget_request
 from ..pii import auto_storable, drop_sensitive_facts
 from ..client import per_fact_results
-from ..relay import RelayReadBlocked, RelayWriteQuotaExceeded
+from ..relay import (
+    ReadBlockState,
+    RelayReadBlocked,
+    RelayWriteQuotaExceeded,
+    ephemeral_read_block_state,
+)
 from ..write_gate import (
     decide_write,
     ledger_for,
@@ -222,11 +229,14 @@ def _embed_extraction_window(window: list[dict]) -> Optional[list[float]]:
     return list(vector) if vector else None
 
 
-def _best_effort(label: str, fetch) -> list:
+def _best_effort(label: str, fetch, blocked: Optional[list] = None) -> list:
     """Run one dedup-context sub-fetch; any failure gives ``[]``.
 
     Interpreter shutdown must reach ``auto_extract``'s drain-queue handler
-    (issue #148), so it is re-raised.
+    (issue #148), so it is re-raised. When ``blocked`` is a list, a
+    ``RelayReadBlocked`` the fetch raised is appended to it, so the caller
+    can tell "reads paused" from "nothing found" (the return value is
+    unchanged either way).
     """
     try:
         out = fetch()
@@ -234,8 +244,12 @@ def _best_effort(label: str, fetch) -> list:
     except InterpreterShutdownError:
         raise
     except RelayReadBlocked as e:
-        # Reads are paused (quota / rate limit): best-effort, stay quiet (#662).
-        logger.debug("Dedup context: %s skipped, reads paused (%s)", label, e)
+        # Reads are paused (quota / rate limit). The extraction proceeds or
+        # defers (see ``_auto_extract_inner``); the log line carries a stable
+        # token so a QA run can tell an empty vault view from a clean miss.
+        logger.info("vault view degraded: reads paused (%s skipped: %s)", label, e)
+        if blocked is not None:
+            blocked.append(e)
         return []
     except Exception as e:
         if is_interpreter_shutdown_error(e):
@@ -262,6 +276,7 @@ def _fetch_recent_memories(
     state: "AgentState",
     messages: Optional[list[dict]] = None,
     mode: str = "turn",
+    blocked: Optional[list] = None,
 ) -> list[dict]:
     """Existing memories for the extraction dedup context and the store gate.
 
@@ -278,7 +293,8 @@ def _fetch_recent_memories(
 
     ``pinned`` comes from the decrypted blob (search results carry it since
     DEP-5). Each fetch is best-effort: a failure leaves its section empty.
-    ``InterpreterShutdownError`` is re-raised (issue #148).
+    ``InterpreterShutdownError`` is re-raised (issue #148). When ``blocked``
+    is a list, every ``RelayReadBlocked`` a sub-fetch hit is appended to it.
     """
     client = state.get_client()
     if not client:
@@ -312,9 +328,9 @@ def _fetch_recent_memories(
             return []
         return run_sync(fetch(limit=DEDUP_RECENT_LIMIT))
 
-    topical = _tag(_best_effort("topical recall", _topical), "topical")
+    topical = _tag(_best_effort("topical recall", _topical, blocked), "topical")
     ledger = _tag(ledger_for(client).candidates(), "ledger")
-    recent = _tag(_best_effort("recent fetch", _recent), "recent")
+    recent = _tag(_best_effort("recent fetch", _recent, blocked), "recent")
     memories = merge_candidates(client, topical, ledger, recent)
     logger.info(
         "dedup_context topical=%d ledger=%d recent=%d union=%d pinned=%d",
@@ -436,11 +452,121 @@ def _restates_forgotten(
     return None
 
 
+#: Unprocessed-message count above which auto-extraction stops waiting for
+#: reads to come back and extracts without a vault view (facts are never dropped).
+DEFER_MAX_MESSAGES = 40
+
+#: ``on_paused`` policies of :func:`auto_extract`.
+ON_PAUSED_DEFER = "defer"  # keep the messages in the buffer, retry next cycle
+ON_PAUSED_QUEUE = "queue"  # persist to the #148 pending queue (buffer is about to go)
+ON_PAUSED_BLIND = "blind"  # extract anyway, WARNING (messages may be lost otherwise)
+
+
+_ON_PAUSED_POLICY: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "totalreclaw_on_paused_policy", default=ON_PAUSED_DEFER
+)
+
+
+@contextlib.contextmanager
+def on_paused_policy(policy: str):
+    """Set the default ``on_paused`` policy of :func:`auto_extract` for the
+    calls made inside the ``with`` block (entry points that cannot pass the
+    argument through their own signature)."""
+    token = _ON_PAUSED_POLICY.set(policy)
+    try:
+        yield
+    finally:
+        _ON_PAUSED_POLICY.reset(token)
+
+
+def _real_read_block(client) -> Optional[ReadBlockState]:
+    """``client.read_block`` when it is a real ``ReadBlockState``, else ``None``
+    (a bare ``MagicMock`` client must not look paused)."""
+    blk = getattr(client, "read_block", None) if client is not None else None
+    return blk if isinstance(blk, ReadBlockState) else None
+
+
+def _paused_until_text(client, errors: Optional[list] = None) -> str:
+    """``HH:MM`` (UTC) the read pause ends, or ``unknown``."""
+    try:
+        blk = _real_read_block(client)
+        if blk is None and errors:
+            blk = ephemeral_read_block_state(errors[0])
+        if blk is not None:
+            return blk.paused_until_utc.strftime("%H:%M")
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _enqueue_unprocessed(state: "AgentState", client, messages: list[dict]) -> bool:
+    """Persist ``messages`` to the #148 pending queue. ``False`` on failure."""
+    owner = _owner_address(state)
+    if not owner:
+        return False
+    relay = getattr(client, "_relay", None)
+    session_id = getattr(relay, "_session_id", None) if relay is not None else None
+    if not isinstance(session_id, str):
+        session_id = None
+    try:
+        return bool(enqueue_messages(owner, list(messages), session_id=session_id))
+    except Exception as exc:
+        logger.warning("TotalReclaw: enqueue of deferred messages failed: %s", exc)
+        return False
+
+
+def _defer_for_paused_reads(
+    state: "AgentState",
+    client,
+    messages: list[dict],
+    on_paused: str,
+    errors: Optional[list] = None,
+) -> bool:
+    """Handle an extraction cycle that would run without a vault view.
+
+    Returns ``True`` when the cycle must stop (nothing stored, messages kept
+    or queued), ``False`` when it should go on blind (a WARNING is logged).
+    """
+    n = len(messages)
+    until = _paused_until_text(client, errors)
+    try:
+        state._extraction_requeued = False
+    except Exception:
+        pass
+    if on_paused == ON_PAUSED_DEFER and n <= DEFER_MAX_MESSAGES:
+        logger.info(
+            "auto-extraction deferred: reads paused until %s UTC (%d messages kept)",
+            until, n,
+        )
+        try:
+            state._extraction_deferred = True
+        except Exception:
+            pass
+        return True
+    if on_paused == ON_PAUSED_QUEUE and _enqueue_unprocessed(state, client, messages):
+        logger.info(
+            "auto-extraction deferred: reads paused until %s UTC (%d messages kept, "
+            "queued for the next session)", until, n,
+        )
+        state.mark_messages_processed()
+        try:
+            state._extraction_deferred = False
+            state._extraction_requeued = True  # the drain tells "re-queued" from "landed"
+        except Exception:
+            pass
+        return True
+    logger.warning(
+        "auto-extraction ran without a vault view: reads paused and %d messages waiting", n,
+    )
+    return False
+
+
 def auto_extract(
     state: "AgentState",
     mode: str = "turn",
     llm_config=None,
     session_id_override: Optional[str] = None,
+    on_paused: Optional[str] = None,
 ) -> list[str]:
     """Extract facts from conversation and store them.
 
@@ -460,10 +586,20 @@ def auto_extract(
             path so re-extracted facts carry the ORIGINAL session's id rather
             than the draining session's (issue #494). An empty override is
             treated as "no session" (header omitted).
+        on_paused: what to do when relay reads are paused (the extraction
+            would run without a vault view and could store near duplicates):
+            ``None`` (default) uses the :func:`on_paused_policy` context
+            value, else ``"defer"``. ``"defer"`` keeps the messages unprocessed and returns
+            ``[]``; ``"queue"`` persists them to the pending queue for the next
+            session (use when the buffer is about to be cleared); ``"blind"``
+            extracts anyway and logs a WARNING. ``"defer"`` also falls back to
+            blind past ``DEFER_MAX_MESSAGES`` waiting messages.
 
     Returns:
         List of stored fact texts (for debrief context).
     """
+    if on_paused is None:
+        on_paused = _ON_PAUSED_POLICY.get()
     messages = state.get_unprocessed_messages()
     if not messages:
         return []
@@ -494,9 +630,10 @@ def auto_extract(
     stored_texts: list[str] = []
 
     try:
-        return _auto_extract_inner(
-            state, mode, llm_config, messages, max_facts, client, stored_texts,
-        )
+        with on_paused_policy(on_paused):
+            return _auto_extract_inner(
+                state, mode, llm_config, messages, max_facts, client, stored_texts,
+            )
     except InterpreterShutdownError:
         # The host interpreter is shutting down (atexit chain in
         # ``hermes chat -q`` one-shot mode). The persistent sync-loop runner
@@ -552,10 +689,37 @@ def _auto_extract_inner(
 ) -> list[str]:
     """Inner auto_extract body — kept separate so the outer wrapper can
     catch ``InterpreterShutdownError`` from any nested ``run_sync``."""
+    on_paused = _ON_PAUSED_POLICY.get()
 
     # Existing memories for the LLM dedup context (PRD-04 DEP-3) and the
     # store-time write gate: topical + just-written (ledger) + newest.
-    existing_memories = _fetch_recent_memories(state, messages, mode)
+    #
+    # Reads paused: do not extract blind (internal H15). Signal (a): the
+    # client already knows reads are paused; signal (b): a sub-fetch hit
+    # ``RelayReadBlocked`` just now.
+    already_blind = False
+    if _real_read_block(client) is not None:
+        if _defer_for_paused_reads(state, client, messages, on_paused):
+            return []
+        already_blind = True  # WARNING already logged
+
+    # After a deferral the buffer spans several turns; the turn window would
+    # cut the earlier ones off, so read all of it.
+    if (
+        mode == "turn"
+        and getattr(state, "_extraction_deferred", False) is True
+        and len(messages) > TURN_MODE_WINDOW_MESSAGES
+    ):
+        mode = "full"
+
+    blocked: list = []
+    existing_memories = _fetch_recent_memories(state, messages, mode, blocked=blocked)
+    if blocked and not already_blind and _defer_for_paused_reads(state, client, messages, on_paused, blocked):
+        return []
+    try:
+        state._extraction_deferred = False
+    except Exception:
+        pass
     dedup_context = _dedup_context_block(existing_memories)
 
     # Try LLM extraction first
@@ -584,14 +748,25 @@ def _auto_extract_inner(
     # PRD-04 DEP-4: automatic extraction stores only facts the core PII
     # filter allows — block AND flag are dropped (logged by category only).
     # Runs before every log line below that prints fact text.
+    #
+    # Per-cycle summary buckets: P is taken BEFORE this drop; ``other`` is the
+    # remainder (max_facts cap, contradiction / pin-guard removals, DELETE
+    # actions, failed writes), so the line always adds up.
+    n_proposals = len(facts)
     facts = drop_sensitive_facts(facts)
+    n_pii = n_proposals - len(facts)
 
     if not facts:
         state.mark_messages_processed()
+        logger.info(
+            "auto-extract: %d proposals, %d pii-dropped, 0 noop, 0 gate-skipped, "
+            "0 forget-skipped, 0 stored, 0 other", n_proposals, n_pii,
+        )
         return []
 
     # Cap to max_facts
     facts = facts[:max_facts]
+    n_noop = n_gate_skipped = n_forget_skipped = 0
 
     # Contradiction detection: filter out facts that lose to existing vault claims
     try:
@@ -644,6 +819,7 @@ def _auto_extract_inner(
     for fact in facts:
         try:
             if fact.action == "NOOP":
+                n_noop += 1
                 continue
 
             if fact.action == "DELETE":
@@ -674,6 +850,7 @@ def _auto_extract_inner(
             why = _restates_forgotten(fact.text, embedding, forget_ledger)
             if why:
                 logger.info("Skipping extracted %s: %s", fact.action, why)
+                n_forget_skipped += 1
                 continue
 
             # Store-time write gate (internal #632 / #501): normalized exact
@@ -699,6 +876,7 @@ def _auto_extract_inner(
                         "Skipping %s duplicate of %s",
                         decision.match.kind, decision.match.fact_id,
                     )
+                    n_gate_skipped += 1
                     continue
 
             # Build the fact dict — mirrors the kwargs passed to remember() so
@@ -798,6 +976,12 @@ def _auto_extract_inner(
         )
 
     state.mark_messages_processed()
+    logger.info(
+        "auto-extract: %d proposals, %d pii-dropped, %d noop, %d gate-skipped, "
+        "%d forget-skipped, %d stored, %d other",
+        n_proposals, n_pii, n_noop, n_gate_skipped, n_forget_skipped, len(stored_texts),
+        n_proposals - n_pii - n_noop - n_gate_skipped - n_forget_skipped - len(stored_texts),
+    )
     if wrote_ok:
         # A write just went through, so the quota allows writes again: store
         # facts an earlier refusal queued (#747). Never raises.

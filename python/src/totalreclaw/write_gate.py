@@ -438,7 +438,12 @@ async def check_store(
     except Exception as e:  # noqa: BLE001 - best effort
         if is_interpreter_shutdown_error(e):
             raise InterpreterShutdownError(str(e)) from e
-        logger.debug("write gate: topical candidate fetch failed (%s); ledger only", type(e).__name__)
+        from .relay import RelayReadBlocked
+
+        if isinstance(e, RelayReadBlocked):
+            logger.info("vault view degraded: reads paused (write gate: ledger only)")
+        else:
+            logger.debug("write gate: topical candidate fetch failed (%s); ledger only", type(e).__name__)
     candidates = merge_candidates(client, topical, exclude_ids=exclude_ids)
     decision = decide_write(text, embedding, candidates, mode=mode)
     if decision.match is not None:

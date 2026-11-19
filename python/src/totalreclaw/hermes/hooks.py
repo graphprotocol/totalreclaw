@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .state import PluginState
 
 from totalreclaw.agent.lifecycle import (
+    on_paused_policy as _on_paused_policy,
     auto_extract as _auto_extract,
     crystal_gate_passes,
     drain_pending_stores,
@@ -23,6 +24,7 @@ from totalreclaw.agent.lifecycle import (
     _fetch_recent_memories,
     _owner_address,
     _owner_addresses,
+    _enqueue_unprocessed,
     STORE_DEDUP_THRESHOLD,
 )
 from totalreclaw.agent.loop_runner import run_sync
@@ -697,6 +699,14 @@ def _maybe_queue_update_notice(state: "PluginState", billing: dict) -> None:
         pass
 
 
+def _auto_extract_queueing(state, **kwargs):
+    """``_auto_extract`` for paths whose message buffer is about to go away
+    (finalize, idle roll, drain): if relay reads are paused, the messages are
+    persisted to the pending queue instead of being extracted blind."""
+    with _on_paused_policy("queue"):
+        return _auto_extract(state, **kwargs)
+
+
 def _drain_into_state(state: "PluginState", batches: list) -> int:
     """Replay drained message batches into the agent state and run a
     full-mode auto-extract to land the facts.
@@ -710,7 +720,8 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
     in which case no override is applied (facts keep the draining session's
     id, the prior behavior).
 
-    Returns the total number of messages recovered. Errors during the
+    Returns the total number of messages recovered (batches queued again because
+    relay reads are still paused are not counted). Errors during the
     extraction call are logged and swallowed — drain is best-effort.
     Whether the drain landed facts or not, the messages are consumed
     from the queue (already done by ``drain_pending``) so we don't
@@ -723,7 +734,21 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
     # stray message can't get swept into a batch's session-scoped extraction.
     # (Drain runs early in ``on_session_start``, before the session's own
     # turns, so this is normally a no-op.)
-    state.mark_messages_processed()
+    # A live buffer (e.g. turns deferred while reads were paused) must not be
+    # consumed by this isolation: queue it for the next session first. If the
+    # queue write fails, skip the isolation (nothing lost; the drained batch
+    # then shares the extraction with the live messages).
+    live = state.get_unprocessed_messages() if state.has_unprocessed_messages() else []
+    if live:
+        if _enqueue_unprocessed(state, state.get_client(), live):
+            state.mark_messages_processed()
+        else:
+            logger.warning(
+                "TotalReclaw: could not queue %d live message(s) before the drain; "
+                "they are extracted together with the drained batch.", len(live),
+            )
+    else:
+        state.mark_messages_processed()
 
     total = 0
     for batch in batches:
@@ -748,7 +773,11 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
             continue
 
         try:
-            _auto_extract(
+            state._extraction_requeued = False
+        except Exception:
+            pass
+        try:
+            _auto_extract_queueing(
                 state,
                 mode="full",
                 llm_config=_get_hermes_llm_config(),
@@ -757,7 +786,9 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
         except Exception as exc:
             logger.warning("TotalReclaw: drain-side auto_extract failed: %s", exc)
 
-        total += added
+        # A batch that was queued again (reads still paused) has not landed.
+        if getattr(state, "_extraction_requeued", False) is not True:
+            total += added
 
     return total
 
@@ -787,7 +818,9 @@ def _maybe_roll_idle_session(state: "PluginState") -> None:
         stored: list[str] = []
         if state.has_unprocessed_messages():
             try:
-                stored = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config())
+                stored = _auto_extract_queueing(
+                    state, mode="full", llm_config=_get_hermes_llm_config(),
+                )
             except Exception as e:
                 logger.warning("TotalReclaw idle-roll flush failed: %s", e)
         try:
@@ -1244,7 +1277,9 @@ def _finalize_one_conversation(state: "PluginState") -> bool:
     stored_fact_texts: list[str] = []
     if state.has_unprocessed_messages():
         try:
-            stored_fact_texts = _auto_extract(state, mode="full", llm_config=_get_hermes_llm_config()) or []
+            stored_fact_texts = _auto_extract_queueing(
+                state, mode="full", llm_config=_get_hermes_llm_config(),
+            ) or []
         except Exception as e:
             logger.warning("TotalReclaw on_session_finalize flush failed: %s", e)
 
