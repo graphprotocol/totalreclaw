@@ -27,8 +27,8 @@ from .extraction import (
     TURN_MODE_WINDOW_MESSAGES,
     ExtractedFact,
     build_dedup_context_block,
-    extract_facts_heuristic,
     extract_facts_llm,
+    heuristic_fallback_facts,
 )
 from .contradiction import detect_and_resolve_contradictions
 from .pin_guard import apply_pin_guard, fail_closed_actions
@@ -575,7 +575,8 @@ def auto_extract(
 ) -> list[str]:
     """Extract facts from conversation and store them.
 
-    Tries LLM extraction first, falls back to heuristic if no LLM available.
+    Uses LLM extraction. A basic pattern extractor runs only when no LLM is
+    configured; an empty or failed LLM answer is never overridden by it.
     Handles ADD, UPDATE, and DELETE actions from LLM-guided extraction.
     Performs cosine-based near-duplicate detection before storing.
 
@@ -611,7 +612,7 @@ def auto_extract(
 
     max_facts = state.get_max_facts_per_extraction()
 
-    # Format messages for extraction (used by heuristic fallback check)
+    # Format messages for extraction (used by the empty-buffer check)
     msg_text = "\n".join(
         f"{m['role']}: {m['content']}" for m in messages if m.get("content")
     )
@@ -727,8 +728,10 @@ def _auto_extract_inner(
         pass
     dedup_context = _dedup_context_block(existing_memories)
 
-    # Try LLM extraction first
+    # LLM extraction. An empty answer is final (the facts may already be in
+    # the vault); the pattern extractor runs only when no LLM is configured.
     facts: list[ExtractedFact] = []
+    outcome: dict = {}
     try:
         facts = run_sync(
             extract_facts_llm(
@@ -737,6 +740,7 @@ def _auto_extract_inner(
                 existing_memories=existing_memories,
                 llm_config=llm_config,
                 dedup_context=dedup_context,
+                outcome=outcome,
             )
         )
     except InterpreterShutdownError:
@@ -744,11 +748,18 @@ def _auto_extract_inner(
     except Exception as e:
         if is_interpreter_shutdown_error(e):
             raise InterpreterShutdownError(str(e)) from e
-        logger.debug("LLM extraction failed, falling back to heuristic: %s", e)
+        logger.warning(
+            "auto-extract: LLM extraction failed (%s); nothing extracted this cycle",
+            type(e).__name__,
+        )
+        logger.debug("auto-extract: LLM extraction failed: %s", e)
 
-    # Fall back to heuristic if LLM returned nothing
-    if not facts:
-        facts = extract_facts_heuristic(messages, max_facts)
+    if not facts and outcome.get("llm") == "unavailable":
+        facts = heuristic_fallback_facts(messages, max_facts, existing_memories)
+        logger.info(
+            "auto-extract: no LLM configured; pattern extractor proposed %d fact(s)",
+            len(facts),
+        )
 
     # PRD-04 DEP-4: automatic extraction stores only facts the core PII
     # filter allows — block AND flag are dropped (logged by category only).

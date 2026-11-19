@@ -623,7 +623,7 @@ class TestExtractFactsHeuristic:
 
     def test_name_extraction(self):
         messages = [
-            {"role": "user", "content": "My name is Pedro and I work at TotalReclaw"},
+            {"role": "user", "content": "My name is Pedro Diogo Santos and I work at TotalReclaw"},
         ]
         facts = extract_facts_heuristic(messages, 15)
         assert len(facts) >= 1
@@ -646,10 +646,11 @@ class TestExtractFactsHeuristic:
 
     def test_max_facts_respected(self):
         messages = [
-            {"role": "user", "content": "I prefer dark mode. I like Python. I want a dog. I need coffee. I use vim."},
+            {"role": "user", "content": "I prefer dark mode for editors. I like Python for scripting. I want a dog this year. I need coffee every morning. I use vim for everything."},
         ]
+        assert len(extract_facts_heuristic(messages, 15)) == 5
         facts = extract_facts_heuristic(messages, 2)
-        assert len(facts) <= 2
+        assert len(facts) == 2
 
     def test_short_matches_excluded(self):
         messages = [

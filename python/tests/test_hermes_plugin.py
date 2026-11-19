@@ -665,7 +665,7 @@ class TestStoreTimeDedup:
         mock_client.remember_batch = tracking_remember_batch
 
         with patch("totalreclaw.agent.lifecycle.extract_facts_llm") as mock_llm, \
-             patch("totalreclaw.agent.lifecycle.extract_facts_heuristic"), \
+             patch("totalreclaw.agent.lifecycle.heuristic_fallback_facts"), \
              patch("totalreclaw.embedding.get_embedding", return_value=[1.0, 0.0, 0.0]):
 
             async def llm_extract(messages, mode, existing_memories, llm_config=None, **kwargs):

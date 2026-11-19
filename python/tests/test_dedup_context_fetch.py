@@ -188,12 +188,12 @@ def test_auto_extract_passes_prebuilt_block_to_the_llm():
     state._client = client
     seen = {}
 
-    async def fake_extract(messages, mode="turn", existing_memories=None, llm_config=None, *, dedup_context=None):
+    async def fake_extract(messages, mode="turn", existing_memories=None, llm_config=None, *, dedup_context=None, outcome=None):
         seen["dedup_context"] = dedup_context
         return []
 
     with patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=fake_extract), \
-         patch("totalreclaw.agent.lifecycle.extract_facts_heuristic", return_value=[]):
+         patch("totalreclaw.agent.lifecycle.heuristic_fallback_facts", return_value=[]):
         state.add_message("user", "tell me about my pinned fact")
         state.add_message("assistant", "sure")
         auto_extract(state)
