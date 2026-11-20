@@ -11,9 +11,9 @@
 //     SERVER_GUIDE, served as the `totalreclaw://guide` resource and the
 //     `totalreclaw_instructions` prompt.
 
-export const SERVER_INSTRUCTIONS = `TotalReclaw is the user's encrypted long-term memory. Use it unprompted:
-- Recall: ALWAYS call totalreclaw_recall at the start of EVERY conversation (query: the user's first message) and whenever past context could help. Use quietly.
-- Remember: call totalreclaw_remember WITHOUT being asked, same turn, whenever the user shares a durable fact. They never need to say "remember this".
+export const SERVER_INSTRUCTIONS = `TotalReclaw is the user's encrypted long-term memory, separate from the app's built-in memory: use it even when that is off. Use it unprompted:
+- Recall: ALWAYS call totalreclaw_recall at the start of EVERY conversation (query: first message) and when past context helps. Use quietly.
+- Remember: call totalreclaw_remember WITHOUT being asked, same turn, whenever the user shares a durable fact.
 - Safety: the recovery phrase must never enter this chat. Never ask for it, echo it or run a CLI that prints it.
 
 ## Recovery phrase (hard rules)
@@ -22,7 +22,7 @@ export const SERVER_INSTRUCTIONS = `TotalReclaw is the user's encrypted long-ter
 - If the user pastes a phrase anyway, tell them it is compromised and they need a fresh one from the browser pair flow (totalreclaw_pair).
 
 ## Remembering
-Store without being asked whenever the user shares: preferences, personal info, decisions or goals, corrections, important dates or events, tech preferences, project context, opinions or values. If it could help later, store it automatically. Store atomic facts ("User is vegan"). Skip small talk, one-off tasks, generic knowledge and secrets (passwords, API keys, tokens). Correction: store the new fact.
+Store without being asked whenever the user shares: preferences, personal info, decisions or goals, corrections, dates or events, tech preferences, project context, opinions or values. If it could help later, store it automatically. Store atomic facts ("User is vegan"). Correction: store the new fact. Skip small talk, one-off tasks, generic knowledge and secrets (passwords, API keys, tokens).
 
 ## Setup
 "not_configured" means no account yet. Call totalreclaw_pair and give the user the link + PIN. The phrase is created or entered in a browser only, never in config, env vars or chat. On "You're all set" the tools work at once, no restart (if not_configured persists, reopen the app).
@@ -56,6 +56,7 @@ If a tool returns "not_configured", offer totalreclaw_pair. It returns a URL and
 The totalreclaw_setup tool was removed in 3.2.1 because it returned the phrase through tool output.
 
 ## Recall
+This is the user's own memory, separate from the app's built-in memory: use it even when built-in memory is off.
 Call totalreclaw_recall:
 - at the start of every new conversation, with a brief summary of the user's first message as the query;
 - when the user asks about something that might relate to past conversations;
@@ -111,30 +112,30 @@ When a substantive conversation ends (goodbye, topic resolved, natural close), c
 // ── Layer 2: Enhanced Tool Descriptions ──────────────────────────────────────
 
 export const REMEMBER_TOOL_DESCRIPTION = `Store user info PROACTIVELY — don't wait for "remember this".
+Separate from built-in memory: use even when it is off.
 INVOKE WHEN USER SAYS "I prefer X", "I'm X", "I chose X because Y"; reveals identity/location/job/family.
 NOT FOR: chitchat, passwords, generic knowledge.
-Extract ATOMIC. Good: "User is vegan". Bad: "User said they became vegan, prefer organic".
-PARAMS facts[]: text; importance 1-10 def 5; type claim|preference|directive|commitment|episode|summary; scope work|personal|health|family|creative|finance|misc|unspecified. Dedup auto.`;
+ATOMIC. Good: "User is vegan". Bad: "User said they became vegan, prefer organic".
+PARAMS facts[]: text; importance 1-10 def 5; type claim|preference|directive|commitment|episode|summary; scope (see schema). Dedup auto.`;
 
-export const RECALL_TOOL_DESCRIPTION = `Search encrypted vault. Top 16 reranked by provenance+semantic+recency.
+export const RECALL_TOOL_DESCRIPTION = `Search encrypted vault. Top 16, reranked.
+Separate from built-in memory: use even when it is off.
 INVOKE WHEN USER SAYS:
 - "what's my [phone/address/doctor]"
 - "remember when I..." / "what did I say about..."
 - "do you know my..." / "my preferences for..."
 - opens convo on a topic (auto-recall first msg)
 WHEN NOT TO USE: world knowledge, small talk.
-DOES: trapdoor search, decrypt, rerank BM25+cosine+source-provenance.
 PARAMS: query (5-15 words), k (def 16, max 50).
 Don't announce "I found these memories" — just use them.`;
 
 export const FORGET_TOOL_DESCRIPTION = `Permanently remove memory.
+Separate from built-in memory: use even when it is off.
 INVOKE WHEN USER SAYS:
-- "forget what I said about X" / "delete that fact"
-- "that's wrong/outdated — remove it"
+- "forget what I said about X" / "delete that"
+- "that's wrong/outdated, remove it"
 - "I don't want you remembering X"
-WHEN NOT TO USE:
-- CORRECTING → totalreclaw_remember (dedup auto)
-- never forget proactively
+WHEN NOT TO USE: correcting (→ totalreclaw_remember), or proactively.
 DOES: memory_id → tombstone. query → recall ≤50, tombstone all (self-hosted only; managed service needs an id).
 PARAMS: memory_id = the fact_id from a recall result (fact_id also accepted), query, scope.`;
 

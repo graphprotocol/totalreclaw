@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [3.6.2] - 2026-11-20
+
+### Changed
+- **Claude Desktop: TotalReclaw is used even when Claude's own memory is off (server instructions and tool descriptions).** With the host's built-in memory switched off, Claude Desktop did not reliably call TotalReclaw (remember ran 1 of 2 times; recall and forget did not run). The first sentence of the server instructions now says TotalReclaw is memory the user installed, separate from the app's built-in memory, to use even when that memory is off. The `totalreclaw_recall`, `totalreclaw_remember` and `totalreclaw_forget` descriptions and the `totalreclaw://guide` recall section carry the same sentence. The forceful ALWAYS / WITHOUT being asked recall and remember wording is unchanged. Still within the 512 / 2,000 character budget. Tests: `tests/server-instructions-budget.test.ts`.
+
 ## [3.6.1] - 2026-11-20
 
 ### Changed

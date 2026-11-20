@@ -24,6 +24,9 @@ import {
   SERVER_INSTRUCTIONS,
   SERVER_GUIDE,
   SERVER_GUIDE_URI,
+  RECALL_TOOL_DESCRIPTION,
+  REMEMBER_TOOL_DESCRIPTION,
+  FORGET_TOOL_DESCRIPTION,
   getPromptMessages,
 } from '../src/prompts';
 import { TOOL_MANIFEST } from '../src/dispatch';
@@ -148,5 +151,25 @@ describe('MCP wiring', () => {
       await client.close();
       await server.close();
     }
+  });
+});
+
+describe('TotalReclaw is used even when the host built-in memory is off', () => {
+  it('the first 512 characters say it is separate from built-in memory and used when that is off', () => {
+    expect(first).toMatch(/separate from the app's built-in memory/);
+    expect(first).toMatch(/use it even when (that|it) is off/);
+  });
+
+  it.each([
+    ['totalreclaw_recall', RECALL_TOOL_DESCRIPTION],
+    ['totalreclaw_remember', REMEMBER_TOOL_DESCRIPTION],
+    ['totalreclaw_forget', FORGET_TOOL_DESCRIPTION],
+  ])('%s description says the same', (_name, description) => {
+    expect(description).toMatch(/Separate from (the app's )?built-in memory/);
+    expect(description).toMatch(/use even when (that|it) is off/);
+  });
+
+  it('SERVER_GUIDE says the same', () => {
+    expect(SERVER_GUIDE).toMatch(/built-in memory is off/);
   });
 });
