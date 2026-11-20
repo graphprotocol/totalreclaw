@@ -81,7 +81,7 @@ See the [IronClaw setup guide](../docs/guides/ironclaw-setup.md) for the full wa
 
 ### 2. Set up your account in the browser
 
-Restart your MCP client, then ask your agent: *"Set up TotalReclaw."* It calls `totalreclaw_pair` and gives you a link and a 6-digit PIN. Open the link in any browser, on this computer or your phone. The page creates your 12-word recovery phrase, or takes the one you already have. Your phrase never goes through the chat and is never written into your MCP config. The link works for about 10 minutes; if it stops working, ask your agent for a new one. When the page says "You're all set", fully quit and reopen your MCP client once more: the server reads your account only at startup. Full walkthrough: [Claude Desktop setup guide](../docs/guides/claude-desktop-setup.md).
+Restart your MCP client, then ask your agent: *"Set up TotalReclaw."* It calls `totalreclaw_pair` and gives you a link and a 6-digit PIN. Open the link in any browser, on this computer or your phone. The page creates your 12-word recovery phrase, or takes the one you already have. Your phrase never goes through the chat and is never written into your MCP config. The link works for about 10 minutes; if it stops working, ask your agent for a new one. When the page says "You're all set", TotalReclaw works in the same chat right away; no second restart. (If a memory tool still says it is not set up, fully quit and reopen your MCP client once.) Full walkthrough: [Claude Desktop setup guide](../docs/guides/claude-desktop-setup.md).
 
 > **Save your recovery phrase somewhere safe.** It's the only way to recover your encrypted memories.
 

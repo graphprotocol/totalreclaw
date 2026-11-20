@@ -25,7 +25,7 @@ export const SERVER_INSTRUCTIONS = `TotalReclaw is the user's encrypted long-ter
 Store without being asked whenever the user shares: preferences, personal info, decisions or goals, corrections, important dates or events, tech preferences, project context, opinions or values. If it could help later, store it automatically. Store atomic facts ("User is vegan"). Skip small talk, one-off tasks, generic knowledge and secrets (passwords, API keys, tokens). Correction: store the new fact.
 
 ## Setup
-"not_configured" means no account yet. Call totalreclaw_pair and give the user the link + PIN. The phrase is created or entered in a browser only, never in config, env vars or chat. After Pairing, on "You're all set", ask them to fully quit and reopen this app (or start a new session).
+"not_configured" means no account yet. Call totalreclaw_pair and give the user the link + PIN. The phrase is created or entered in a browser only, never in config, env vars or chat. On "You're all set" the tools work at once, no restart (if not_configured persists, reopen the app).
 
 ## Everything else
 "quota_exceeded" -> tell the user, offer totalreclaw_status / totalreclaw_upgrade, stop storing. "pin that" -> totalreclaw_pin. Migrating -> totalreclaw_import_from (dry_run first). "file that under X" / "that's a work thing" -> totalreclaw_set_scope. End of a substantive conversation -> totalreclaw_debrief. Guide: totalreclaw://guide.`;
@@ -52,7 +52,7 @@ TotalReclaw uses a 12-word BIP-39 recovery phrase as the user's identity. The ph
 - Setup is totalreclaw_pair (link + PIN). The phrase is created or entered in the browser during totalreclaw_pair, never in chat, in a config file, in an env var or in a secret store, and never through you.
 
 ## Setup
-If a tool returns "not_configured", offer totalreclaw_pair. It returns a URL and a PIN. The user opens the URL in a browser, the browser creates or imports the phrase, and only ciphertext reaches this server. When the page says "You're all set", ask the user to fully quit and reopen this app (or start a new session); credentials load at startup, so until then every tool still returns not_configured. The link lasts about 10 minutes. If the install is already set up, totalreclaw_pair refuses with already_configured and opens nothing: tell the user they are set up. Only if the user explicitly asks to switch to a different account, call it again with replace=true; that opens a replace session, and the user confirms the replacement on the pairing page (you cannot confirm it for them).
+If a tool returns "not_configured", offer totalreclaw_pair. It returns a URL and a PIN. The user opens the URL in a browser, the browser creates or imports the phrase, and only ciphertext reaches this server. When the page says "You're all set", the memory tools work in this chat right away; no restart is needed. If a tool still returns not_configured, ask the user to fully quit and reopen this app. The link lasts about 10 minutes. If the install is already set up, totalreclaw_pair refuses with already_configured and opens nothing: tell the user they are set up. Only if the user explicitly asks to switch to a different account, call it again with replace=true; that opens a replace session, and the user confirms the replacement on the pairing page (you cannot confirm it for them).
 The totalreclaw_setup tool was removed in 3.2.1 because it returned the phrase through tool output.
 
 ## Recall
@@ -217,7 +217,7 @@ INVOKE WHEN USER SAYS:
 - "I don't have a totalreclaw recovery phrase yet" / "create a totalreclaw account"
 - ANY tool returns "not_configured" — propose this tool BEFORE asking the user to edit MCP config.
 DOES: opens a relay pairing session, returns {url, pin, expires_at_ms}. Hand the URL + PIN to the user — they open the URL in any browser, the BROWSER generates (or imports) a 12-word phrase, encrypts it, uploads ciphertext to this MCP server. Server decrypts in-memory, writes ~/.totalreclaw/credentials.json (mode 0600). Phrase NEVER touches LLM context, chat transcript, stdout, or logs.
-AFTER PAIRING: when the page says "You're all set", tell the user to fully quit and reopen their MCP host (Claude Desktop / Cursor / Claude Code); the server reads credentials.json only at startup. The link lasts about 10 minutes.
+AFTER PAIRING: when the page says "You're all set", the server loads the new credentials by itself, so the memory tools work in this chat right away with no restart. If one still returns not_configured, ask the user to fully quit and reopen their MCP host (Claude Desktop / Cursor / Claude Code). The link lasts about 10 minutes.
 WHEN NOT TO USE:
 - already set up (credentials.json exists or the server is configured) → the tool refuses with already_configured. Tell the user they are set up. Only if THEY ask to replace their account, call with replace=true; the pairing page asks the user to confirm. You cannot confirm it for them.
 - user explicitly wants terminal-only setup → point them at \`npx @totalreclaw/mcp-server setup\` (CLI wizard, runs OUTSIDE your shell tool)

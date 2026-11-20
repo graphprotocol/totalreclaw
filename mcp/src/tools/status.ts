@@ -51,6 +51,15 @@ export interface BillingStatusResponse {
 /** Last raw billing response (for candidate pool caching in index.ts). */
 let lastBillingResponse: BillingStatusResponse | null = null;
 
+/**
+ * Forget the cached billing response. Called when the running server swaps to
+ * a different account (3.6.1 replace without restart): the response belongs to
+ * the old account.
+ */
+export function resetLastBillingResponse(): void {
+  lastBillingResponse = null;
+}
+
 /** Get the last raw billing response. */
 export function getLastBillingResponse(): BillingStatusResponse | null {
   return lastBillingResponse;

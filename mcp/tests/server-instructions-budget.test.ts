@@ -69,7 +69,7 @@ describe(`every hard rule sits inside ${FULL_BUDGET} characters`, () => {
     ['atomic facts', /atomic facts/],
     ['setup via pair', /not_configured[\s\S]*totalreclaw_pair/],
     ['pair gives link + PIN, phrase only in the browser', /link \+ PIN[\s\S]*browser only, never in config, env vars or chat/],
-    ['fully quit and reopen after pairing', /fully quit and reopen this app/],
+    ['no restart after pairing, with a reopen fallback', /You're all set[\s\S]*no restart[\s\S]*not_configured persists, reopen the app/],
     ['scope filing phrases reach set_scope', /file that under X[\s\S]*totalreclaw_set_scope/],
     ['stop storing after quota error', /quota_exceeded[\s\S]*stop storing/],
     ['debrief at the end', /totalreclaw_debrief/],
