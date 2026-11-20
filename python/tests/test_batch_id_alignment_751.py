@@ -12,6 +12,9 @@ matched ``409`` anywhere in an error message, e.g. inside a hex hash.
 
 #753: the same per-fact outcome now rides a batch that partly failed for a
 reason other than the quota, so callers keep the facts that did land.
+
+#777: that includes a batch cut short by interpreter shutdown, so the drain
+does not queue the facts that landed a second time.
 """
 from __future__ import annotations
 
@@ -300,10 +303,10 @@ class TestDrainAlignment:
 _TIMEOUT = "bundler request timed out"
 
 
-def _store_second_half_fails():
+def _store_second_half_fails(error: str = _TIMEOUT):
     """``store_fact_batch`` stand-in: a group of more than one fact reverts
     for size (so it is halved), a group holding the "first" fact is stored,
-    and any other group fails with an error that is neither a quota refusal
+    and any other group fails with *error*, which is neither a quota refusal
     nor a duplicate."""
 
     async def _store(facts, *a, **kw):
@@ -312,7 +315,7 @@ def _store_second_half_fails():
             raise RuntimeError(_SIM_REVERT)
         if texts[0].startswith("first"):
             return [f"id:{t}" for t in texts]
-        raise RuntimeError(_TIMEOUT)
+        raise RuntimeError(error)
 
     return _store
 
@@ -395,3 +398,45 @@ class TestDrainPartialFailure:
         left = client.pending_store.take(10)
         assert [e["fact"]["text"] for e in left] == ["second queued fact about boats"]
         assert left[0]["attempts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 6. Interpreter shutdown mid-batch: the drain keeps what landed (#777)
+# ---------------------------------------------------------------------------
+
+_SHUTDOWN = "cannot schedule new futures after interpreter shutdown"
+
+
+def _queue_two(client):
+    client.pending_store.add(
+        [{"text": "first queued fact about trains"}, {"text": "second queued fact about boats"}],
+        reason="write_quota",
+    )
+
+
+class TestDrainShutdownMidBatch:
+    def test_landed_fact_is_not_queued_again(self, state_dir):
+        client = _DrainClient()
+        _queue_two(client)
+        saved, _ = _drain(client, _store_second_half_fails(_SHUTDOWN))
+
+        assert saved == 1
+        left = client.pending_store.take(10)
+        assert [e["fact"]["text"] for e in left] == ["second queued fact about boats"]
+        # The shutdown is not the fact's fault, so no attempt is counted.
+        assert left[0].get("attempts", 0) == 0
+
+    def test_shutdown_without_results_keeps_every_fact(self, state_dir):
+        from totalreclaw.agent.loop_runner import InterpreterShutdownError
+
+        client = _DrainClient()
+        _queue_two(client)
+        client.remember_batch = AsyncMock(side_effect=InterpreterShutdownError(_SHUTDOWN))
+        saved, _ = _drain(client, _store_second_half_fails())
+
+        assert saved == 0
+        left = client.pending_store.take(10)
+        assert [e["fact"]["text"] for e in left] == [
+            "first queued fact about trains", "second queued fact about boats",
+        ]
+        assert all(e.get("attempts", 0) == 0 for e in left)
