@@ -43,7 +43,15 @@ export function getRecallTopK(env: NodeJS.ProcessEnv = process.env): number {
   return DEFAULT_RECALL_TOP_K;
 }
 
-/** Test-only: forget any relay value seen so far. */
-export function _resetServerRecallTopKForTests(): void {
+/**
+ * Forget the relay value seen so far. Used when the running server swaps to a
+ * different account (3.6.1); the value came from the old account's billing.
+ */
+export function resetServerRecallTopK(): void {
   serverRecallTopK = undefined;
+}
+
+/** Test-only alias of {@link resetServerRecallTopK}. */
+export function _resetServerRecallTopKForTests(): void {
+  resetServerRecallTopK();
 }

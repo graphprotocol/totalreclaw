@@ -18,7 +18,8 @@
  *   1. `totalreclaw_setup` → removed-tool envelope (phrase-safety, 3.2.1).
  *   2. `totalreclaw_support` → available in every mode (incl. unconfigured).
  *   3. `totalreclaw_pair`    → available in every mode (incl. unconfigured).
- *   4. unconfigured mode     → not-configured envelope for everything else.
+ *   4. unconfigured mode     → (3.6.1: try a credentials hot-load first) not-configured
+ *                              envelope for everything else.
  *   5. resolve the mode bundle, look up the handler, apply the policy, and
  *      wrap the whole thing in the shared quota → auth → generic error funnel.
  */
@@ -148,6 +149,13 @@ export interface DispatchDeps {
    * instead of the generic setup guidance.
    */
   getUnusableCredentials?: () => UnusableCredentials | undefined;
+  /**
+   * Trigger B of the credential hot-load (3.6.1): called on a tool call while
+   * unconfigured, before the not-configured envelope. Picks up a credentials
+   * file written by another process (or one that changed since startup)
+   * without a host restart. A no-op in self-hosted mode; never throws.
+   */
+  tryReload?: () => Promise<void>;
 }
 
 /** Response for the removed `totalreclaw_setup` tool (phrase-safety, 3.2.1). */
@@ -174,7 +182,7 @@ export function setupRemovedResponse(): ToolResponse {
  * read (see `UnsupportedCredentialsError` in `subgraph/credentials.ts`).
  */
 export interface UnusableCredentials {
-  reason: 'keychain_wrapped' | 'unknown_version';
+  reason: 'keychain_wrapped' | 'unknown_version' | 'invalid_credentials' | 'activation_failed';
   message: string;
 }
 
@@ -203,8 +211,9 @@ export function notConfiguredResponse(unusable?: UnusableCredentials): ToolRespo
         message:
           'TotalReclaw is not set up yet. Call totalreclaw_pair now: it returns a link and a PIN. ' +
           'Give both to the user; they open the link in a browser and create or enter their recovery ' +
-          'phrase there, never in chat. When the page says it is done, ask them to fully quit and ' +
-          'reopen this app (or start a new session), because credentials load at startup.',
+          'phrase there, never in chat. When the page says "You\'re all set", try the memory tool again: ' +
+          'it works in this chat without a restart. Only if it still returns not_configured, ask ' +
+          'the user to fully quit and reopen this app.',
       }),
     }],
     isError: true,
@@ -247,7 +256,17 @@ export function createCallToolHandler(
     if (name === 'totalreclaw_pair') return deps.handlePair(args);
 
     // 4. Unconfigured: everything else returns setup guidance.
-    const mode = deps.getMode();
+    let mode = deps.getMode();
+    if (mode === 'unconfigured' && deps.tryReload) {
+      // The credentials may have been written since startup (e.g. by another
+      // client). One stat; activates only if the file changed.
+      try {
+        await deps.tryReload();
+      } catch {
+        // Reported by the reload itself; fall through to the envelope.
+      }
+      mode = deps.getMode();
+    }
     if (mode === 'unconfigured') return notConfiguredResponse(deps.getUnusableCredentials?.());
 
     // 5. Configured dispatch, wrapped in the shared quota → auth → generic funnel.

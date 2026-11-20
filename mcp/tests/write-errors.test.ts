@@ -231,17 +231,29 @@ describe('#702 contract gaps', () => {
   });
 });
 
-describe('restart guidance after pairing', () => {
-  const { pairInstructions } = require('../src/tools/pair');
-  const { SERVER_INSTRUCTIONS } = require('../src/prompts');
-  test.each(['generate', 'import'])('pair completion text (%s) asks for a full quit/reopen or new session', (mode: string) => {
+describe('no restart after pairing (3.6.1 hot-load)', () => {
+  const { pairInstructions, ALREADY_CONFIGURED_MESSAGE } = require('../src/tools/pair');
+  const { SERVER_INSTRUCTIONS, PAIR_TOOL_DESCRIPTION } = require('../src/prompts');
+  const { notConfiguredResponse } = require('../src/dispatch');
+  test.each(['generate', 'import'])('pair completion text (%s) says no restart is needed, with one fallback', (mode: string) => {
     const text = pairInstructions(mode, 10).join('\n');
-    expect(text).toMatch(/ask the user to fully quit and reopen/);
-    expect(text).toMatch(/start a new session/);
-    expect(text).toMatch(/only at startup/);
+    expect(text).toMatch(/works in this chat right away; no restart is needed/);
+    // One fallback clause only: if a memory tool still says not_configured.
+    expect(text).toMatch(/still returns not_configured, ask the user to fully quit and reopen this app/);
+    expect(text).not.toMatch(/only at startup/);
+    expect(text).not.toMatch(/start a new session/);
   });
-  test('server instructions say the same', () => {
-    expect(SERVER_INSTRUCTIONS).toMatch(/After Pairing[\s\S]*fully quit and reopen[\s\S]*new session/);
+  test('server instructions say the tools work at once, with the fallback', () => {
+    expect(SERVER_INSTRUCTIONS).toMatch(/You're all set[\s\S]*work at once, no restart[\s\S]*not_configured persists, reopen/);
+    expect(SERVER_INSTRUCTIONS).not.toMatch(/credentials load at startup/);
+  });
+  test('pair tool description, already-configured and not-configured texts match', () => {
+    expect(PAIR_TOOL_DESCRIPTION).toMatch(/no restart/);
+    expect(PAIR_TOOL_DESCRIPTION).not.toMatch(/only at startup/);
+    expect(ALREADY_CONFIGURED_MESSAGE).toMatch(/already works in this chat/);
+    const text = notConfiguredResponse().content[0].text;
+    expect(text).toMatch(/without a restart/);
+    expect(text).not.toMatch(/credentials load at startup/);
   });
 });
 

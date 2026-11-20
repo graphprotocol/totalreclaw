@@ -6,8 +6,8 @@
  * a 12-word BIP-39 recovery phrase, encrypts it via x25519 ECDH + AES-256-GCM,
  * and uploads the ciphertext to the same relay this MCP server already talks
  * to. The MCP server decrypts the phrase locally and writes
- * `~/.totalreclaw/credentials.json` so a host restart picks the user up in
- * configured mode.
+ * `~/.totalreclaw/credentials.json`; the server then loads it (3.6.1) so the
+ * memory tools work in the same chat.
  *
  * Phrase-safety invariants (see project_phrase_safety_rule):
  *   - The phrase NEVER appears in the tool's return payload.
@@ -32,11 +32,12 @@
  * the relay's pairing session expires (the `expires_at` the relay returns,
  * 10 minutes on the current relay, plus a short grace). It used to stop
  * after 60 seconds, which closed the session before a user in generate mode
- * could write down 12 words and retype 3 of them. Credentials are read once,
- * at startup (`index.ts` `main()`), so after completion the user must fully
- * quit and reopen their MCP host (Claude Desktop / Cursor / Claude Code) for
- * the server to re-read credentials.json and switch out of `unconfigured`
- * mode.
+ * could write down 12 words and retype 3 of them. Credentials are read at
+ * startup (`index.ts` `main()`) and, since 3.6.1, again once this task has
+ * written credentials.json (`onCredentialsWritten`, no arguments: the server
+ * re-reads the file from disk through the same validated path as startup), so
+ * no host restart is needed. A file written by another process while this one
+ * is unconfigured is picked up on the next tool call (`dispatch.ts`).
  *
  * Existing-credentials guard (mirrors Hermes, `python/src/totalreclaw/hermes/pair_tool.py`):
  *   `~/.totalreclaw/credentials.json` is shared with every TotalReclaw client
@@ -462,6 +463,8 @@ export async function runPairBackgroundTask(opts: {
   log?: (level: 'info' | 'warn' | 'error', msg: string) => void;
   /** Override the credentials.json path — for tests. */
   credentialsPath?: string;
+  /** See `HandlePairOptions.onCredentialsWritten`. */
+  onCredentialsWritten?: () => void | Promise<void>;
 }): Promise<void> {
   const log =
     opts.log ??
@@ -479,6 +482,8 @@ export async function runPairBackgroundTask(opts: {
   const tokenTail = opts.session.token.slice(0, 8);
   const credentialsPath = opts.credentialsPath ?? CREDENTIALS_PATH;
   const replace = opts.session.replace === true;
+  /** Set once credentials.json was written and any replace bookkeeping is done. */
+  let credentialsWritten = false;
 
   /**
    * Replace mode, step 1: copy the old credentials.json aside before anything
@@ -590,6 +595,7 @@ export async function runPairBackgroundTask(opts: {
         return { state: 'error', error: msg };
       } finally {
         finishReplace(written, preserved.copyPath);
+        if (written) credentialsWritten = true;
       }
     },
     // Option E Phase 2 / #581 (P2-13) — payload_type: "derived-bundle-v1"
@@ -627,10 +633,28 @@ export async function runPairBackgroundTask(opts: {
         return { state: 'error', error: msg };
       } finally {
         finishReplace(written, preserved.copyPath);
+        if (written) credentialsWritten = true;
       }
     },
     timeoutMs: hardTimeoutMs,
   });
+
+  // Hot-load (3.6.1): once the relay ack/nack for this upload is decided, tell
+  // the caller that credentials.json was written so it can load it without a
+  // host restart. The callback takes NO arguments: the caller re-reads the
+  // file from disk through the same validated path as startup, so no phrase,
+  // key or bundle travels from here to the server state. A failure here never
+  // changes what the relay was told.
+  const notifyWritten = async (): Promise<void> => {
+    if (!credentialsWritten || !opts.onCredentialsWritten) return;
+    try {
+      await opts.onCredentialsWritten();
+    } catch (cbErr) {
+      const m = cbErr instanceof Error ? cbErr.message : String(cbErr);
+      log('warn', `pair: loading the new credentials without a restart failed: ${m}`);
+    }
+  };
+  const afterAck = phraseUploadPromise.then(notifyWritten, notifyWritten);
 
   // Outer race against a hard timeout — covers the case where the WS stays
   // open but the browser never POSTs (rare; matches plugin's 3.3.4-rc.2 fix).
@@ -651,10 +675,13 @@ export async function runPairBackgroundTask(opts: {
       (raced as { status?: unknown }).status === 'timed_out'
     ) {
       log('warn', `pair: hard timeout (token=${tokenTail}…)`);
+    } else {
+      await afterAck;
     }
   } catch (bgErr: unknown) {
     const bgMsg = bgErr instanceof Error ? bgErr.message : String(bgErr);
     log('warn', `pair: background task ended for token=${tokenTail}…: ${bgMsg}`);
+    await afterAck;
   } finally {
     if (hardTimer) clearTimeout(hardTimer);
   }
@@ -681,15 +708,22 @@ export interface HandlePairOptions {
   /**
    * True when the running server already has a credential (managed or
    * self-hosted mode). Wired by `index.ts`. The guard also checks
-   * credentials.json on disk, which covers a pairing completed earlier in
-   * this process (the server stays unconfigured until restart) and a file
-   * this server can't read.
+   * credentials.json on disk, which covers a pairing whose reload has not
+   * finished yet and a file this server can't read.
    */
   isConfigured?: () => boolean;
   /** Set when startup found a credentials file it can't use. Wired by `index.ts`. */
   getUnusableCredentials?: () => UnusableCredentials | undefined;
   /** Override the credentials.json path — for tests. */
   credentialsPath?: string;
+  /**
+   * Called (no arguments) after credentials.json was written, any replace
+   * bookkeeping finished, and the relay ack/nack was decided. `index.ts` wires
+   * it to the credential reload, which re-reads the file from disk; nothing
+   * secret is passed. A throw or rejection is logged and never changes the
+   * ack the relay got.
+   */
+  onCredentialsWritten?: () => void | Promise<void>;
   /** Override the session opener — for tests. */
   openSession?: typeof openRemotePairSession;
 }
@@ -709,7 +743,7 @@ export const ALREADY_CONFIGURED_MESSAGE =
   'warning and they confirm the replacement there. You cannot confirm it for them, and do ' +
   'not move, rename or delete the credentials file to get around this. (Restoring this same ' +
   'account on another device happens on that device, not here.) If the user just finished ' +
-  'pairing, they need to fully quit and reopen this app so the server loads the new credentials.';
+  'pairing, TotalReclaw already works in this chat; if a memory tool still returns not_configured, ask them to fully quit and reopen this app.';
 
 /** Refusal when a credentials file exists that this server doesn't (yet) use: same text. */
 export const CREDENTIALS_FILE_EXISTS_MESSAGE = ALREADY_CONFIGURED_MESSAGE;
@@ -828,6 +862,7 @@ export async function handlePair(
     serverUrl,
     log: opts.log,
     credentialsPath,
+    onCredentialsWritten: opts.onCredentialsWritten,
   });
 
   if (opts.awaitBackground) {
@@ -873,8 +908,8 @@ export async function handlePair(
 /**
  * The steps the agent relays to the user. Kept in step with what actually
  * happens: the relay page ends on "You're all set", the link lives as long as
- * the relay session, and the memory tools only work after the host restarts
- * (credentials are read once, at startup). Exported for tests.
+ * the relay session, and the server loads the new credentials by itself, so
+ * the memory tools work right away (3.6.1). Exported for tests.
  */
 export function pairInstructions(mode: 'generate' | 'import', minutesLeft: number): string[] {
   const phraseStep =
@@ -886,6 +921,6 @@ export function pairInstructions(mode: 'generate' | 'import', minutesLeft: numbe
     phraseStep,
     `The link works for about ${minutesLeft} minutes, so there is time to write the phrase down carefully. If it expires, call totalreclaw_pair again for a new link.`,
     `The phrase is encrypted in the browser and sent to this MCP server. It never passes through this chat. Never ask the user to paste it here.`,
-    `When the page says "You're all set", ask the user to fully quit and reopen this app (Claude Desktop, Cursor, Claude Code or whichever app runs this server; closing the window is not enough), or to start a new session. The server reads the credentials only at startup, so the memory tools return not_configured until then.`,
+    `When the page says "You're all set", TotalReclaw works in this chat right away; no restart is needed. If a memory tool still returns not_configured, ask the user to fully quit and reopen this app.`,
   ];
 }

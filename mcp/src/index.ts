@@ -19,7 +19,8 @@ import {
   accountUnavailableResponse,
   handlePair,
 } from './tools/index.js';
-import { getLastBillingResponse } from './tools/status.js';
+import { getLastBillingResponse, resetLastBillingResponse } from './tools/status.js';
+import { createCredentialActivator } from './credential-activation.js';
 import type { ToolContext, ToolResponse } from './tools/types.js';
 import { isQuotaExceededError, rethrowIfQuota, shortErrorMessage, logWriteError } from './tools/write-errors.js';
 import { pickMemoryId } from './tools/helpers.js';
@@ -85,8 +86,6 @@ import {
 import {
   resolveManagedCredential,
   isV2BundleCredentialsFile,
-  UnsupportedCredentialsError,
-  type ResolvedCredential,
 } from './subgraph/credentials.js';
 import type { UnusableCredentials } from './dispatch.js';
 import { bundleVaultToBuffers, redactedBundleSummary, type DerivedBundleV1 } from './subgraph/bundle.js';
@@ -189,7 +188,7 @@ export { getSessionId };
 
 // ── Client identification ──────────────────────────────────────────────────
 import { setClientId, getClientId } from './client-id.js';
-import { getRecallTopK, setServerRecallTopK } from './recall-top-k.js';
+import { getRecallTopK, setServerRecallTopK, resetServerRecallTopK } from './recall-top-k.js';
 let clientIdentifierResolved = false;
 
 /**
@@ -276,12 +275,37 @@ let billingCache: BillingCacheEntry | null = null;
 let billingFetchInProgress = false;
 
 /**
+ * Bumped every time the running account changes (3.6.1 credential hot-load:
+ * a confirmed replace, or a failed replace dropping to unconfigured). A
+ * background fetch that started under an older generation must not write its
+ * result into the new account's caches.
+ */
+let accountGeneration = 0;
+
+/**
+ * Reset every module-level value tied to the previous account. Called by the
+ * credential activator whenever a configured state is replaced or dropped.
+ * The per-request caches (store-time dedup, recall candidates) live inside
+ * handler calls and are not module-level; the trajectory poller reads
+ * `subgraphState` live on every pass, so it follows the swap by itself.
+ */
+function resetPerAccountState(): void {
+  accountGeneration++;
+  billingCache = null;
+  billingFetchInProgress = false;
+  resetLastBillingResponse();
+  resetServerRecallTopK();
+  invalidateMemoryContextCache();
+}
+
+/**
  * Proactively fetch billing status to populate the candidate pool cache.
  * Fire-and-forget — does not block the caller.
  */
 function proactiveBillingFetch(state: SubgraphState): void {
   if (billingFetchInProgress) return;
   billingFetchInProgress = true;
+  const generation = accountGeneration;
   const authKeyHex = Buffer.from(state.authKey).toString('hex');
   const url = `${state.serverUrl.replace(/\/+$/, '')}/v1/billing/status?wallet_address=${encodeURIComponent(state.smartAccountAddress)}`;
   fetch(url, {
@@ -293,6 +317,7 @@ function proactiveBillingFetch(state: SubgraphState): void {
     .then(async (resp) => {
       if (resp.ok) {
         const raw = (await resp.json()) as Record<string, unknown>;
+        if (generation !== accountGeneration) return; // account changed meanwhile
         const features = raw.features as Record<string, unknown> | undefined;
         billingCache = {
           max_candidate_pool: features?.max_candidate_pool as number | undefined,
@@ -302,7 +327,7 @@ function proactiveBillingFetch(state: SubgraphState): void {
       }
     })
     .catch(() => { /* best-effort */ })
-    .finally(() => { billingFetchInProgress = false; });
+    .finally(() => { if (generation === accountGeneration) billingFetchInProgress = false; });
 }
 
 /**
@@ -1911,6 +1936,7 @@ function authHintResponse(): ToolResponse {
 // modes. `subgraphState` supplies the auth key + wallet when present.
 
 async function statusHandler(args: unknown): Promise<ToolResponse> {
+  const generation = accountGeneration;
   const authKeyHex = subgraphState
     ? Buffer.from(subgraphState.authKey).toString('hex')
     : '';
@@ -1926,7 +1952,7 @@ async function statusHandler(args: unknown): Promise<ToolResponse> {
   // raw response; extract max_candidate_pool from it.
   try {
     const raw = getLastBillingResponse();
-    if (raw?.features) {
+    if (raw?.features && generation === accountGeneration) {
       billingCache = {
         max_candidate_pool: raw.features.max_candidate_pool,
         checked_at: Date.now(),
@@ -2025,6 +2051,31 @@ async function resolveBundle(mode: 'http' | 'subgraph'): Promise<HandlerBundle> 
   return httpBundle({ client });
 }
 
+// ── Credential activation (startup + hot-load, 3.6.1) ────────────────────────
+// `main()` activates once at startup; a finished `totalreclaw_pair` (Trigger A)
+// and a tool call on an unconfigured server whose credentials.json changed
+// (Trigger B) activate again, so the memory tools work without a host restart.
+// See `./credential-activation.ts`.
+
+const credentialActivator = createCredentialActivator<SubgraphState>({
+  credentialsPath: CREDENTIALS_PATH,
+  isSelfHosted: () => process.env.TOTALRECLAW_SELF_HOSTED === 'true',
+  resolveCredential: () => resolveManagedCredential(),
+  initFromBundle: (bundle) => initSubgraphStateFromBundle(bundle),
+  initFromMnemonic: (mnemonic) => initSubgraphState(mnemonic),
+  isUsableMnemonic: (mnemonic) => detectServerMode(mnemonic) === 'subgraph',
+  ownerAddress: (state) => state.smartAccountAddress,
+  getState: () => subgraphState,
+  commit: (next, { hadState }) => {
+    if (hadState) resetPerAccountState();
+    subgraphState = next;
+    currentMode = next ? 'subgraph' : 'unconfigured';
+    if (hadState) onMutate();
+  },
+  getUnusable: () => unusableCredentials,
+  setUnusable: (u) => { unusableCredentials = u; },
+});
+
 // ── The single CallTool router ───────────────────────────────────────────────
 
 const callToolHandler = createCallToolHandler({
@@ -2035,6 +2086,9 @@ const callToolHandler = createCallToolHandler({
     handlePair({}, args as Record<string, unknown> | undefined, {
       isConfigured: () => currentMode !== 'unconfigured',
       getUnusableCredentials: () => unusableCredentials,
+      // Trigger A: the pair task wrote credentials.json; load it now. No
+      // arguments: the reload re-reads the file from disk.
+      onCredentialsWritten: () => credentialActivator.reloadAfterPair(),
     }),
   common: commonHandlers,
   resolveBundle,
@@ -2044,6 +2098,8 @@ const callToolHandler = createCallToolHandler({
   authHintResponse,
   onMutate,
   getUnusableCredentials: () => unusableCredentials,
+  // Trigger B: credentials.json written by another process since startup.
+  tryReload: () => credentialActivator.tryReload(),
 });
 
 // ── Show-phrase CLI subcommand ────────────────────────────────────────────────
@@ -2122,53 +2178,14 @@ async function main(): Promise<void> {
     // derived-bundle-v1 bundle, per the four-state precedence in
     // subgraph/credentials.ts (mirrors
     // python/src/totalreclaw/agent/state.py::_try_auto_configure).
-    let credential: ResolvedCredential | undefined;
-    try {
-      credential = resolveManagedCredential();
-    } catch (err) {
-      if (err instanceof UnsupportedCredentialsError) {
-        // A real credential from another client (Hermes keychain storage)
-        // or a newer client (unknown `version`) that this server can't
-        // read. Not evidence of tampering, so start UNCONFIGURED instead of
-        // crashing: a crash makes the host drop every tool and leaves the
-        // reason in a log the user never sees. Still not a downgrade —
-        // nothing in the file is used — and the reason is returned on every
-        // tool call (dispatch.ts notConfiguredResponse). totalreclaw_pair
-        // refuses to overwrite the file.
-        unusableCredentials = { reason: err.reason, message: err.message };
-        currentMode = 'unconfigured';
-        console.error(`TotalReclaw MCP server started (unconfigured): ${err.message}`);
-      } else {
-        // Loud, actionable, FATAL — never a silent downgrade. A bundle that
-        // fails §4.7 validation is evidence of a corrupted/tampered
-        // credential store, not a transient condition to paper over with a
-        // caught exception. Crashing the process with the error on stderr
-        // IS the correct loud posture — see derived-bundle-v1.md §3.2's "the
-        // one place a well-meaning try/except would create a security bug"
-        // warning, and mcp/tests/credentials.test.ts's coverage of the
-        // throw paths.
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`TotalReclaw MCP: fatal credential error: ${msg}`);
-        throw err;
-      }
-    }
-
-    if (credential?.kind === 'bundle') {
-      currentMode = 'subgraph';
-      subgraphState = await initSubgraphStateFromBundle(credential.bundle);
-      console.error(
-        `TotalReclaw MCP server started (managed service, bundle-mode, owner: ${subgraphState.smartAccountAddress})`,
-      );
-    } else if (credential?.kind === 'mnemonic' && detectServerMode(credential.mnemonic) === 'subgraph') {
-      currentMode = 'subgraph';
-      subgraphState = await initSubgraphState(credential.mnemonic);
-      console.error(`TotalReclaw MCP server started (managed service, owner: ${subgraphState.smartAccountAddress})`);
-    } else if (!unusableCredentials) {
-      currentMode = 'unconfigured';
-      console.error(
-        'TotalReclaw MCP server started (unconfigured — ask the assistant to run totalreclaw_pair to set up an account)',
-      );
-    }
+    //
+    // Moved verbatim into `credential-activation.ts` in 3.6.1 so a pairing
+    // that finishes while the host is running can run the same code. At
+    // startup it behaves exactly as before: an unusable-but-honest file
+    // (keychain / unknown version) starts UNCONFIGURED with the reason on
+    // every tool call, and a bundle that fails validation is FATAL (rethrown,
+    // never a silent downgrade).
+    await credentialActivator.activate('startup');
   }
 
   // ── Trajectory poller (mcp-server 3.3.0-rc.3) ─────────────────────────

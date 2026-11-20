@@ -4,7 +4,7 @@
   "display_name": "TotalReclaw",
   "version": "0.0.0-template",
   "description": "End-to-end encrypted memory for Claude. Your memories are encrypted on this computer with a key only you hold, then stored across a decentralized network.",
-  "long_description": "TotalReclaw gives Claude a private, portable memory. Facts, preferences and decisions are encrypted on your computer before they leave it, so the server only ever sees ciphertext. Set up once with a recovery phrase you generate in your browser (never in chat), and the same memory follows you across Claude Desktop, Claude Code, Cursor and other MCP apps on this machine.",
+  "long_description": "TotalReclaw gives Claude a private, portable memory. Facts, preferences and decisions are encrypted on your computer before they leave it, so the server only ever sees ciphertext. Set up once with a recovery phrase you generate in your browser (never in chat). Your memory then follows you to every agent that uses TotalReclaw, such as Claude Code, Cursor, Codex, OpenClaw and Hermes, on this computer, your other devices, or a remote server.",
   "author": {
     "name": "TotalReclaw Team",
     "url": "https://totalreclaw.xyz"
