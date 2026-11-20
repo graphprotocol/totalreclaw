@@ -564,7 +564,7 @@ export async function runPairBackgroundTask(opts: {
           }
         } catch (regErr) {
           const m = regErr instanceof Error ? regErr.message : String(regErr);
-          log('warn', `pair: /v1/register failed (best-effort, will retry on host restart): ${m}`);
+          log('warn', `pair: /v1/register failed (best-effort; the next credentials reload or a host restart retries it): ${m}`);
           registeredUserId = authKeyHash.slice(0, 32);
         }
 

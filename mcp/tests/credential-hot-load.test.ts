@@ -23,7 +23,7 @@ import * as path from 'node:path';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
-import { createCredentialActivator } from '../src/credential-activation';
+import { createCredentialActivator, ACTIVATION_RETRY_COOLDOWN_MS } from '../src/credential-activation';
 import { resolveManagedCredential, UnsupportedCredentialsError } from '../src/subgraph/credentials';
 import {
   createCallToolHandler,
@@ -76,6 +76,9 @@ interface HarnessOptions {
   resolve?: () => ReturnType<typeof resolveManagedCredential>;
   initDelay?: Promise<void>;
   initFailsOnce?: boolean;
+  /** Init fails every time while true. */
+  initFailsWhile?: () => boolean;
+  clock?: { t: number };
 }
 
 function makeHarness(opts: HarnessOptions = {}) {
@@ -104,6 +107,7 @@ function makeHarness(opts: HarnessOptions = {}) {
     initFromMnemonic: async (m) => {
       h.initCalls++;
       await opts.initDelay;
+      if (opts.initFailsWhile?.()) throw new Error('billing unreachable');
       if (failOnce) {
         failOnce = false;
         throw new Error('billing unreachable');
@@ -123,6 +127,7 @@ function makeHarness(opts: HarnessOptions = {}) {
       h.unusable = u;
     },
     log: (m) => h.logs.push(m),
+    ...(opts.clock ? { now: () => opts.clock!.t } : {}),
   });
   const mode = (): ServerMode => (h.state ? 'subgraph' : 'unconfigured');
   return { h, activator, mode };
@@ -526,8 +531,9 @@ describe('invalid credentials at reload', () => {
     expect(hx.h.initCalls).toBe(0);
   });
 
-  it('a transient init failure stays unconfigured with a reason and retries on the next call', async () => {
-    const hx = makeHarness({ initFailsOnce: true });
+  it('a transient init failure stays unconfigured with a reason; Trigger B retries after the cooldown', async () => {
+    const clock = { t: 1_000_000 };
+    const hx = makeHarness({ initFailsOnce: true, clock });
     await hx.activator.activate('startup');
     const dispatch = makeDispatcher(hx);
     writeLegacyCreds(MNEMONIC_A);
@@ -535,11 +541,109 @@ describe('invalid credentials at reload', () => {
     const first = await dispatch('totalreclaw_status', {});
     expect(parse(first).reason).toBe('activation_failed');
     expect(hx.mode()).toBe('unconfigured');
+    expect(hx.h.initCalls).toBe(1);
 
+    clock.t += ACTIVATION_RETRY_COOLDOWN_MS;
     const second = await dispatch('totalreclaw_status', {});
     expect(second.isError).toBeUndefined();
     expect(hx.h.unusable).toBeUndefined();
     expect(hx.h.state?.which).toBe('A');
+  });
+});
+
+describe('activation_failed cooldown', () => {
+  const COOLDOWN = ACTIVATION_RETRY_COOLDOWN_MS;
+
+  it('two calls 1 s apart run activation once, with the stored reason in between', async () => {
+    const clock = { t: 5_000_000 };
+    const hx = makeHarness({ initFailsWhile: () => true, clock });
+    await hx.activator.activate('startup');
+    const dispatch = makeDispatcher(hx);
+    writeLegacyCreds(MNEMONIC_A);
+
+    const first = await dispatch('totalreclaw_status', {});
+    expect(parse(first).reason).toBe('activation_failed');
+    clock.t += 1_000;
+    const second = await dispatch('totalreclaw_status', {});
+    expect(parse(second).reason).toBe('activation_failed');
+    expect(hx.h.initCalls).toBe(1);
+  });
+
+  it('a call after the cooldown runs activation again', async () => {
+    const clock = { t: 5_000_000 };
+    const hx = makeHarness({ initFailsWhile: () => true, clock });
+    await hx.activator.activate('startup');
+    const dispatch = makeDispatcher(hx);
+    writeLegacyCreds(MNEMONIC_A);
+
+    await dispatch('totalreclaw_status', {});
+    clock.t += COOLDOWN - 1;
+    await dispatch('totalreclaw_status', {});
+    expect(hx.h.initCalls).toBe(1);
+    clock.t += 1;
+    await dispatch('totalreclaw_status', {});
+    expect(hx.h.initCalls).toBe(2);
+  });
+
+  it('a changed file runs at once, inside the cooldown', async () => {
+    const clock = { t: 5_000_000 };
+    let failing = true;
+    const hx = makeHarness({ initFailsWhile: () => failing, clock });
+    await hx.activator.activate('startup');
+    const dispatch = makeDispatcher(hx);
+    writeLegacyCreds(MNEMONIC_A);
+    await dispatch('totalreclaw_status', {});
+    expect(hx.h.initCalls).toBe(1);
+
+    failing = false;
+    writeLegacyCreds(MNEMONIC_B);
+    fs.utimesSync(credsPath, new Date(Date.now() + 5_000), new Date(Date.now() + 5_000)); // distinct mtime
+    clock.t += 1_000;
+    const res = await dispatch('totalreclaw_status', {});
+    expect(res.isError).toBeUndefined();
+    expect(hx.h.state?.which).toBe('B');
+  });
+
+  it('a pair completion inside the cooldown runs at once', async () => {
+    const clock = { t: 5_000_000 };
+    let failing = true;
+    const hx = makeHarness({ initFailsWhile: () => failing, clock });
+    await hx.activator.activate('startup');
+    const dispatch = makeDispatcher(hx);
+    writeLegacyCreds(MNEMONIC_A);
+    await dispatch('totalreclaw_status', {});
+    expect(hx.h.initCalls).toBe(1);
+
+    failing = false;
+    clock.t += 1_000;
+    await hx.activator.reloadAfterPair();
+    expect(hx.h.initCalls).toBe(2);
+    expect(hx.h.state?.which).toBe('A');
+    expect(hx.h.unusable).toBeUndefined();
+  });
+
+  it('the file disappearing clears the stored reason: plain not_configured', async () => {
+    const clock = { t: 5_000_000 };
+    const hx = makeHarness({ initFailsWhile: () => true, clock });
+    await hx.activator.activate('startup');
+    const dispatch = makeDispatcher(hx);
+    writeLegacyCreds(MNEMONIC_A);
+    expect(parse(await dispatch('totalreclaw_status', {})).reason).toBe('activation_failed');
+
+    fs.rmSync(credsPath);
+    const res = await dispatch('totalreclaw_status', {});
+    const body = parse(res);
+    expect(res.isError).toBe(true);
+    expect(body.error).toBe('not_configured');
+    expect(body.reason).toBeUndefined();
+    expect(hx.h.unusable).toBeUndefined();
+
+    // And a later file starts fresh, with no cooldown carried over.
+    clock.t += 1_000;
+    writeLegacyCreds(MNEMONIC_A);
+    expect(hx.h.initCalls).toBe(1);
+    await dispatch('totalreclaw_status', {});
+    expect(hx.h.initCalls).toBe(2);
   });
 });
 

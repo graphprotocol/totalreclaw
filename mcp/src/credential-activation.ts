@@ -57,7 +57,18 @@ export interface ActivatorDeps<S> {
   setUnusable: (u: UnusableCredentials | undefined) => void;
   /** stderr logger (default `console.error`). */
   log?: (msg: string) => void;
+  /** Clock in ms (default `Date.now`); injected by tests. */
+  now?: () => number;
 }
+
+/**
+ * After an `activation_failed` (init threw, e.g. the relay is down), Trigger B
+ * retries at most once per this interval. Each attempt can take many seconds
+ * (billing lookup retries + register), so retrying on every tool call would
+ * stall every call during an outage. A changed file (new signature) and a
+ * finished pairing (Trigger A) run at once, regardless.
+ */
+export const ACTIVATION_RETRY_COOLDOWN_MS = 10_000;
 
 export interface CredentialActivator {
   /** Startup activation; rethrows a fatal credential error. */
@@ -92,9 +103,12 @@ function fileSignature(credentialsPath: string): FileSignature {
 
 export function createCredentialActivator<S>(deps: ActivatorDeps<S>): CredentialActivator {
   const log = deps.log ?? ((m: string) => console.error(m));
+  const now = deps.now ?? (() => Date.now());
 
   /** Signature of credentials.json at the start of the last attempt. */
   let lastSignature: FileSignature | undefined;
+  /** Time of the last `activation_failed` attempt; cleared on any other outcome. */
+  let lastFailureAt: number | undefined;
   let inFlight: Promise<void> | null = null;
   let rerunRequested = false;
 
@@ -103,6 +117,7 @@ export function createCredentialActivator<S>(deps: ActivatorDeps<S>): Credential
     // Taken BEFORE reading, so a write that lands mid-activation is seen as a
     // change on the next call instead of being masked.
     lastSignature = fileSignature(deps.credentialsPath);
+    lastFailureAt = undefined;
 
     const drop = (): void => {
       // A replace that cannot be activated must not leave the old account
@@ -180,8 +195,8 @@ export function createCredentialActivator<S>(deps: ActivatorDeps<S>): Credential
       const msg = err instanceof Error ? err.message : String(err);
       deps.setUnusable({ reason: 'activation_failed', message: ACTIVATION_FAILED_MESSAGE });
       drop();
-      // Possibly transient (network): allow the next tool call to retry.
-      lastSignature = undefined;
+      // Possibly transient (network): Trigger B retries after the cooldown.
+      lastFailureAt = now();
       log(`TotalReclaw MCP: credentials reload could not start the account, staying unconfigured: ${msg}`);
     }
   }
@@ -229,8 +244,19 @@ export function createCredentialActivator<S>(deps: ActivatorDeps<S>): Credential
       // Trigger B never swaps a configured server.
       if (deps.getState() !== null) return;
       const sig = fileSignature(deps.credentialsPath);
-      if (sig === lastSignature) return;
-      if (sig === 'absent' && lastSignature === undefined) return;
+      if (sig === 'absent') {
+        // The file is gone: a stored reason or failure no longer applies.
+        // Report plain not_configured.
+        if (deps.getUnusable()) deps.setUnusable(undefined);
+        lastFailureAt = undefined;
+        lastSignature = sig;
+        return;
+      }
+      if (sig === lastSignature) {
+        const cooledDown =
+          lastFailureAt !== undefined && now() - lastFailureAt >= ACTIVATION_RETRY_COOLDOWN_MS;
+        if (!cooledDown) return;
+      }
       try {
         await run('reload', false);
       } catch (err) {
