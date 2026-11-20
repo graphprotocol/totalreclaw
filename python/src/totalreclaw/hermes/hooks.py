@@ -365,7 +365,7 @@ def _billing_status_to_cache(status: object) -> Optional[dict]:
         features = {
             k: v for k, v in dataclasses.asdict(status.features).items() if v is not None
         }
-    return {
+    cached: dict = {
         "tier": status.tier,
         "free_writes_used": status.free_writes_used,
         "free_writes_limit": status.free_writes_limit,
@@ -373,6 +373,14 @@ def _billing_status_to_cache(status: object) -> Optional[dict]:
         "resets_at": status.resets_at,
         "features": features,
     }
+    # Quota figures from the relay (write-quota source of truth §4.2): carry
+    # them only when the relay sent them, so a missing key means "unknown",
+    # never a hardcoded cap.
+    if status.upgrade_writes_limit is not None:
+        cached["upgrade_writes_limit"] = status.upgrade_writes_limit
+    if status.write_grace is not None:
+        cached["write_grace"] = status.write_grace
+    return cached
 
 
 def _cache_billing_status(state: "PluginState", status: object) -> Optional[dict]:

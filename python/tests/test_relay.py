@@ -144,6 +144,38 @@ class TestBillingStatusParsing:
         assert status.features is not None
         assert status.features.latest_stable_python is None
 
+    @pytest.mark.asyncio
+    async def test_billing_status_parses_upgrade_and_grace(self):
+        """Spec: write-quota source of truth §3.3 — the relay sends the Pro
+        cap (Free wallets only) and the grace allowance alongside the
+        tier-correct ``free_writes_limit``."""
+        rc = self._relay_with_response(
+            {
+                "tier": "free",
+                "free_writes_used": 1,
+                "free_writes_limit": 250,
+                "upgrade_writes_limit": 3000,
+                "write_grace": 0,
+            }
+        )
+        status = await rc.get_billing_status()
+        assert status.upgrade_writes_limit == 3000
+        assert status.write_grace == 0
+
+    @pytest.mark.asyncio
+    async def test_billing_status_without_new_fields(self):
+        """An older relay sends neither field: both parse to None."""
+        rc = self._relay_with_response(
+            {
+                "tier": "pro",
+                "free_writes_used": 10,
+                "free_writes_limit": 3000,
+            }
+        )
+        status = await rc.get_billing_status()
+        assert status.upgrade_writes_limit is None
+        assert status.write_grace is None
+
 
 class TestSubgraphWalletHeader:
     """issue #486 — recall returned 0 results for Pro vaults.

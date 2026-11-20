@@ -23,6 +23,7 @@ import json
 import tempfile
 import time
 from pathlib import Path
+from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -44,13 +45,20 @@ _SERVER_FEATURES = dict(
 )
 
 
-def _status(used: int = 0, limit: int = 250, tier: str = "free", **features) -> BillingStatus:
+def _status(
+    used: int = 0,
+    limit: int = 250,
+    tier: str = "free",
+    upgrade: Optional[int] = None,
+    **features,
+) -> BillingStatus:
     feats = dict(_SERVER_FEATURES)
     feats.update(features)
     return BillingStatus(
         tier=tier,
         free_writes_used=used,
         free_writes_limit=limit,
+        upgrade_writes_limit=upgrade,
         features=BillingFeatures(**feats),
     )
 
@@ -206,6 +214,31 @@ def test_billing_status_to_cache_shape():
     # Non-BillingStatus objects (e.g. a bare MagicMock) are not cached.
     assert _billing_status_to_cache(MagicMock()) is None
     assert _billing_status_to_cache({"no": "tier"}) is None
+
+
+def test_billing_status_to_cache_carries_upgrade_fields():
+    """Spec: write-quota source of truth §4.2 — the cache must carry the
+    relay's Pro-cap and grace figures so the quota nudge never hardcodes
+    them; absent fields stay absent (older relay)."""
+    from totalreclaw.hermes.hooks import _billing_status_to_cache
+
+    st = BillingStatus(
+        tier="free",
+        free_writes_used=1,
+        free_writes_limit=250,
+        upgrade_writes_limit=3000,
+        write_grace=0,
+    )
+    data = _billing_status_to_cache(st)
+    assert data["upgrade_writes_limit"] == 3000
+    assert data["write_grace"] == 0
+
+    # No figure from the relay -> the key is absent, not None-valued.
+    data2 = _billing_status_to_cache(_status(used=1, limit=250, upgrade=3000))
+    assert data2["upgrade_writes_limit"] == 3000
+    data3 = _billing_status_to_cache(_status(used=1, limit=250))
+    assert "upgrade_writes_limit" not in data3
+    assert "write_grace" not in data3
 
 
 # ---------------------------------------------------------------------------

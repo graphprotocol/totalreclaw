@@ -888,6 +888,10 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
             "tier": billing.tier,
             "free_writes_used": billing.free_writes_used,
             "free_writes_limit": billing.free_writes_limit,
+            # Relay-sourced quota figures (write-quota source of truth §3.3):
+            # the Pro cap (Free wallets only) and the grace allowance.
+            "upgrade_writes_limit": billing.upgrade_writes_limit,
+            "write_grace": billing.write_grace,
             "expires_at": billing.expires_at,
             "account_id": sa,
             "wallet_address": sa,
