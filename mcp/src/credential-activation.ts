@@ -88,7 +88,7 @@ const INVALID_CREDENTIALS_MESSAGE =
 const ACTIVATION_FAILED_MESSAGE =
   'TotalReclaw found a credentials file but could not start with it just now (the reason is in the ' +
   'MCP server log). Nothing is stored or read until it works. Calling any TotalReclaw tool again ' +
-  'retries; so does restarting the app.';
+  'after about 10 seconds retries; so does restarting the app.';
 
 type FileSignature = string;
 
