@@ -49,7 +49,7 @@ pub(crate) fn build_relay_headers(
 pub(crate) fn quota_exceeded(server_text: &str) -> Error {
     crate::billing::invalidate_cache();
     Error::QuotaExceeded(format!(
-        "Quota exceeded (403). Billing cache invalidated. Upgrade to Pro for unlimited storage. Server: {}",
+        "Quota exceeded (403). Billing cache invalidated. Upgrade to Pro for a higher monthly limit. Server: {}",
         server_text
     ))
 }
@@ -92,7 +92,13 @@ pub struct GraphQLResponse<T> {
 #[derive(Deserialize)]
 pub struct BillingStatus {
     pub tier: Option<String>,
+    /// The relay sends `free_writes_used` (the field predates tiering and
+    /// counts every tier); `facts_used` is kept as the canonical name.
+    #[serde(alias = "free_writes_used")]
     pub facts_used: Option<u64>,
+    /// The relay sends `free_writes_limit` (the cap for the CURRENT tier,
+    /// sourced from Stripe via `tiers.write_quota`).
+    #[serde(alias = "free_writes_limit")]
     pub facts_limit: Option<u64>,
     pub features: Option<serde_json::Value>,
 }
