@@ -17,6 +17,8 @@ Download the file for your computer:
 
 Double-click the file, click **Install**, and leave **Server URL (advanced)** empty. If double-clicking doesn't open Claude Desktop, open it, go to **Settings → Extensions**, and drag the file there.
 
+Claude Desktop warns that the extension can access everything on your computer. It shows this warning for any extension installed from a file, because extensions run as normal programs on your computer. TotalReclaw's code is [open source](https://github.com/graphprotocol/totalreclaw/tree/main/mcp).
+
 TotalReclaw doesn't run on Intel Macs yet. To check, open Apple menu → **About This Mac**: a supported Mac shows "Apple M…" next to **Chip**.
 
 ### 2. Set up your account
