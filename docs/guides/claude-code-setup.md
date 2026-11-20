@@ -76,7 +76,7 @@ MCP is stateless JSON-RPC — there is no auto-reload, the host has to spawn a f
 
 Call `totalreclaw_status` first.
 
-- If it reports a configured account, skip to Step 6: the server found an existing `~/.totalreclaw/credentials.json` from another TotalReclaw client on this machine and is using it.
+- If it reports a configured account, skip to Step 5: the server found an existing `~/.totalreclaw/credentials.json` from another TotalReclaw client on this machine and is using it.
 - If it returns `not_configured` with a `reason` (for example `keychain_wrapped`: Hermes keeps the phrase in the system keychain, which the server can't read yet), tell the user the `message` in plain words and stop. Don't pair.
 - If it returns `not_configured` with no `reason`, continue below.
 
@@ -91,13 +91,7 @@ Then add the one line that matches their answer:
 
 Wait for `done`. If the link expired or the page couldn't finish, call `totalreclaw_pair` again for a fresh link and PIN. Do not at any point ask the user to type the phrase into chat or into a config file. Do not run `npx @totalreclaw/mcp-server setup` via your shell tool — its stdout contains the phrase.
 
-### Step 5 — Restart the host again
-
-Pairing writes `~/.totalreclaw/credentials.json`, and the server only reads it at startup. Tell the user verbatim:
-
-> *Almost done. Restart your host once more, the same way as before, so TotalReclaw picks up your account. Reply `done` once it's back up.*
-
-### Step 6 — Verify
+### Step 5 — Verify
 
 Once the user replies `done`, ask the agent's own internal toolset (yourself): *"Are TotalReclaw tools bound?"* List the `totalreclaw_*` tools you can see. If `totalreclaw_remember`, `totalreclaw_recall`, `totalreclaw_pin`, etc. are present and don't return `"TotalReclaw is not configured"`, confirm: *"TotalReclaw is set up. Ask me to remember or recall anything."* If they're missing, the host didn't pick up the config — re-prompt the restart in Step 3. If they return "not configured", pairing didn't finish — go back to Step 4.
 
@@ -157,7 +151,7 @@ claude mcp add -s user totalreclaw -- npx -y @totalreclaw/mcp-server
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 | IronClaw | `~/.ironclaw/mcp.json` or IronClaw dashboard — see [ironclaw-setup.md](./ironclaw-setup.md) |
 
-Restart the host, then ask your agent *"Set up TotalReclaw"*. It calls `totalreclaw_pair` and gives you a link and PIN; finish setup in the browser, then restart the host once more. Verify by asking *"Do you have access to TotalReclaw memory tools?"*.
+Restart the host, then ask your agent *"Set up TotalReclaw"*. It calls `totalreclaw_pair` and gives you a link and PIN; finish setup in the browser. Verify by asking *"Do you have access to TotalReclaw memory tools?"*.
 
 ### Advanced: recovery phrase in the host config (not recommended)
 
@@ -261,7 +255,7 @@ Upgrade: *"Upgrade my TotalReclaw subscription."*
 
 - **Agent says "I'm not familiar with TotalReclaw"**: paste the canonical message above with the URL — the agent fetches the guide and follows the install steps.
 - **Agent can't see TotalReclaw tools after restart**: confirm `claude mcp list` (Claude Code) or your host's MCP UI lists `totalreclaw`, then restart the host again.
-- **Tools return "TotalReclaw is not configured"**: pairing hasn't finished, or the host wasn't restarted after it. Ask your agent to *"Set up TotalReclaw"* (it calls `totalreclaw_pair`), finish in the browser, then restart the host. Your host's MCP server logs show a `TotalReclaw configured` line once it worked.
+- **Tools return "TotalReclaw is not configured"**: pairing hasn't finished. Ask your agent to *"Set up TotalReclaw"* (it calls `totalreclaw_pair`) and finish in the browser. If it still says so afterwards, restart the host. Your host's MCP server logs show a `TotalReclaw configured` line once it worked.
 - **`totalreclaw_pair` is missing, or the pairing page says "Gateway could not finish pairing"**: you may be running an older cached server (before 3.5.1 it stopped waiting for the browser after 60 seconds). Set `args` to `["-y", "@totalreclaw/mcp-server@latest"]`, restart the host, and ask for a new link.
 - **`totalreclaw_pair` says TotalReclaw is already set up**: a credentials file already exists on this computer, so pairing won't replace it. If tools still say "not configured", restart the host; if they mention the keychain, the account belongs to a Hermes install that keeps its phrase in the system keychain, which the MCP server can't read yet.
 - **"Not authenticated" / 401**: if you imported an existing phrase, check it — exact words, exact order. Pair again with `mode: "import"` to re-enter it.
