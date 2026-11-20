@@ -287,7 +287,10 @@ export async function handleImportFrom(
 
     // Store facts via client.remember()
     let imported = 0;
-    let skippedDuplicate = 0;
+    // The self-hosted server reports a content-fingerprint duplicate inside a
+    // successful response, never as an error, and the client sends no
+    // fingerprint, so nothing here is counted as a duplicate (#778).
+    const skippedDuplicate = 0;
     const skippedInvalid = 0;
     const storeErrors: ImportResult['errors'] = [];
 
@@ -311,18 +314,12 @@ export async function handleImportFrom(
         await client.remember(fact.text, metadata);
         imported++;
       } catch (e) {
-        const msg = e instanceof Error ? e.message : 'Unknown error';
-
-        // Content fingerprint dedup returns 409
-        if (msg.includes('409') || msg.includes('duplicate') || msg.includes('fingerprint')) {
-          skippedDuplicate++;
-        } else {
-          storeErrors.push({
-            index: i,
-            text_preview: fact.text.slice(0, 60),
-            error: msg,
-          });
-        }
+        // Every error is a real failure: the fact was not stored (#778).
+        storeErrors.push({
+          index: i,
+          text_preview: fact.text.slice(0, 60),
+          error: e instanceof Error ? e.message : 'Unknown error',
+        });
       }
 
       // Limit individual errors reported
@@ -337,7 +334,7 @@ export async function handleImportFrom(
     }
 
     const result: ImportResult = {
-      success: imported > 0 || skippedDuplicate > 0,
+      success: imported > 0,
       source: input.source,
       total_found: parseResult.facts.length,
       imported,
