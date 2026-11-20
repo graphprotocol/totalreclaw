@@ -174,6 +174,7 @@ import {
   BILLING_CACHE_PATH,
   type BillingCache,
 } from './billing/billing-cache.js';
+import { formatQuotaWarning } from './billing/quota-warning.js';
 import {
   ensureMemoryHeaderFile,
   loadCredentialsJson,
@@ -341,8 +342,6 @@ let welcomeBackMessage: string | null = null;
 // OpenClaw's `potential-exfiltration` scanner rule, same per-file pattern as
 // `env-harvesting` fixed in 3.0.4/3.0.5). `readBillingCache`, `writeBillingCache`,
 // `BILLING_CACHE_PATH`, and the `BillingCache` type are imported above.
-
-const QUOTA_WARNING_THRESHOLD = 0.8; // 80%
 
 /**
  * Check if LLM-guided dedup is enabled.
@@ -3067,7 +3066,7 @@ const plugin = {
           // Restores the retired totalreclaw_upgrade agent tool (cd21176).
           // Self-contained: POST /v1/billing/checkout → checkout_url.
           tr.command('upgrade')
-            .description('Get a Stripe checkout URL to upgrade to TotalReclaw Pro (unlimited memories on Gnosis mainnet).')
+            .description('Get a Stripe checkout URL to upgrade to TotalReclaw Pro (higher monthly memory cap).')
             .option('--json', 'Emit machine-parseable JSON (required for agent shell calls)')
             .action(async (opts: { json?: boolean }) => {
               try {
@@ -3698,8 +3697,8 @@ const plugin = {
             const cache = readBillingCache();
             const tier = cache?.tier || 'free';
             const tierInfo = tier === 'pro'
-              ? 'You are on the **Pro** tier — unlimited memories, permanently stored on Gnosis mainnet.'
-              : 'You are on the **Free** tier — memories stored on testnet. (Upgrade to Pro: run `openclaw totalreclaw upgrade` on the gateway host for a Stripe checkout URL.)';
+              ? 'You are on the **Pro** tier — a higher monthly memory cap, permanently stored on Gnosis mainnet.'
+              : 'You are on the **Free** tier — memories permanently stored on Gnosis mainnet, with a monthly cap. (Upgrade to Pro: run `openclaw totalreclaw upgrade` on the gateway host for a Stripe checkout URL.)';
             welcomeBack = `\n\nTotalReclaw is active. I will automatically remember important things from our conversations and recall relevant context at the start of each session. ${tierInfo}`;
           }
 
@@ -3731,11 +3730,12 @@ const plugin = {
                 writeBillingCache(cache);
               }
             }
-            if (cache && cache.free_writes_limit > 0) {
-              const usageRatio = cache.free_writes_used / cache.free_writes_limit;
-              if (usageRatio >= QUOTA_WARNING_THRESHOLD) {
-                billingWarning = `\n\nTotalReclaw quota warning: ${cache.free_writes_used}/${cache.free_writes_limit} memories used this month (${Math.round(usageRatio * 100)}%). Visit https://totalreclaw.xyz/pricing to upgrade.`;
-              }
+            // Tier-aware quota warning (write-quota source of truth §4.3):
+            // Pro gets a reset notice with no upgrade pitch; no warning when
+            // the relay sent no limit.
+            if (cache) {
+              const w = formatQuotaWarning(cache);
+              if (w) billingWarning = w;
             }
           } catch {
             // Best-effort — don't block on billing check failure.

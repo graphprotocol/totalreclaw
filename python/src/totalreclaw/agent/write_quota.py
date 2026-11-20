@@ -30,8 +30,6 @@ logger = logging.getLogger(__name__)
 #: Bound on the billing lookup made when a refusal is first announced.
 BILLING_LOOKUP_TIMEOUT_S = 5.0
 
-_PRO_ALLOWANCE = "3,000 memories a month"
-
 
 def next_monthly_reset(now: Optional[datetime] = None) -> datetime:
     """00:00 UTC on the 1st of the month after *now* (the relay's reset)."""
@@ -42,12 +40,12 @@ def next_monthly_reset(now: Optional[datetime] = None) -> datetime:
 
 
 def fill_write_quota_details(err: "RelayWriteQuotaExceeded", status: Optional[BillingStatus]) -> None:
-    """Fill *err*'s ``tier`` / ``used`` / ``limit`` / ``resets_at`` from a
-    billing status. Values the relay already sent win.
+    """Fill *err*'s ``tier`` / ``used`` / ``limit`` / ``upgrade_limit`` /
+    ``resets_at`` from a billing status. Values the relay already sent win.
 
-    ``used`` / ``limit`` are only taken for the free tier: the relay reports
-    ``free_writes_limit`` (the free cap) for Pro accounts too, so the pair is
-    not meaningful there.
+    ``used`` / ``limit`` are only taken for the free tier: a Pro account is
+    refused only once it is past its cap plus the grace (``write_grace``), so
+    the pair would read like "4,000 of 3,000" and is left out.
     """
     if isinstance(status, BillingStatus):
         if err.tier is None and isinstance(status.tier, str):
@@ -57,6 +55,13 @@ def fill_write_quota_details(err: "RelayWriteQuotaExceeded", status: Optional[Bi
                 err.used = status.free_writes_used
             if err.limit is None and isinstance(status.free_writes_limit, int) and status.free_writes_limit > 0:
                 err.limit = status.free_writes_limit
+        if (
+            err.upgrade_limit is None
+            and isinstance(status.upgrade_writes_limit, int)
+            and not isinstance(status.upgrade_writes_limit, bool)
+            and status.upgrade_writes_limit > 0
+        ):
+            err.upgrade_limit = status.upgrade_writes_limit
         if err.resets_at is None:
             err.resets_at = _parse_resets_at(status.resets_at)
     if err.resets_at is None:
@@ -110,11 +115,18 @@ def format_write_quota_notice(err: "RelayWriteQuotaExceeded", *, queued: int = 0
             f" {lost} new {'memory' if lost == 1 else 'memories'} could not be "
             f"kept and {'is' if lost == 1 else 'are'} lost."
         )
-    upgrade = (
-        ""
-        if _is_pro(err)
-        else f" To keep saving now, offer totalreclaw_upgrade (Pro: {_PRO_ALLOWANCE})."
-    )
+    if _is_pro(err):
+        upgrade = ""
+    elif isinstance(err.upgrade_limit, int):
+        upgrade = (
+            " To keep saving now, offer totalreclaw_upgrade "
+            f"(Pro: {err.upgrade_limit:,} memories a month)."
+        )
+    else:
+        upgrade = (
+            " To keep saving now, offer totalreclaw_upgrade "
+            "(Pro has a higher monthly allowance)."
+        )
     return (
         "[totalreclaw] New memories are NOT being saved: this account has used "
         f"its monthly memory allowance{_usage(err)}. Memories saved earlier are "

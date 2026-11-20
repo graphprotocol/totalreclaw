@@ -143,10 +143,23 @@ describe('dispatch guard turns a rethrown quota error into the quota response', 
   });
 });
 
-describe('quota and tier copy (Stripe is the source of truth: Free 250, Pro 3,000)', () => {
+describe('quota and tier copy (Stripe is the source of truth: caps come from billing)', () => {
   test('no source file still says Pro is 1,500', () => {
     const { execSync } = require('node:child_process') as typeof import('node:child_process');
     const out = execSync('grep -rnE "1,500|1500" src README.md SKILL.md || true', { cwd: __dirname + '/..' }).toString();
+    expect(out).toBe('');
+  });
+
+  test('no source file hardcodes a quota cap', () => {
+    // R-C: agent-facing copy carries no quota numbers. Caps render at runtime
+    // from the billing snapshot. Patterns are quota-wording-shaped so
+    // unrelated numbers (e.g. timeouts) don't trip the guard. README stays
+    // out of scope: it is a human doc and may cite the caps (R-D).
+    const { execSync } = require('node:child_process') as typeof import('node:child_process');
+    const out = execSync(
+      'grep -rnE "Free is 250|Pro is 3,000|250 writes|3,000 memories|3,000\\)" src || true',
+      { cwd: __dirname + '/..' },
+    ).toString();
     expect(out).toBe('');
   });
 });

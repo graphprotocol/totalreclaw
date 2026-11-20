@@ -103,12 +103,12 @@ Pattern is always **recall first → mutate second**, because the mutation tools
 
 ## Tiers + pricing
 
-**Canonical source for live numbers:** `totalreclaw_status` (returns `tier`, `free_writes_used`, `free_writes_limit` for the current account). **Canonical source for catalogue / prices:** <https://totalreclaw.xyz/pricing>. Don't invent dollar amounts and don't name the underlying network — quote what `totalreclaw_status` returns or point at the URL.
+**Canonical source for live numbers:** `totalreclaw_status` (returns `tier`, `free_writes_used`, `free_writes_limit` — the cap for the current tier — and, on Free, `upgrade_writes_limit`, the Pro cap). **Canonical source for catalogue / prices:** <https://totalreclaw.xyz/pricing>. Don't invent dollar amounts and don't name the underlying network — quote what `totalreclaw_status` returns or point at the URL.
 
 | Tier | Monthly memory cap | Notes |
 |---|---|---|
-| **Free** | 250 memories/month | Permanent, end-to-end encrypted. No credit card. Cap resets monthly. |
-| **Pro** | 3,000 memories/month (price: `totalreclaw_status` or the pricing URL) | Same encryption + ownership. Adds LLM-guided dedup. Stripe checkout via `totalreclaw_upgrade`. |
+| **Free** | Monthly cap: `free_writes_limit` from `totalreclaw_status` | Permanent, end-to-end encrypted. No credit card. Cap resets monthly. |
+| **Pro** | Higher monthly cap: `upgrade_writes_limit` while on Free, `free_writes_limit` once on Pro (price: `totalreclaw_status` or the pricing URL) | Same encryption + ownership. Adds LLM-guided dedup. Stripe checkout via `totalreclaw_upgrade`. |
 
 Both tiers: encryption, ownership, and on-chain durability are identical. Tier only changes the monthly memory cap + Pro's dedup feature.
 
@@ -116,7 +116,7 @@ Both tiers: encryption, ownership, and on-chain durability are identical. Tier o
 
 The plugin fetches billing on every `on_session_start` and caches it for 2 hours. It auto-injects warnings into your context at these thresholds — when you see them, surface them to the user:
 
-- **>80% usage** — soft warning. Mention casually: *"You're at `<used>` / `<limit>` of your free-tier quota this month. Upgrade to Pro for 3,000/month — want me to open the upgrade link?"* Wait for confirmation before calling `totalreclaw_upgrade`.
+- **>80% usage** — soft warning. Mention casually: *"You're at `<used>` / `<limit>` of your free-tier quota this month. Upgrade to Pro for `<upgrade_writes_limit>`/month — want me to open the upgrade link?"* Wait for confirmation before calling `totalreclaw_upgrade`.
 - **Monthly write allowance used up** (relay 403 `quota_exceeded` on a write) — a `[totalreclaw] New memories are NOT being saved: ...` context line (once per session), or a `totalreclaw_remember` result with `error_code: "quota_exceeded"` (`stored: false`, plus `tier` / `used` / `limit` / `resets_at` / `upgrade_url`). Tell the user in one or two sentences that new memories are not being saved and when the allowance resets; never say a memory was saved. Free tier: offer `totalreclaw_upgrade`. Auto-extracted memories and the session summary are kept on this device and saved automatically once saving works again (reset or upgrade); a `[totalreclaw] Saving memories works again: ...` line confirms it. A refused explicit `totalreclaw_remember` is not queued: say it was not saved.
 - **First successful pair** → the setup-flow confirmation already includes tier + limit. Do not re-emit the same info on subsequent first-message-of-session.
 - **Read denial (quota / rate limit)** — DIFFERENT from the write-quota warning above. A `[totalreclaw] Memory lookups are paused: ...` context line (or a `totalreclaw_recall`/`_export`/`_pin`/`_unpin`/`_retype`/`_set_scope` result carrying `error_code: "read_quota_exceeded"` or `"rate_limited"`) means the vault could NOT be searched right now — it does **not** mean the user has no memories. Relay the message to the user in one or two sentences; never say "you have no memories" or invent a count. New memories keep saving during the pause. Lookups resume automatically.
@@ -131,7 +131,7 @@ User intent → action:
 |---|---|
 | "How much does it cost?" / "What's the pricing?" / "Is it free?" | Cite the table above + pricing URL. Don't quote a `$` figure unless the user explicitly asked for the current Pro price AND you just called `totalreclaw_status`. |
 | User asks to upgrade / asks how to get Pro / hits a 403 | Call `totalreclaw_upgrade` → returns a Stripe checkout URL. Emit ONE user-visible line: *"Open `<url>` in your browser to complete the upgrade. Reply `done` once the payment page confirms."* DO NOT paraphrase the URL. |
-| User reports payment succeeded ("done") | Call `totalreclaw_status` once to refresh the cached tier. Emit a single confirmation: *"✓ You're now on TotalReclaw Pro — 3,000 memories/month."* |
+| User reports payment succeeded ("done") | Call `totalreclaw_status` once to refresh the cached tier. Emit a single confirmation: *"✓ You're now on TotalReclaw Pro — `<free_writes_limit>` memories/month."* |
 | User wants to cancel / downgrade | Direct them to <https://totalreclaw.xyz/pricing> — the Stripe customer portal is the only canonical cancel path. The plugin does not expose a downgrade tool. |
 
 ### Forbidden tier claims (deny-list)
@@ -142,7 +142,7 @@ These statements are WRONG. Never write any of them — they fabricate a pricing
 - "Memories expire" — memories are permanent regardless of tier.
 - "You need to upgrade to use encryption" — E2E encryption is identical across tiers.
 - "Self-hosted is automatically Pro" — self-hosted bypasses the managed relay; tiers / limits only apply to managed users.
-- "Pro = unlimited" — Pro is **3,000/month**, NOT unlimited. Saying "unlimited" silently breaks user expectations when they hit the cap.
+- "Pro = unlimited" — Pro has a monthly cap (`free_writes_limit` once on Pro), NOT unlimited. Saying "unlimited" silently breaks user expectations when they hit the cap.
 - **Naming the underlying network / chain to the user** (e.g. "Gnosis", "mainnet", "Base Sepolia", "testnet") — users don't need it and it only confuses. Cite tier + quota via `totalreclaw_status`; never the chain.
 - Inventing `$` amounts. The current Pro monthly price is the one returned by `totalreclaw_status` OR shown at the pricing URL — never anywhere else.
 

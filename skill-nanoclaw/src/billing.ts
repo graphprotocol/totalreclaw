@@ -16,6 +16,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as wasm from '@totalreclaw/core';
+import { formatQuotaWarning } from './quota-warning.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -24,7 +25,6 @@ import * as wasm from '@totalreclaw/core';
 const BILLING_CACHE_DIR = path.join(process.env.HOME ?? '/home/node', '.totalreclaw');
 const BILLING_CACHE_PATH = path.join(BILLING_CACHE_DIR, 'billing-cache.json');
 const BILLING_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
-const QUOTA_WARNING_THRESHOLD = 0.8; // 80%
 
 // ---------------------------------------------------------------------------
 // Types
@@ -236,17 +236,14 @@ export async function fetchBillingStatus(ctx: BillingContext): Promise<BillingCa
 /**
  * Generate a quota warning string if usage exceeds the threshold.
  *
+ * Tier-aware (write-quota source of truth §4.3): Pro gets a reset notice
+ * with no upgrade pitch; numbers come from the cache, never hardcoded; no
+ * warning when the relay sent no limit. Delegates to quota-warning.ts.
+ *
  * @returns Warning text to inject into agent context, or empty string.
  */
 export function getQuotaWarning(cache: BillingCache | null): string {
-  if (!cache || cache.free_writes_limit <= 0) return '';
-
-  const usageRatio = cache.free_writes_used / cache.free_writes_limit;
-  if (usageRatio >= QUOTA_WARNING_THRESHOLD) {
-    return `\n\nTotalReclaw quota warning: ${cache.free_writes_used}/${cache.free_writes_limit} memories used this month (${Math.round(usageRatio * 100)}%). Use the totalreclaw_upgrade tool to upgrade to Pro.`;
-  }
-
-  return '';
+  return formatQuotaWarning(cache ?? { free_writes_used: 0, free_writes_limit: 0 }) ?? '';
 }
 
 /**

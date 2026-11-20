@@ -108,15 +108,27 @@ impl BillingCache {
     }
 
     /// Human-readable quota warning message (or None if under threshold).
+    ///
+    /// Tier-aware (spec: write-quota source of truth §4.4): a Pro user past
+    /// the threshold gets a reset notice with no upgrade pitch, and the copy
+    /// never claims Pro is unlimited — it isn't (the relay reports the cap
+    /// per tier from Stripe).
     pub fn quota_warning_message(&self) -> Option<String> {
         if !self.is_quota_warning() {
             return None;
         }
         let pct = (self.quota_fraction() * 100.0).round() as u32;
-        Some(format!(
-            "Memory usage at {}% ({}/{} memories). Upgrade to Pro for unlimited storage.",
-            pct, self.facts_used, self.facts_limit
-        ))
+        if self.tier == "pro" {
+            Some(format!(
+                "Memory usage at {}% ({}/{} memories). The quota resets on the 1st of next month.",
+                pct, self.facts_used, self.facts_limit
+            ))
+        } else {
+            Some(format!(
+                "Memory usage at {}% ({}/{} memories). Upgrade to Pro for a higher monthly limit.",
+                pct, self.facts_used, self.facts_limit
+            ))
+        }
     }
 
     /// Is this a Pro tier user?
@@ -191,7 +203,7 @@ pub async fn fetch_billing_status(relay: &RelayClient) -> Result<BillingCache> {
     let cache = BillingCache {
         tier: status.tier.unwrap_or_else(|| "free".into()),
         facts_used: status.facts_used.unwrap_or(0),
-        facts_limit: status.facts_limit.unwrap_or(500),
+        facts_limit: status.facts_limit.unwrap_or(0),
         features,
         checked_at: now_ms,
     };
@@ -340,6 +352,51 @@ mod tests {
         let msg = cache.quota_warning_message();
         assert!(msg.is_some());
         assert!(msg.unwrap().contains("90%"));
+    }
+
+    #[test]
+    fn test_billing_status_reads_relay_field_names() {
+        // Spec: write-quota source of truth §4.4 — the relay sends
+        // `free_writes_used` / `free_writes_limit`; ZeroClaw's serde struct
+        // must accept those names (it previously read `facts_used` /
+        // `facts_limit`, which the relay never sends, so usage was always
+        // 0/500 and the warning could never fire).
+        let status: crate::relay::BillingStatus = serde_json::from_str(
+            r#"{"tier":"pro","free_writes_used":10,"free_writes_limit":3000}"#,
+        )
+        .unwrap();
+        assert_eq!(status.facts_used, Some(10));
+        assert_eq!(status.facts_limit, Some(3000));
+    }
+
+    #[test]
+    fn test_quota_warning_pro_has_no_upgrade_pitch() {
+        let cache = BillingCache {
+            tier: "pro".into(),
+            facts_used: 2700,
+            facts_limit: 3000,
+            features: FeatureFlags::default(),
+            checked_at: 0,
+        };
+        let msg = cache.quota_warning_message().unwrap();
+        assert!(msg.contains("90%"));
+        assert!(msg.contains("resets on the 1st"));
+        assert!(!msg.contains("Upgrade"));
+        assert!(!msg.contains("unlimited"));
+    }
+
+    #[test]
+    fn test_quota_warning_free_has_no_unlimited_claim() {
+        let cache = BillingCache {
+            tier: "free".into(),
+            facts_used: 450,
+            facts_limit: 500,
+            features: FeatureFlags::default(),
+            checked_at: 0,
+        };
+        let msg = cache.quota_warning_message().unwrap();
+        assert!(msg.contains("Upgrade to Pro for a higher monthly limit"));
+        assert!(!msg.contains("unlimited"));
     }
 
     #[test]

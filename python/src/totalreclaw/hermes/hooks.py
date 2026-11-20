@@ -365,7 +365,7 @@ def _billing_status_to_cache(status: object) -> Optional[dict]:
         features = {
             k: v for k, v in dataclasses.asdict(status.features).items() if v is not None
         }
-    return {
+    cached: dict = {
         "tier": status.tier,
         "free_writes_used": status.free_writes_used,
         "free_writes_limit": status.free_writes_limit,
@@ -373,6 +373,14 @@ def _billing_status_to_cache(status: object) -> Optional[dict]:
         "resets_at": status.resets_at,
         "features": features,
     }
+    # Quota figures from the relay (write-quota source of truth §4.2): carry
+    # them only when the relay sent them, so a missing key means "unknown",
+    # never a hardcoded cap.
+    if status.upgrade_writes_limit is not None:
+        cached["upgrade_writes_limit"] = status.upgrade_writes_limit
+    if status.write_grace is not None:
+        cached["write_grace"] = status.write_grace
+    return cached
 
 
 def _cache_billing_status(state: "PluginState", status: object) -> Optional[dict]:
@@ -611,9 +619,9 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
             state.update_from_billing(billing)
 
             used = billing.get("free_writes_used", 0)
-            limit = max(billing.get("free_writes_limit", 250), 1)
+            limit = billing.get("free_writes_limit") or 0
             tier = billing.get("tier", "free")
-            if used / limit > 0.8:
+            if limit > 0 and used / limit > 0.8:
                 pct = int(used / limit * 100)
                 if tier == "pro":
                     nudge = (
@@ -621,9 +629,18 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
                         "resets on the 1st of next month."
                     )
                 else:
+                    # The Pro figure comes from the relay when it sends one;
+                    # otherwise the copy names no number (write-quota source
+                    # of truth §4.2 — never a hardcoded cap).
+                    up = billing.get("upgrade_writes_limit")
+                    target = (
+                        f"for {up:,} memories/month"
+                        if isinstance(up, int) and up > 0
+                        else "for a higher monthly cap"
+                    )
                     nudge = (
-                        "Free cap is 250 memories/month. Upgrade to Pro for "
-                        "3,000 memories/month — run "
+                        f"Free cap is {limit:,} memories/month. "
+                        f"Upgrade to Pro {target} — run "
                         "totalreclaw_upgrade or visit "
                         "https://totalreclaw.xyz/pricing."
                     )

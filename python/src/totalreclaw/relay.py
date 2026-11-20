@@ -372,9 +372,10 @@ def _classify_subgraph_error(resp: httpx.Response) -> RelayReadError:
 class RelayWriteQuotaExceeded(httpx.HTTPStatusError):
     """The relay refused a write: the monthly write quota is used up.
 
-    ``tier`` / ``used`` / ``limit`` / ``resets_at`` are ``None`` unless the
-    relay sends them (today it does not) or a caller fills them from
-    ``/v1/billing/status`` (``agent.write_quota.fill_write_quota_details``).
+    ``tier`` / ``used`` / ``limit`` / ``upgrade_limit`` / ``resets_at`` are
+    ``None`` unless the relay sends them (today it does not) or a caller
+    fills them from ``/v1/billing/status``
+    (``agent.write_quota.fill_write_quota_details``).
 
     ``batch_results`` is set by :meth:`TotalReclaw.remember_batch` when the
     refusal interrupted a batch: one entry per input fact, in input order —
@@ -393,6 +394,7 @@ class RelayWriteQuotaExceeded(httpx.HTTPStatusError):
         tier: Optional[str] = None,
         limit: Optional[int] = None,
         used: Optional[int] = None,
+        upgrade_limit: Optional[int] = None,
         resets_at: Optional[datetime] = None,
     ):
         self.status_code: int = response.status_code
@@ -402,6 +404,7 @@ class RelayWriteQuotaExceeded(httpx.HTTPStatusError):
         self.tier = tier
         self.limit = limit
         self.used = used
+        self.upgrade_limit = upgrade_limit
         self.resets_at = resets_at
         self.batch_results: Optional[list[Optional[str]]] = None
         detail = self.relay_message or "monthly write limit reached"
@@ -561,6 +564,13 @@ class BillingFeatures:
     latest_stable_python: Optional[str] = None
 
 
+def _optional_int(value: object) -> Optional[int]:
+    """Keep a relay value only when it is a real int (bools excluded)."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
 @dataclass
 class BillingStatus:
     tier: str
@@ -570,6 +580,11 @@ class BillingStatus:
     features: Optional[BillingFeatures] = None
     # Next monthly quota reset (ISO 8601, UTC), as the relay reports it.
     resets_at: Optional[str] = None
+    # Pro cap, sent by the relay for Free wallets only, so agent-facing copy
+    # never hardcodes it (spec: write-quota source of truth §3.3).
+    upgrade_writes_limit: Optional[int] = None
+    # Pro overshoot allowance (env-configured ops policy, exposed read-only).
+    write_grace: Optional[int] = None
 
 
 @dataclass
@@ -969,6 +984,8 @@ class RelayClient:
             expires_at=data.get("expires_at"),
             features=features,
             resets_at=data.get("resets_at") if isinstance(data.get("resets_at"), str) else None,
+            upgrade_writes_limit=_optional_int(data.get("upgrade_writes_limit")),
+            write_grace=_optional_int(data.get("write_grace")),
         )
 
     async def create_checkout(self) -> CheckoutResponse:
