@@ -46,6 +46,12 @@ export interface BillingStatusResponse {
   free_writes_limit: number;
   expires_at: string | null;
   features?: BillingFeatures;
+  /** Pro cap, sent by the relay for Free wallets only (spec: write-quota source of truth §3.3). */
+  upgrade_writes_limit?: number;
+  /** Pro overshoot allowance (env-configured ops policy, read-only here). */
+  write_grace?: number;
+  /** Writes left from purchased top-ups. */
+  topup_writes_remaining?: number;
 }
 
 /** Last raw billing response (for candidate pool caching in index.ts). */
@@ -127,8 +133,8 @@ export async function handleStatus(
     // Format nicely for the LLM to present
     const tierLabel = billingJson.tier === 'pro' ? 'Pro' : 'Free';
     const usage = `${billingJson.free_writes_used}/${billingJson.free_writes_limit}`;
-    const remaining = billingJson.free_writes_limit - billingJson.free_writes_used;
-    // Both tiers have a MONTHLY quota cap (Free 250, Pro 3000; the relay reports the live limit). The counter
+    const remaining = Math.max(0, billingJson.free_writes_limit - billingJson.free_writes_used);
+    // The relay reports the live cap for this tier (tiers.write_quota, synced from Stripe). The counter
     // resets on the 1st of each calendar month. Surface this so the agent
     // doesn't have to guess between "monthly" vs "lifetime" when answering
     // user questions about their cap.
@@ -148,6 +154,10 @@ export async function handleStatus(
       `Smart Account: ${walletAddress}`,
       `Memories used this month: ${usage}`,
       `Remaining this month: ${remaining}`,
+      // Free wallets learn the Pro cap from the relay, never a hardcoded figure.
+      ...(billingJson.tier !== 'pro' && typeof billingJson.upgrade_writes_limit === 'number'
+        ? [`Pro: ${billingJson.upgrade_writes_limit.toLocaleString('en-US')} memories/month`]
+        : []),
       `Quota resets: 1st of each month`,
       expiresLabel,
     ].join('\n');
@@ -166,6 +176,15 @@ export async function handleStatus(
           quota_period: quotaPeriod,
           expires_at: billingJson.expires_at,
           scope_address: walletAddress,
+          ...(typeof billingJson.upgrade_writes_limit === 'number'
+            ? { upgrade_writes_limit: billingJson.upgrade_writes_limit }
+            : {}),
+          ...(typeof billingJson.write_grace === 'number'
+            ? { write_grace: billingJson.write_grace }
+            : {}),
+          ...(typeof billingJson.topup_writes_remaining === 'number'
+            ? { topup_writes_remaining: billingJson.topup_writes_remaining }
+            : {}),
           formatted,
         }),
       }],

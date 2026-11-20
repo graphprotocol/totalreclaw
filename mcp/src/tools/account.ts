@@ -86,6 +86,12 @@ interface BillingStatusResponse {
   free_writes_limit: number;
   expires_at: string | null;
   features?: Record<string, unknown>;
+  /** Pro cap, sent by the relay for Free wallets only (spec: write-quota source of truth §3.3). */
+  upgrade_writes_limit?: number;
+  /** Pro overshoot allowance (env-configured ops policy, read-only here). */
+  write_grace?: number;
+  /** Writes left from purchased top-ups. */
+  topup_writes_remaining?: number;
 }
 
 /**
@@ -128,7 +134,7 @@ export async function handleAccount(
 
   const billing = billingResult.data!;
   const tierLabel = billing.tier === 'pro' ? 'Pro' : 'Free';
-  const remaining = billing.free_writes_limit - billing.free_writes_used;
+  const remaining = Math.max(0, billing.free_writes_limit - billing.free_writes_used);
 
   return {
     content: [{
@@ -141,6 +147,15 @@ export async function handleAccount(
         writes_used: billing.free_writes_used,
         writes_limit: billing.free_writes_limit,
         remaining_writes: remaining,
+        ...(typeof billing.upgrade_writes_limit === 'number'
+          ? { upgrade_writes_limit: billing.upgrade_writes_limit }
+          : {}),
+        ...(typeof billing.write_grace === 'number'
+          ? { write_grace: billing.write_grace }
+          : {}),
+        ...(typeof billing.topup_writes_remaining === 'number'
+          ? { topup_writes_remaining: billing.topup_writes_remaining }
+          : {}),
         total_facts_stored: factCount,
         features: billing.features ?? {},
         credential: credentialStatus,
