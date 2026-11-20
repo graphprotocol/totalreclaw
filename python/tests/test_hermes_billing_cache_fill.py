@@ -339,6 +339,63 @@ def test_quota_warning_silent_at_or_below_80_percent(home):
 
 
 # ---------------------------------------------------------------------------
+# Quota nudge copy takes its numbers from the relay (write-quota source of
+# truth §4.2): Pro gets the relay's cap with no upgrade pitch, Free names
+# the relay's upgrade figure when it has one, and a missing limit skips
+# the warning instead of assuming 250.
+# ---------------------------------------------------------------------------
+
+
+def test_quota_nudge_pro_uses_relay_cap(home):
+    factory, _ = _make_client_factory(_returns(_status(used=2700, limit=3000, tier="pro")))
+    state = _new_state(factory)
+    _run_session_start(state, factory)
+
+    warning = state.get_quota_warning()
+    assert warning is not None
+    assert "2700/3000" in warning
+    assert "Pro cap is 3,000 memories/month" in warning
+    assert "Upgrade" not in warning
+
+
+def test_quota_nudge_free_with_upgrade_figure(home):
+    factory, _ = _make_client_factory(_returns(_status(used=210, limit=250, upgrade=3000)))
+    state = _new_state(factory)
+    _run_session_start(state, factory)
+
+    warning = state.get_quota_warning()
+    assert warning is not None
+    assert (
+        "Free cap is 250 memories/month. Upgrade to Pro for 3,000 "
+        "memories/month — run totalreclaw_upgrade or visit "
+        "https://totalreclaw.xyz/pricing."
+    ) in warning
+
+
+def test_quota_nudge_free_without_upgrade_figure(home):
+    factory, _ = _make_client_factory(_returns(_status(used=210, limit=250)))
+    state = _new_state(factory)
+    _run_session_start(state, factory)
+
+    warning = state.get_quota_warning()
+    assert warning is not None
+    assert "Upgrade to Pro for a higher monthly cap — run totalreclaw_upgrade" in warning
+    assert "3,000" not in warning
+
+
+def test_quota_nudge_skipped_when_limit_missing(home):
+    factory, _ = _make_client_factory(_returns(_status(used=10, limit=0)))
+    state = _new_state(factory)
+    # conftest pins TOTALRECLAW_SERVER_URL to staging, which queues the
+    # staging banner on the same channel; that banner has its own tests
+    # (test_env_binding_and_rc_banner.py). Mark it shown to isolate quota.
+    state._totalreclaw_staging_banner_shown = True
+    _run_session_start(state, factory)
+
+    assert state.get_quota_warning() is None
+
+
+# ---------------------------------------------------------------------------
 # 403 on write invalidates the cache
 # ---------------------------------------------------------------------------
 
