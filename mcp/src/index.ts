@@ -23,6 +23,7 @@ import { getLastBillingResponse, resetLastBillingResponse } from './tools/status
 import { createCredentialActivator } from './credential-activation.js';
 import type { ToolContext, ToolResponse } from './tools/types.js';
 import { isQuotaExceededError, rethrowIfQuota, shortErrorMessage, logWriteError } from './tools/write-errors.js';
+import { quotaExceededMessage } from './quota-copy.js';
 import { pickMemoryId } from './tools/helpers.js';
 import { classifyForgetTarget, forgetNotFoundResponse, forgetLookupFailedResponse } from './tools/forget.js';
 import {
@@ -265,6 +266,10 @@ const STORE_DEDUP_ENABLED = true;
 
 interface BillingCacheEntry {
   max_candidate_pool?: number;
+  /** Tier snapshot for the quota-exceeded copy (write-quota source of truth). */
+  tier?: string;
+  free_writes_limit?: number;
+  upgrade_writes_limit?: number;
   checked_at: number;
 }
 
@@ -321,6 +326,9 @@ function proactiveBillingFetch(state: SubgraphState): void {
         const features = raw.features as Record<string, unknown> | undefined;
         billingCache = {
           max_candidate_pool: features?.max_candidate_pool as number | undefined,
+          tier: raw.tier as string | undefined,
+          free_writes_limit: raw.free_writes_limit as number | undefined,
+          upgrade_writes_limit: raw.upgrade_writes_limit as number | undefined,
           checked_at: Date.now(),
         };
         setServerRecallTopK(features?.recall_top_k);
@@ -1870,7 +1878,10 @@ function quotaExceededResponse(): { content: Array<{ type: string; text: string 
       type: 'text',
       text: JSON.stringify({
         error: 'quota_exceeded',
-        message: 'You have reached your monthly memory limit. The counter resets on the 1st of the month. Upgrade to Pro for a higher monthly limit (Free is 250 writes a month, Pro is 3,000).',
+        // Tier-aware copy from the cached billing snapshot; no TTL check —
+        // any snapshot (even stale) beats none. Numbers come from the relay
+        // (Stripe), never hardcoded here (spec: write-quota source of truth).
+        message: quotaExceededMessage(billingCache),
         upgrade_url: 'Use totalreclaw_upgrade tool to get a checkout link',
       }),
     }],
@@ -1955,6 +1966,9 @@ async function statusHandler(args: unknown): Promise<ToolResponse> {
     if (raw?.features && generation === accountGeneration) {
       billingCache = {
         max_candidate_pool: raw.features.max_candidate_pool,
+        tier: raw.tier,
+        free_writes_limit: raw.free_writes_limit,
+        upgrade_writes_limit: raw.upgrade_writes_limit,
         checked_at: Date.now(),
       };
       setServerRecallTopK(raw.features.recall_top_k);
