@@ -6,6 +6,6 @@
     "qa": "node qa-vault.mjs"
   },
   "dependencies": {
-    "playwright": "^1.49.0"
+    "playwright": "^1.65.1"
   }
 }
