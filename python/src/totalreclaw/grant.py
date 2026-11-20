@@ -1,18 +1,19 @@
 """
 EIP-712 typed-data payload for ``SessionKeyPermissionGrant`` — Python side.
 
-Mirrors the Solidity ``SessionKeyModule._grantDigest`` construction byte-for-byte
+Mirrors the Solidity ``TotalReclawAccount._grantDigest`` construction byte-for-byte
 so a Python-signed grant verifies on-chain and a TS/viem-signed grant verifies
 in Python. The cross-language parity fixture (cred-9) is the locking test for
 that invariant.
 
 Spec: ``docs/specs/cred/session-key-delegation.md`` §3.1, §4.2, §4.3.
-Solidity reference: ``contracts/contracts/SessionKeyModule.sol`` (cred-5
-stage 2, PR #272 — merged 2026-05-27).
+Solidity reference: ``contracts/account/contracts/TotalReclawAccount.sol`` (Option E Phase 3,
+#636), which ported the grant wire format verbatim from the original
+``SessionKeyModule.sol`` (cred-5, PR #272; since removed — see git history).
 
 Cross-spec invariants enforced here:
 - Domain typehash, scope typehash, and grant typehash strings are duplicated
-  verbatim from ``SessionKeyModule.sol``. Any drift breaks on-chain verify.
+  verbatim from ``TotalReclawAccount.sol``. Any drift breaks on-chain verify.
 - ``selectors`` are hashed via ``keccak256(abi.encodePacked(selectors))`` —
   matching the Solidity ``keccak256(abi.encodePacked(g.selectors))`` over the
   ``bytes4[] memory`` field. **Non-obvious Solidity quirk (see #584):**
@@ -29,8 +30,10 @@ Cross-spec invariants enforced here:
   ``tests/parity/session-key-grant-roundtrip.ts`` and
   ``python/tests/test_session_key_signing.py::TestKnownAnswerDigest``).
 - Domain name is ``"TotalReclawSessionKey"``, version ``"1"``. ``chainId``
-  + ``verifyingContract`` (the SessionKeyModule address) are the binding
-  fields that prevent cross-chain / cross-module replay.
+  + ``verifyingContract`` are the binding fields that prevent cross-chain /
+  cross-account replay. Under ``TotalReclawAccount`` (P3-3)
+  ``verifyingContract`` MUST equal the Smart Account address itself (the same
+  value as ``account``) — the contract rejects any other value.
 """
 from __future__ import annotations
 
@@ -42,7 +45,7 @@ from eth_keys import keys as eth_keys
 from eth_utils import keccak, to_checksum_address
 
 # ---------------------------------------------------------------------------
-# Typehashes — MUST match SessionKeyModule.sol byte-for-byte
+# Typehashes — MUST match TotalReclawAccount.sol byte-for-byte
 # ---------------------------------------------------------------------------
 
 DOMAIN_NAME: str = "TotalReclawSessionKey"
@@ -65,7 +68,7 @@ GRANT_TYPEHASH: bytes = keccak(GRANT_TYPE_STR)
 DOMAIN_NAME_HASH: bytes = keccak(DOMAIN_NAME.encode())
 DOMAIN_VERSION_HASH: bytes = keccak(DOMAIN_VERSION.encode())
 
-# Selector constants (mirrors SessionKeyModule.sol).
+# Selector constants (mirrors TotalReclawAccount.sol).
 EXECUTE_SELECTOR: bytes = bytes.fromhex("b61d27f6")
 EXECUTE_BATCH_SELECTOR: bytes = bytes.fromhex("47e1da2a")
 
@@ -125,7 +128,8 @@ class SessionKeyPermissionGrant:
     """EVM chain id — replay-protection field. Module rejects mismatches."""
 
     verifying_contract: str
-    """SessionKeyModule address on this chain — replay-protection field."""
+    """Replay-protection field. Under ``TotalReclawAccount`` this MUST be the
+    Smart Account address (same as ``account``); the contract rejects any other value."""
 
     version: int = GRANT_VERSION
     """Grant format version. Module rejects unknown versions."""
@@ -158,7 +162,7 @@ class SessionKeyPermissionGrant:
         )
 
     # -----------------------------------------------------------------
-    # EIP-712 digest — MUST match SessionKeyModule._grantDigest byte-for-byte
+    # EIP-712 digest — MUST match TotalReclawAccount._grantDigest byte-for-byte
     # -----------------------------------------------------------------
 
     def scope_struct_hash(self) -> bytes:
@@ -251,7 +255,7 @@ class SessionKeyPermissionGrant:
     def to_install_struct_tuple(self) -> tuple:
         """Tuple matching Solidity ``PermissionGrant`` field order.
 
-        Field order (LOAD-BEARING — see SessionKeyModule.sol struct):
+        Field order (LOAD-BEARING — see TotalReclawAccount.sol struct):
           version, account, signer, target, selectors, valueMax,
           nonce, issuedAt, chainId, verifyingContract, masterSignature
         """
@@ -282,7 +286,7 @@ def sign_digest(digest: bytes, priv_key: bytes) -> bytes:
 
     Returns 65 bytes ``r ‖ s ‖ v`` with ``v`` in {27, 28} per Ethereum
     convention. Matches the Solidity ``ecrecover(digest, v, r, s)`` shape
-    used inside ``SessionKeyModule._recoverEcdsa``.
+    used inside ``TotalReclawAccount._recoverEcdsa``.
     """
     if len(digest) != 32:
         raise ValueError(f"digest must be 32 bytes; got {len(digest)}")
@@ -328,7 +332,7 @@ def encode_install_signature(
 ) -> bytes:
     """ABI-encode ``(PermissionGrant, bytes)`` for the lazy-install UserOp signature.
 
-    Matches the layout ``SessionKeyModule._decodeInstallSig`` decodes via
+    Matches the layout ``TotalReclawAccount._decodeInstallSig`` decodes via
     ``abi.decode(sig, (PermissionGrant, bytes))``.
     """
     if len(ecdsa_sig) != 65:

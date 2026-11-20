@@ -1,19 +1,12 @@
-# Foundry config for the TotalReclaw contracts package.
+# Foundry config for the TotalReclaw contracts package (EventfulDataEdge).
 #
-# Coexists with the existing Hardhat setup (`hardhat.config.ts` + the TS tests
-# under `test/`). Foundry is added 2026-05-27 for the cred-5 session-key
-# delegation work (per `docs/specs/cred/session-key-delegation.md` — the
-# Solidity-side spec requires Foundry-style unit tests + a `forge snapshot`
-# gas budget on the per-inner-call validator).
+# Hardhat (`hardhat.config.ts`) is kept only for the localhost dev-loop
+# deployer (`scripts/deploy.ts`); live deploys go through `script/*.s.sol`.
 #
-# Conventions:
-# - Solidity sources stay under `contracts/` (matches the Hardhat layout).
-# - Foundry tests go under `test/` alongside the existing `.test.ts` files,
-#   distinguished by the `.t.sol` extension. Hardhat ignores `.t.sol`;
-#   Foundry ignores `.test.ts`. Both build systems can coexist on this dir.
-# - External Solidity libs (ZeroDev kernel v3, account-abstraction v0.7
-#   contracts) land under `lib/` via `forge install` in cred-5 stage 2;
-#   `remappings.txt` keeps Hardhat oblivious to them.
+# `TotalReclawAccount` is a SEPARATE Foundry project under `account/` — see
+# its `foundry.toml` for why it must not share this project's remappings
+# (they would shift EventfulDataEdge's bytecode and break the staging
+# CREATE2 pin in `test/DataEdgeStagingCreate2.t.sol`).
 [profile.default]
 src = "contracts"
 test = "test"
@@ -23,13 +16,7 @@ solc_version = "0.8.24"
 optimizer = true
 optimizer_runs = 200
 via_ir = false
-# Hardhat's TS tests are filename-matched on `.test.ts`. We exclude them
-# from Foundry's compilation set so `forge build` doesn't trip on TS files.
 extra_output = ["storageLayout"]
-# cred-9 cross-language parity tests read the shared fixture at
-# `tests/parity/fixtures/session-key-grant-v1.json` (one level up from the
-# Foundry root). Grant read access to that path so `vm.readFile` works.
-fs_permissions = [{ access = "read", path = "../tests/parity/fixtures/" }]
 
 [fmt]
 line_length = 100
