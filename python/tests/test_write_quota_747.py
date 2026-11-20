@@ -929,3 +929,51 @@ def test_notice_counts_read_correctly(queued, lost, expected):
     notice = format_write_quota_notice(err, queued=queued, lost=lost)
     assert expected in notice
     assert "from this conversation" not in notice
+
+
+# ---------------------------------------------------------------------------
+# 8. The Pro figure in the notice comes from billing, never a constant
+#    (PR #788 review; spec §2 R-C: no hardcoded quota number)
+# ---------------------------------------------------------------------------
+
+
+class TestUpgradeFigureInNotice:
+    @staticmethod
+    def _status(**kw) -> BillingStatus:
+        fields = dict(
+            tier="free",
+            free_writes_used=250,
+            free_writes_limit=250,
+            resets_at="2026-12-01T00:00:00.000Z",
+        )
+        fields.update(kw)
+        return BillingStatus(**fields)
+
+    @staticmethod
+    def _refused(status: BillingStatus):
+        from totalreclaw.agent.write_quota import (
+            fill_write_quota_details,
+            format_write_quota_notice,
+        )
+
+        err = _quota_error()
+        fill_write_quota_details(err, status)
+        return err, format_write_quota_notice(err)
+
+    def test_free_with_upgrade_limit_names_the_pro_figure(self):
+        _, notice = self._refused(self._status(upgrade_writes_limit=3000))
+        assert "Pro: 3,000 memories a month" in notice
+
+    def test_free_without_upgrade_limit_omits_the_number(self):
+        _, notice = self._refused(self._status())
+        assert "Pro has a higher monthly allowance" in notice
+        assert "3,000" not in notice
+
+    def test_pro_notice_offers_no_upgrade(self):
+        _, notice = self._refused(self._status(tier="pro"))
+        assert "totalreclaw_upgrade" not in notice
+
+    def test_bool_upgrade_limit_is_ignored(self):
+        err, notice = self._refused(self._status(upgrade_writes_limit=True))
+        assert "Pro has a higher monthly allowance" in notice
+        assert err.upgrade_limit is None

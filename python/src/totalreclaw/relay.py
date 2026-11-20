@@ -372,9 +372,10 @@ def _classify_subgraph_error(resp: httpx.Response) -> RelayReadError:
 class RelayWriteQuotaExceeded(httpx.HTTPStatusError):
     """The relay refused a write: the monthly write quota is used up.
 
-    ``tier`` / ``used`` / ``limit`` / ``resets_at`` are ``None`` unless the
-    relay sends them (today it does not) or a caller fills them from
-    ``/v1/billing/status`` (``agent.write_quota.fill_write_quota_details``).
+    ``tier`` / ``used`` / ``limit`` / ``upgrade_limit`` / ``resets_at`` are
+    ``None`` unless the relay sends them (today it does not) or a caller
+    fills them from ``/v1/billing/status``
+    (``agent.write_quota.fill_write_quota_details``).
 
     ``batch_results`` is set by :meth:`TotalReclaw.remember_batch` when the
     refusal interrupted a batch: one entry per input fact, in input order —
@@ -393,6 +394,7 @@ class RelayWriteQuotaExceeded(httpx.HTTPStatusError):
         tier: Optional[str] = None,
         limit: Optional[int] = None,
         used: Optional[int] = None,
+        upgrade_limit: Optional[int] = None,
         resets_at: Optional[datetime] = None,
     ):
         self.status_code: int = response.status_code
@@ -402,6 +404,7 @@ class RelayWriteQuotaExceeded(httpx.HTTPStatusError):
         self.tier = tier
         self.limit = limit
         self.used = used
+        self.upgrade_limit = upgrade_limit
         self.resets_at = resets_at
         self.batch_results: Optional[list[Optional[str]]] = None
         detail = self.relay_message or "monthly write limit reached"
