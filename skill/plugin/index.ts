@@ -3066,7 +3066,7 @@ const plugin = {
           // Restores the retired totalreclaw_upgrade agent tool (cd21176).
           // Self-contained: POST /v1/billing/checkout → checkout_url.
           tr.command('upgrade')
-            .description('Get a Stripe checkout URL to upgrade to TotalReclaw Pro (unlimited memories on Gnosis mainnet).')
+            .description('Get a Stripe checkout URL to upgrade to TotalReclaw Pro (higher monthly memory cap).')
             .option('--json', 'Emit machine-parseable JSON (required for agent shell calls)')
             .action(async (opts: { json?: boolean }) => {
               try {
@@ -3697,8 +3697,8 @@ const plugin = {
             const cache = readBillingCache();
             const tier = cache?.tier || 'free';
             const tierInfo = tier === 'pro'
-              ? 'You are on the **Pro** tier — unlimited memories, permanently stored on Gnosis mainnet.'
-              : 'You are on the **Free** tier — memories stored on testnet. (Upgrade to Pro: run `openclaw totalreclaw upgrade` on the gateway host for a Stripe checkout URL.)';
+              ? 'You are on the **Pro** tier — a higher monthly memory cap, permanently stored on Gnosis mainnet.'
+              : 'You are on the **Free** tier — memories permanently stored on Gnosis mainnet, with a monthly cap. (Upgrade to Pro: run `openclaw totalreclaw upgrade` on the gateway host for a Stripe checkout URL.)';
             welcomeBack = `\n\nTotalReclaw is active. I will automatically remember important things from our conversations and recall relevant context at the start of each session. ${tierInfo}`;
           }
 
