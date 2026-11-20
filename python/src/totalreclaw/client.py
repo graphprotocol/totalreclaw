@@ -302,9 +302,14 @@ def per_fact_results(outcome: object, n: int) -> list[Optional[str]]:
     :class:`BatchIds`, a :class:`BatchStoreError` (#753) and a
     ``RelayWriteQuotaExceeded`` (#747) carry ``batch_results``. A plain list
     (a stub client's return value) is taken as already lined up with the
-    input. Any other error counts as nothing stored.
+    input. An error raised ``from`` one of those keeps its outcome:
+    ``run_sync`` re-raises a batch error that mentions interpreter shutdown
+    as a new ``InterpreterShutdownError`` (#777). Any other error counts as
+    nothing stored.
     """
     results = getattr(outcome, "batch_results", None)
+    if results is None and isinstance(outcome, BaseException):
+        results = getattr(outcome.__cause__, "batch_results", None)
     if not isinstance(results, list):
         results = list(outcome) if isinstance(outcome, (list, tuple)) else []
     return list(results[:n]) + [None] * (n - len(results))

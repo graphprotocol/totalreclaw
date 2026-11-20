@@ -1238,6 +1238,7 @@ def _drain_entries(state: "AgentState", client, queue: PendingStoreQueue, entrie
         return 0
 
     failure: Optional[Exception] = None
+    shutdown = False
     try:
         ids = run_sync(client.remember_batch(to_store, source="hermes-auto"))
         results = per_fact_results(ids, len(to_store))
@@ -1260,12 +1261,11 @@ def _drain_entries(state: "AgentState", client, queue: PendingStoreQueue, entrie
         logger.info("pending store: relay still refuses writes; %d fact(s) stay queued", len(back))
         return stored
     except Exception as e:
-        if isinstance(e, InterpreterShutdownError) or is_interpreter_shutdown_error(e):
-            queue.put_back(to_store_entries)
-            return 0
-        # Other groups may have landed (#753): only the rest is retried.
+        # Other groups may have landed (#753), also when interpreter
+        # shutdown cut the batch short (#777): only the rest is retried.
         results = per_fact_results(e, len(to_store))
         failure = e
+        shutdown = isinstance(e, InterpreterShutdownError) or is_interpreter_shutdown_error(e)
 
     stored = 0
     not_stored = []
@@ -1275,7 +1275,11 @@ def _drain_entries(state: "AgentState", client, queue: PendingStoreQueue, entrie
             stored += 1
         else:
             not_stored.append(entry)
-    if not_stored:
+    if shutdown:
+        # The shutdown is not these facts' fault: they go back as they were,
+        # with no attempt counted.
+        queue.put_back(not_stored)
+    elif not_stored:
         # Failed, or skipped by the batch writer (#751). The relay never
         # reports a duplicate, so a skip is not proof the fact is in the
         # vault: retry it (the write gate drops it if it is), up to the
