@@ -183,7 +183,7 @@ Use this only if you cannot open the pairing link in any browser, including on y
 
 When the variable is set, it takes precedence over `~/.totalreclaw/credentials.json`. To switch back to the paired account, delete the `env` block and restart the host.
 
-> **Pin a specific version** with `args: ["-y", "@totalreclaw/mcp-server@latest"]` (stable — recommended) or `@totalreclaw/mcp-server@<specific-rc>` (e.g. `3.6.0-rc.2`) to test a particular RC. Prefer `@latest` in production: the `rc` dist-tag (`@totalreclaw/mcp-server@rc`) tracks the newest release-candidate line and can lag `latest`, so `@rc` is not necessarily newer than stable. Check what each tag resolves to: `npm view @totalreclaw/mcp-server dist-tags`.
+> **Pin a specific version** with `args: ["-y", "@totalreclaw/mcp-server@latest"]` (stable — recommended) or `@totalreclaw/mcp-server@<specific-rc>` (e.g. `3.6.1-rc.1`) to test a particular RC. Prefer `@latest` in production: the `rc` dist-tag (`@totalreclaw/mcp-server@rc`) tracks the newest release-candidate line and can lag `latest`, so `@rc` is not necessarily newer than stable. Check what each tag resolves to: `npm view @totalreclaw/mcp-server dist-tags`.
 
 ---
 
