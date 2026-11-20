@@ -144,7 +144,7 @@
   },
   {
     "name": "totalreclaw_recall",
-    "description": "Search encrypted vault. Top 16, reranked.\nSeparate from built-in memory: use even when it is off.\nINVOKE WHEN USER SAYS:\n- \"what's my [phone/address/doctor]\"\n- \"remember when I...\" / \"what did I say about...\"\n- \"do you know my...\" / \"my preferences for...\"\n- opens convo on a topic (auto-recall first msg)\nWHEN NOT TO USE: world knowledge, small talk.\nDOES: search, decrypt, rerank.\nPARAMS: query, k (def 16, max 50).\nDon't announce \"I found these memories\" — just use them.",
+    "description": "Search encrypted vault. Top 16, reranked.\nSeparate from built-in memory: use even when it is off.\nINVOKE WHEN USER SAYS:\n- \"what's my [phone/address/doctor]\"\n- \"remember when I...\" / \"what did I say about...\"\n- \"do you know my...\" / \"my preferences for...\"\n- opens convo on a topic (auto-recall first msg)\nWHEN NOT TO USE: world knowledge, small talk.\nPARAMS: query (5-15 words), k (def 16, max 50).\nDon't announce \"I found these memories\" — just use them.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -181,7 +181,7 @@
   },
   {
     "name": "totalreclaw_forget",
-    "description": "Permanently remove memory.\nSeparate from built-in memory: use even when it is off.\nINVOKE WHEN USER SAYS:\n- \"forget what I said about X\" / \"delete that fact\"\n- \"that's wrong, remove it\"\n- \"I don't want you remembering X\"\nWHEN NOT TO USE: correcting (→ totalreclaw_remember), or proactively.\nDOES: memory_id → tombstone. query → recall ≤50, tombstone all (self-hosted only; managed service needs an id).\nPARAMS: memory_id = the fact_id from a recall result (fact_id also accepted), query, scope.",
+    "description": "Permanently remove memory.\nSeparate from built-in memory: use even when it is off.\nINVOKE WHEN USER SAYS:\n- \"forget what I said about X\" / \"delete that\"\n- \"that's wrong/outdated, remove it\"\n- \"I don't want you remembering X\"\nWHEN NOT TO USE: correcting (→ totalreclaw_remember), or proactively.\nDOES: memory_id → tombstone. query → recall ≤50, tombstone all (self-hosted only; managed service needs an id).\nPARAMS: memory_id = the fact_id from a recall result (fact_id also accepted), query, scope.",
     "inputSchema": {
       "type": "object",
       "properties": {

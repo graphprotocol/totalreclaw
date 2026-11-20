@@ -22,7 +22,7 @@ export const SERVER_INSTRUCTIONS = `TotalReclaw is the user's encrypted long-ter
 - If the user pastes a phrase anyway, tell them it is compromised and they need a fresh one from the browser pair flow (totalreclaw_pair).
 
 ## Remembering
-Store without being asked whenever the user shares: preferences, personal info, decisions or goals, corrections, important dates or events, tech preferences, project context, opinions or values. If it could help later, store it automatically. Store atomic facts ("User is vegan"). Skip small talk, one-off tasks, generic knowledge and secrets (passwords, API keys, tokens).
+Store without being asked whenever the user shares: preferences, personal info, decisions or goals, corrections, dates or events, tech preferences, project context, opinions or values. If it could help later, store it automatically. Store atomic facts ("User is vegan"). Correction: store the new fact. Skip small talk, one-off tasks, generic knowledge and secrets (passwords, API keys, tokens).
 
 ## Setup
 "not_configured" means no account yet. Call totalreclaw_pair and give the user the link + PIN. The phrase is created or entered in a browser only, never in config, env vars or chat. On "You're all set" the tools work at once, no restart (if not_configured persists, reopen the app).
@@ -126,15 +126,14 @@ INVOKE WHEN USER SAYS:
 - "do you know my..." / "my preferences for..."
 - opens convo on a topic (auto-recall first msg)
 WHEN NOT TO USE: world knowledge, small talk.
-DOES: search, decrypt, rerank.
-PARAMS: query, k (def 16, max 50).
+PARAMS: query (5-15 words), k (def 16, max 50).
 Don't announce "I found these memories" — just use them.`;
 
 export const FORGET_TOOL_DESCRIPTION = `Permanently remove memory.
 Separate from built-in memory: use even when it is off.
 INVOKE WHEN USER SAYS:
-- "forget what I said about X" / "delete that fact"
-- "that's wrong, remove it"
+- "forget what I said about X" / "delete that"
+- "that's wrong/outdated, remove it"
 - "I don't want you remembering X"
 WHEN NOT TO USE: correcting (→ totalreclaw_remember), or proactively.
 DOES: memory_id → tombstone. query → recall ≤50, tombstone all (self-hosted only; managed service needs an id).

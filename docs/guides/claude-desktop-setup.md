@@ -93,6 +93,7 @@ The config always installs the newest stable `@totalreclaw/mcp-server` (3.5.1 or
 - The extension runs a small TotalReclaw server on your computer, using Claude Desktop's built-in Node. Claude Desktop talks to it over MCP, the standard way chat apps connect to tools. (The config-file method starts it with `npx` instead.)
 - `totalreclaw_pair` opens a short setup session. Your browser encrypts your recovery phrase to a one-time key held by that server and sends only the encrypted version through the TotalReclaw relay. The server decrypts it locally and saves your account to `~/.totalreclaw/credentials.json`, readable only by you (mode `0600`).
 - Every memory is encrypted on your computer before it leaves. The relay and the chain only see encrypted data.
+- TotalReclaw works even when Claude's own memory setting is off. It is separate from Claude's built-in memory.
 - Claude decides when to recall or store a memory. Unlike OpenClaw and Hermes, a chat app has no automatic memory hooks.
 - The first time you use memory, TotalReclaw downloads an embedding model of about 230 MB. This happens once and is cached on your computer.
 
