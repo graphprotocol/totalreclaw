@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Quota copy takes its numbers from the relay.** The session-start quota nudge, the upgrade tool description and SKILL.md no longer hardcode the Free or Pro cap: they use `free_writes_limit` and the new `upgrade_writes_limit` from `/v1/billing/status`, which the relay sources from Stripe. The nudge is skipped when the relay sends no limit, instead of assuming 250.
+
 - **The write-quota retry queue no longer re-queues facts that were stored when Hermes shuts down mid-batch (#777).** A drain whose batch was cut short by interpreter shutdown put every fact back in the queue, including those that had landed. After the restart the next drain sent them again. A plain fact was dropped there only if the subgraph had indexed it by then. A queued session Crystal skips the write gate (#749), so it was stored a second time.
   - `run_sync` re-raises a batch error that mentions interpreter shutdown as a new `InterpreterShutdownError`, which dropped the error's `batch_results`. `per_fact_results` now also reads the error it was raised from.
   - At shutdown the drain puts back only the facts that were not stored, and counts no attempt for them.

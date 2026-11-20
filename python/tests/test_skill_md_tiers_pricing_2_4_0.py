@@ -13,8 +13,10 @@ mcp/SKILL.md) carry the canonical copy; Hermes did not.
 
 2.4.0rc2 ships a new ``## Tiers + pricing`` section with:
 
-- A canonical table (Free: 250/month Gnosis, Pro: 3,000/month Gnosis +
-  LLM-guided dedup) whose tier numbers match ``skill-nanoclaw/SKILL.md``.
+- A canonical table whose cells cite ``totalreclaw_status`` fields
+  (``free_writes_limit`` / ``upgrade_writes_limit``) instead of hardcoded
+  caps — Stripe is the source of truth (write-quota source of truth spec,
+  R-C), so agent-facing copy carries no quota numbers.
 - An automatic quota-signalling spec (>80%, 403 quota exceeded, first
   successful pair).
 - An upgrade-flow user-intent → action matrix.
@@ -48,14 +50,18 @@ def test_skill_includes_tiers_pricing_section():
     )
 
 
-def test_skill_pricing_table_has_free_tier_with_250_cap():
-    """Canonical free-tier cap. Post-consolidation (2026-06-05) the table
-    names NO chain/network — docs name no chain; `totalreclaw_status` /
-    billing is the canonical source, so the ops-1 single-chain flip needs
-    zero doc edits."""
+def test_skill_free_cap_comes_from_status():
+    """The Free-tier cell cites ``free_writes_limit`` from
+    ``totalreclaw_status`` — no hardcoded cap (R-C: agent-facing copy
+    carries no quota numbers; Stripe is the source of truth)."""
     body = _read_skill()
-    assert "250 memories/month" in body, (
-        "Free-tier monthly cap must be stated as '250 memories/month'."
+    assert "250 memories" not in body, (
+        "SKILL.md must not hardcode the Free cap — quote "
+        "`free_writes_limit` from `totalreclaw_status` instead."
+    )
+    assert "free_writes_limit" in body, (
+        "The Free-tier cell must cite `free_writes_limit` from "
+        "`totalreclaw_status` so the number is always live."
     )
     # The only permitted chain mention is the deny-list entry telling the
     # agent NOT to name a chain/network to the user.
@@ -65,13 +71,20 @@ def test_skill_pricing_table_has_free_tier_with_250_cap():
     )
 
 
-def test_skill_pricing_table_has_pro_tier_with_3000_cap():
-    """Canonical Pro-tier numbers from skill-nanoclaw/SKILL.md."""
+def test_skill_pro_cap_comes_from_status():
+    """The Pro-tier cell cites ``upgrade_writes_limit`` /
+    ``free_writes_limit`` — never a hardcoded or stale Pro cap."""
     body = _read_skill()
-    assert "3,000 memories/month" in body, (
-        "Pro-tier monthly cap must be stated as '3,000 memories/month' "
-        "verbatim — NOT 'unlimited' (forbidden claim — Pro is capped) "
-        "and NOT a different number."
+    assert "3,000" not in body, (
+        "SKILL.md must not hardcode the Pro cap — Stripe is the source of "
+        "truth; cite `upgrade_writes_limit` / `free_writes_limit` instead."
+    )
+    assert "1,500" not in body, (
+        "The stale 1,500 Pro cap must never come back."
+    )
+    assert "upgrade_writes_limit" in body, (
+        "The Pro-tier cell must cite `upgrade_writes_limit` (the relay "
+        "sends it to Free wallets) so the number is always live."
     )
     assert "LLM-guided dedup" in body, (
         "Pro-tier feature delta must mention 'LLM-guided dedup' — that "
@@ -150,7 +163,7 @@ def test_skill_forbidden_claims_denylist():
     # Pro is NOT unlimited.
     assert "Pro = unlimited" in body or "Pro is unlimited" in body, (
         "Deny-list MUST pin the 'Pro = unlimited' false claim — Pro "
-        "is 3,000/month, NOT unlimited. Saying 'unlimited' silently "
+        "has a monthly cap, NOT unlimited. Saying 'unlimited' silently "
         "breaks user expectations when they hit the cap."
     )
     # Encryption is identical across tiers.
@@ -178,3 +191,24 @@ def test_skill_usage_skill_core_sections_present():
     # Install-flow sections must NOT have leaked back into the usage skill.
     assert "## Silence rules" not in body
     assert "## Setup flow" not in body
+
+
+def test_upgrade_tool_description_has_no_cap_numbers():
+    """R-C: the upgrade tool description is agent-facing copy, so it carries
+    no quota numbers — it points at ``totalreclaw_status`` for the live
+    figures instead of hardcoding either tier's cap."""
+    from totalreclaw.hermes import schemas
+
+    tool = next(
+        v
+        for v in vars(schemas).values()
+        if isinstance(v, dict)
+        and isinstance(v.get("description"), str)
+        and "upgrade to Pro" in v["description"]
+    )
+    desc = tool["description"]
+    assert "3,000" not in desc, "upgrade description must not hardcode the Pro cap"
+    assert "250" not in desc, "upgrade description must not hardcode the Free cap"
+    assert "totalreclaw_status" in desc, (
+        "upgrade description must point at totalreclaw_status for live caps"
+    )

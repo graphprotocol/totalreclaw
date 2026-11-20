@@ -21,7 +21,12 @@ async def test_status_includes_account_id_and_addresses():
 
     state = PluginState()
     client = MagicMock()
-    client.status = AsyncMock(return_value=MagicMock(
+    # Real BillingStatus: a bare MagicMock auto-fabricates the optional
+    # quota fields (upgrade_writes_limit / write_grace) as unserializable
+    # Mocks, which would fail json.dumps for reasons unrelated to this test.
+    from totalreclaw.relay import BillingStatus
+
+    client.status = AsyncMock(return_value=BillingStatus(
         tier="pro", free_writes_used=3, free_writes_limit=3000,
         expires_at="2027-06-10",
     ))
@@ -43,7 +48,9 @@ async def test_status_resolves_address_lazily_if_unset():
 
     state = PluginState()
     client = MagicMock()
-    client.status = AsyncMock(return_value=MagicMock(
+    from totalreclaw.relay import BillingStatus
+
+    client.status = AsyncMock(return_value=BillingStatus(
         tier="free", free_writes_used=0, free_writes_limit=250, expires_at=None,
     ))
     client.resolved_wallet_address = None
