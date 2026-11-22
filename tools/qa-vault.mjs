@@ -286,12 +286,26 @@ async function driveBootstrap(page, phrase) {
  * no real memories to assert against. The known QA phrase is the one branch
  * that both authenticates AND lands on real data — same rationale as the
  * bootstrap path above.
+ *
+ * #724 ("vault front door", deployed 2026-11-03) inserts NoVaultFrontDoor
+ * BEFORE the ladder on a fresh device: "Create a vault" / "I already have
+ * one". Only after "I already have one" does the recovery ladder render.
+ * A device WITH a cached vault record still skips straight to the ladder,
+ * so we accept either order (race the two locators).
  */
 async function driveUnlock(page, phrase) {
-  await page
-    .getByText("Use recovery phrase instead", { exact: false })
-    .waitFor({ timeout: 15000 });
-  await page.getByText("Use recovery phrase instead", { exact: false }).click();
+  const frontDoor = page.getByText("I already have one", { exact: false });
+  const ladder = page.getByText("Use recovery phrase instead", { exact: false });
+  // Front door first on fresh devices; ladder directly on cached-vault devices.
+  await Promise.race([
+    frontDoor.waitFor({ timeout: 15000 }),
+    ladder.waitFor({ timeout: 15000 }),
+  ]).catch(() => ladder.waitFor({ timeout: 15000 })); // neither → surface the ladder timeout
+  if (await frontDoor.isVisible().catch(() => false)) {
+    await frontDoor.click();
+  }
+  await ladder.waitFor({ timeout: 15000 });
+  await ladder.click();
 
   await page.waitForSelector(
     'textarea[placeholder="twelve words separated by spaces"]',
