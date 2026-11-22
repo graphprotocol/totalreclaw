@@ -72,7 +72,7 @@ dependencies = [
     # (Hermes QA of 2.6.0rc1, H13) and the pinned-candidate name match in the
     # contradiction resolver (H14) first ship in core 2.7.0rc2. The client
     # prefers the core binding, so an older core keeps the old behaviour.
-    "totalreclaw-core>=2.7.0rc2,<3.0.0",
+    "totalreclaw-core>=2.7.0,<3.0.0",
     # <1: httpx 1.0 (pre-releases on PyPI since 2026-08-31, e.g. 1.0.dev6) is a
     # rewrite with no `httpx.HTTPStatusError`, which `relay.py` subclasses at
     # import time (`RelayReadError`, #662). Any `pip install --pre totalreclaw`
