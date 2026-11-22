@@ -91,6 +91,14 @@ force a clean deploy per §5 Step 2. Root-cause of the auto-deploy skip lives in
 the Railway dashboard GitHub-trigger config (check: "wait for CI" toggle, watch
 paths, GitHub app connection).
 
+**A GitHub repo transfer silently disconnects Railway.** GitHub App installations do not
+move with a transferred repo. After the relay moved to `graphprotocol` (2026-10-19),
+staging stopped auto-deploying for more than three days, until the Railway app was installed on the
+org and both services' source was reconnected. Reconnecting also gave production a push
+trigger, which had to be deleted. After any transfer or source reconnect, check each
+service's deploy triggers: staging has one on `main`, production has none. Incident:
+relay `docs/incidents/2026-10-20-staging-deploy-stall.md`.
+
 ---
 
 ## 5. Procedure
@@ -123,7 +131,17 @@ railway up -s totalreclaw --detach
 ```bash
 cd tests/e2e-batch
 RELAY_URL=https://api-staging.totalreclaw.xyz npx tsx batch-e2e.ts --test A --test C --test E
+# plus the relay smoke test:
+RELAY_URL=https://api-staging.totalreclaw.xyz npx tsx ../e2e-relay/smoke-test.ts
 ```
+Groups A, C and E never write. If the change touches the write path (bundler proxy, write
+quota or metering, UserOp handling), also run `--test B`: a 3-fact `executeBatch` on the
+staging DataEdge, checked through the subgraph.
+
+Staging provisions every `X-TotalReclaw-Test: true` registration as **Pro** on its first
+billing call (`source='staging_test_fixture'`), so these suites only see Pro behaviour.
+Seeing Free behaviour on staging needs a registration without that header, which shows in
+Telegram without the `[TEST]` prefix.
 
 ### Step 4 — Promote to production (manual; never auto)
 ```bash
@@ -212,6 +230,24 @@ held live-mode IDs → every top-up checkout failed until test-mode twins were c
 When adding any new Stripe-backed feature: create the objects TWICE (test + live) and
 set the mode-matching ID in each service.
 
+## 6.6 Write quotas come from the `tiers` table, not env vars
+
+Since relay#80 (2026-11-22), the relay reads the Free and Pro monthly write caps from
+`tiers.write_quota`, the same value `GET /v1/tiers` serves. It uses them both to enforce
+and to report caps in `/v1/billing/status`. In production that column is synced from the
+Stripe product metadata `totalreclaw_write_quota`: at boot, every 6 hours, and through the
+admin dashboard's "Sync now".
+
+- `FREE_TIER_WRITES_PER_MONTH` and `PRO_TIER_WRITES_PER_MONTH` are **fallbacks**, used
+  only when a `tiers` row is missing. Changing them does not change a cap.
+- `PRO_TIER_WRITE_GRACE` (default 1000) is still env-driven.
+- Staging tier-sync is a no-op, so staging's `tiers` rows are maintained by hand. Re-sync
+  them after any Stripe change to a tier's quota or price. The procedure (guarded SQL via
+  `railway run`) is in the internal repo: `docs/specs/ops/shared-database-decision.md`
+  §"Running ad-hoc SQL".
+- Staging's `FREE_TIER_WRITES_PER_MONTH=50000` has had no effect since relay#80; non-test
+  staging Free wallets cap at the `tiers` value (250), like prod.
+
 ---
 
 ## 7. Rollback
@@ -237,4 +273,6 @@ publish manually.** CI must be green first. Order: Core → MCP → Plugin (npm)
 - Production NEVER auto-deploys.
 - Always assert `/health.version` == the SHA you shipped. `dev` = SHA not stamped.
 - E2E gates prod promotion.
+- Ad-hoc SQL against the shared Postgres follows the internal procedure (internal `docs/specs/ops/shared-database-decision.md`): schema-qualified, dry run first, guarded transaction, credential injected by `railway run`, never printed. Never hand-edit production `tiers` (Stripe-synced).
+- No `railway` binary? `npx --yes @railway/cli <cmd>` works, run from a directory linked to the TotalReclaw project.
 - After a subgraph deploy, publish the new version to the network, then repoint `SUBGRAPH_ENDPOINT` + `PRO_SUBGRAPH_ENDPOINT` (Gateway, pinned deployment ID) and `SUBGRAPH_FALLBACK_ENDPOINT` (Studio) on the matching relay service.
