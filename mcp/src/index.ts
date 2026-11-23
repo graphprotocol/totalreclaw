@@ -21,6 +21,7 @@ import {
 } from './tools/index.js';
 import { getLastBillingResponse, resetLastBillingResponse } from './tools/status.js';
 import { createCredentialActivator } from './credential-activation.js';
+import { armSetupNote, withSetupNote } from './setup-note.js';
 import type { ToolContext, ToolResponse } from './tools/types.js';
 import { isQuotaExceededError, rethrowIfQuota, shortErrorMessage, logWriteError } from './tools/write-errors.js';
 import { quotaExceededMessage } from './quota-copy.js';
@@ -1924,6 +1925,16 @@ function getClientIdentifier(): string {
   return getClientId();
 }
 
+let clientLogged = false;
+/** Log `client: <name> <version>` once (support diagnostic), from initialize or the first tool call, whichever sees clientInfo first. */
+function logClientOnce(): void {
+  if (clientLogged) return;
+  const ci = server?.getClientVersion();
+  if (!ci?.name) return;
+  clientLogged = true;
+  console.error(`client: ${ci.name} ${ci.version ?? 'unknown'}`);
+}
+
 // ── Cross-cutting dispatch deps ──────────────────────────────────────────────
 
 /** Invalidate the memory-context resource cache + notify subscribed clients. */
@@ -2001,9 +2012,9 @@ async function accountHandler(args: unknown): Promise<ToolResponse> {
 }
 
 const commonHandlers: HandlerBundle = {
-  totalreclaw_status: statusHandler,
+  totalreclaw_status: async (args) => withSetupNote(await statusHandler(args), server?.getClientVersion()?.name),
   totalreclaw_upgrade: upgradeHandler,
-  totalreclaw_account: accountHandler,
+  totalreclaw_account: async (args) => withSetupNote(await accountHandler(args), server?.getClientVersion()?.name),
 };
 
 // ── Managed-service (subgraph) tool bundle ───────────────────────────────────
@@ -2080,7 +2091,8 @@ const credentialActivator = createCredentialActivator<SubgraphState>({
   isUsableMnemonic: (mnemonic) => detectServerMode(mnemonic) === 'subgraph',
   ownerAddress: (state) => state.smartAccountAddress,
   getState: () => subgraphState,
-  commit: (next, { hadState }) => {
+  commit: (next, { phase, hadState }) => {
+    if (phase === 'reload' && next) armSetupNote();
     if (hadState) resetPerAccountState();
     subgraphState = next;
     currentMode = next ? 'subgraph' : 'unconfigured';
@@ -2092,7 +2104,7 @@ const credentialActivator = createCredentialActivator<SubgraphState>({
 
 // ── The single CallTool router ───────────────────────────────────────────────
 
-const callToolHandler = createCallToolHandler({
+const callToolHandlerInner = createCallToolHandler({
   getMode: () => currentMode,
   handleSupport: (args) =>
     handleSupport({ walletAddress: subgraphState?.smartAccountAddress ?? null }, args),
@@ -2115,6 +2127,11 @@ const callToolHandler = createCallToolHandler({
   // Trigger B: credentials.json written by another process since startup.
   tryReload: () => credentialActivator.tryReload(),
 });
+
+const callToolHandler: typeof callToolHandlerInner = (name, args) => {
+  logClientOnce();
+  return callToolHandlerInner(name, args);
+};
 
 // ── Show-phrase CLI subcommand ────────────────────────────────────────────────
 
@@ -2235,6 +2252,11 @@ async function main(): Promise<void> {
     {
       onServerCreated: (created) => {
         server = created;
+        const prevInit = created.oninitialized;
+        created.oninitialized = () => {
+          logClientOnce();
+          prevInit?.();
+        };
       },
     },
   );

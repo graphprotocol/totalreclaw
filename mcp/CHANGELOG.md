@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [3.6.2] - 2026-11-23
+
+### Added
+- **Claude Desktop: after pairing, TotalReclaw shows a one-time tip that tells the user how to make TotalReclaw Claude's main memory.** Claude's own memory is on by default and Claude uses it before TotalReclaw. L2 tests on Claude Desktop showed that when the user says once "Make TotalReclaw my main memory.", Claude saves a note in its own memory and later chats use TotalReclaw. The first successful `totalreclaw_account` or `totalreclaw_status` result after a pairing in this process now ends with one paragraph: `Tip for the user: in Claude apps, Claude's own memory is usually on and is used before TotalReclaw. To have Claude use TotalReclaw automatically in future chats, just say: "Make TotalReclaw my main memory."` The tip shows once per process. It does not show when the server starts with existing credentials. An error result does not use it up. No other tool changes. Only Claude Desktop sees the tip (MCP `clientInfo.name` is `claude-ai`). Claude Code, Codex, Cursor, other apps, and a client that sends no `clientInfo` never see it. Code: `src/setup-note.ts`. Tests: `tests/setup-note.test.ts`.
+- **The server logs the client name and version once.** A line `client: <name> <version>` goes to stderr at the initialize handshake (or at the first tool call). It is a support diagnostic. It logs the name and version only.
+
+### Other `mcp/` changes since the 3.6.1-rc.1 publish
+- Quota caps come from billing, not hardcoded numbers ([#788](https://github.com/graphprotocol/totalreclaw/pull/788)): `src/quota-copy.ts`, `totalreclaw_account` and `totalreclaw_status` use the cap that the relay reports.
+- Changelog-only edit for 3.6.1 ([#786](https://github.com/graphprotocol/totalreclaw/pull/786)).
+
 ## [3.6.1] - 2026-11-20
 
 ### Changed
