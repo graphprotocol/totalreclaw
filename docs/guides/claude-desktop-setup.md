@@ -30,6 +30,8 @@ In a new chat, type **Set up TotalReclaw**. Allow the permission prompt if one a
 
 The link lasts about 10 minutes. If it expires, ask Claude for a new one.
 
+**Make TotalReclaw Claude's main memory.** Claude's own memory is on by default, and Claude uses it before TotalReclaw. After pairing, say this once in any chat: "Make TotalReclaw my main memory." Claude saves a note in its own memory and then uses TotalReclaw to remember, recall and forget in future chats.
+
 ### 3. Restart Claude Desktop
 
 When the page says **"You're all set"**, quit Claude Desktop and open it again: on macOS press Cmd-Q; on Windows right-click the Claude icon in the system tray and choose **Quit**. TotalReclaw loads your account when Claude Desktop starts, so closing the window is not enough.
