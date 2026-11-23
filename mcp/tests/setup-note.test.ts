@@ -95,6 +95,20 @@ describe('Claude Desktop main-memory tip', () => {
     expect(textOf(withSetupNote(ok('x'), DESKTOP))).toContain(SETUP_NOTE_TEXT);
   });
 
+  it('a soft error ({"error": ...} text, isError unset) keeps it armed and unchanged', () => {
+    armSetupNote();
+    const soft = ok('{"error":"relay 503"}');
+    expect(withSetupNote(soft, DESKTOP)).toBe(soft);
+    expect(textOf(withSetupNote(ok('{"tier":"free"}'), DESKTOP))).toBe(`{"tier":"free"}\n\n${SETUP_NOTE_TEXT}`);
+  });
+
+  it('a success JSON payload and non-JSON text both get the tip', () => {
+    armSetupNote();
+    expect(textOf(withSetupNote(ok('{"ok":true}'), DESKTOP))).toContain(SETUP_NOTE_TEXT);
+    armSetupNote();
+    expect(textOf(withSetupNote(ok('plain text'), DESKTOP))).toBe(`plain text\n\n${SETUP_NOTE_TEXT}`);
+  });
+
   it('is wired only to account and status in index.ts', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.ts'), 'utf8');
     expect(src.match(/withSetupNote\(/g)).toHaveLength(2);

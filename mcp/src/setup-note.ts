@@ -5,7 +5,7 @@
  * credentials were activated by a pairing in THIS process (not at startup),
  * the first successful `totalreclaw_account` / `totalreclaw_status` result gets
  * one extra final paragraph: a tip for the user (not an instruction to the
- * host). Once per process. No other tool is touched.
+ * host). Once per pairing (a new pairing in the same process arms it again). No other tool is touched.
  *
  * Only Claude Desktop sees it (MCP `clientInfo.name` is exactly `claude-ai`).
  * For any other client, or when clientInfo is missing, the tip is dropped
@@ -34,9 +34,19 @@ export function resetSetupNote(): void {
   pending = false;
 }
 
+/** True when the result is a soft error: a text block holding a JSON object with an `error` key. */
+function isSoftError(text: string): boolean {
+  try {
+    const v: unknown = JSON.parse(text);
+    return typeof v === 'object' && v !== null && !Array.isArray(v) && 'error' in v;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Append the tip to a successful result, once, for Claude Desktop only.
- * Errors pass through and keep it armed. For any other client the tip is
+ * Errors (isError, or a JSON `{"error": ...}` text) pass through and keep it armed. For any other client the tip is
  * disarmed without a trace.
  */
 export function withSetupNote(res: ToolResponse, clientName: string | undefined): ToolResponse {
@@ -48,6 +58,7 @@ export function withSetupNote(res: ToolResponse, clientName: string | undefined)
   const content = res.content ?? [];
   const idx = content.map((c) => c.type).lastIndexOf('text');
   if (idx < 0) return res;
+  if (isSoftError((content[idx] as { type: 'text'; text: string }).text)) return res;
   pending = false;
   const next = content.slice();
   const last = next[idx] as { type: 'text'; text: string };
