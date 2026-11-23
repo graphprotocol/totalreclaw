@@ -18,7 +18,7 @@ Your agent will fetch this page, run the MCP install command, and then give you 
 
 ## Agent instructions (read this if you are a Claude Code / Cursor / Windsurf agent that just fetched this URL)
 
-You have been asked to install TotalReclaw. Run the steps below in order. Do not deviate. **Do not invoke `npx @totalreclaw/mcp-server setup` or any other phrase-touching CLI / tool — those return the recovery phrase through your context, which violates the phrase-safety rule.** Account setup happens in the user's browser through `totalreclaw_pair` (Step 4). It needs `@totalreclaw/mcp-server` 3.5.1 or later. If you are running inside **Claude Desktop**, stop and follow [`claude-desktop-setup.md`](./claude-desktop-setup.md) instead.
+You have been asked to install TotalReclaw. Run the steps below in order. Do not deviate. **Do not invoke `npx @totalreclaw/mcp-server setup` or any other phrase-touching CLI / tool — those return the recovery phrase through your context, which violates the phrase-safety rule.** Account setup happens in the user's browser through `totalreclaw_pair` (Step 4). It needs `@totalreclaw/mcp-server` 3.5.1 or later (3.6.1 or later for setup without a restart). If you are running inside **Claude Desktop**, stop and follow [`claude-desktop-setup.md`](./claude-desktop-setup.md) instead.
 
 ### Step 1 — Detect the host runtime
 
@@ -177,7 +177,7 @@ Use this only if you cannot open the pairing link in any browser, including on y
 
 When the variable is set, it takes precedence over `~/.totalreclaw/credentials.json`. To switch back to the paired account, delete the `env` block and restart the host.
 
-> **Pin a specific version** with `args: ["-y", "@totalreclaw/mcp-server@latest"]` (stable — recommended) or `@totalreclaw/mcp-server@<specific-rc>` (e.g. `3.6.2-rc.1`) to test a particular RC. Prefer `@latest` in production: the `rc` dist-tag (`@totalreclaw/mcp-server@rc`) tracks the newest release-candidate line and can lag `latest`, so `@rc` is not necessarily newer than stable. Check what each tag resolves to: `npm view @totalreclaw/mcp-server dist-tags`.
+> **Pin a specific version** with `args: ["-y", "@totalreclaw/mcp-server@latest"]` (stable — recommended) or `@totalreclaw/mcp-server@<specific-rc>` (e.g. `3.6.2-rc.1`) to test a particular RC (setup without a restart needs 3.6.1 or later). Prefer `@latest` in production: the `rc` dist-tag (`@totalreclaw/mcp-server@rc`) tracks the newest release-candidate line and can lag `latest`, so `@rc` is not necessarily newer than stable. Check what each tag resolves to: `npm view @totalreclaw/mcp-server dist-tags`.
 
 ---
 

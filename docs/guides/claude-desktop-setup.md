@@ -81,7 +81,7 @@ There is no recovery phrase and no `env` block here. You set up your account in 
 
 3. Quit Claude Desktop and open it again (Cmd-Q on macOS; on Windows, right-click the Claude icon in the system tray and choose **Quit**). It only loads new servers when it starts. Then continue from step 2 (ask Claude to set up TotalReclaw).
 
-The config always installs the newest stable `@totalreclaw/mcp-server` (3.5.1 or later is required).
+The config always installs the newest stable `@totalreclaw/mcp-server` (3.5.1 or later is required; setup without a restart needs 3.6.1 or later).
 
 </details>
 
@@ -137,7 +137,7 @@ Use this only if you can't open the setup link in any browser, including on your
 
 When the variable is set, it takes precedence over `~/.totalreclaw/credentials.json`. To switch back to the account from the setup page, delete the `env` block and restart Claude Desktop.
 
-> **Pin a version** with `"args": ["-y", "@totalreclaw/mcp-server@latest"]` (newest stable, recommended) or a specific release candidate (`@totalreclaw/mcp-server@<version>-rc.<n>`) for testing. The `@rc` tag tracks the newest release-candidate line and is not necessarily newer than stable. See what each tag points to with `npm view @totalreclaw/mcp-server dist-tags`.
+> **Pin a version** with `"args": ["-y", "@totalreclaw/mcp-server@latest"]` (newest stable, recommended) or a specific release candidate (`@totalreclaw/mcp-server@<version>-rc.<n>`) for testing (setup without a restart needs 3.6.1 or later). The `@rc` tag tracks the newest release-candidate line and is not necessarily newer than stable. See what each tag points to with `npm view @totalreclaw/mcp-server dist-tags`.
 
 </details>
 

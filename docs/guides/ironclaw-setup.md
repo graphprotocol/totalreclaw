@@ -48,7 +48,7 @@ Restart IronClaw and start a conversation. The first time you mention anything w
 3. The browser generates a new 12-word BIP-39 phrase (and asks you to write it down + retype 3 words) — or, in `import` mode, accepts a phrase you paste in the browser.
 4. The browser encrypts the phrase (x25519 ECDH + AES-256-GCM) and uploads ciphertext to the MCP server. The phrase never touches the LLM context, the chat transcript, stdout, or logs.
 5. The MCP server decrypts the phrase in-memory, derives your keys, registers with the relay, and writes `~/.totalreclaw/credentials.json` (mode 0600, owner-only).
-6. **Restart IronClaw** so the MCP server re-reads `credentials.json` and switches out of unconfigured mode. The pairing session expires in ~5 minutes.
+6. The MCP server loads your account right away (3.6.1 or later), so the memory tools work in the same conversation with no restart. If a tool still says TotalReclaw is not configured, restart IronClaw. The pairing session expires in ~5 minutes.
 
 On subsequent restarts the MCP server loads `~/.totalreclaw/credentials.json` automatically — no pairing needed.
 
