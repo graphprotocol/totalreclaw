@@ -177,7 +177,7 @@ Use this only if you cannot open the pairing link in any browser, including on y
 
 When the variable is set, it takes precedence over `~/.totalreclaw/credentials.json`. To switch back to the paired account, delete the `env` block and restart the host.
 
-> **Pin a specific version** with `args: ["-y", "@totalreclaw/mcp-server@latest"]` (stable — recommended) or `@totalreclaw/mcp-server@<specific-rc>` (e.g. `3.6.1-rc.1`) to test a particular RC. Prefer `@latest` in production: the `rc` dist-tag (`@totalreclaw/mcp-server@rc`) tracks the newest release-candidate line and can lag `latest`, so `@rc` is not necessarily newer than stable. Check what each tag resolves to: `npm view @totalreclaw/mcp-server dist-tags`.
+> **Pin a specific version** with `args: ["-y", "@totalreclaw/mcp-server@latest"]` (stable — recommended) or `@totalreclaw/mcp-server@<specific-rc>` (e.g. `3.6.2-rc.1`) to test a particular RC. Prefer `@latest` in production: the `rc` dist-tag (`@totalreclaw/mcp-server@rc`) tracks the newest release-candidate line and can lag `latest`, so `@rc` is not necessarily newer than stable. Check what each tag resolves to: `npm view @totalreclaw/mcp-server dist-tags`.
 
 ---
 
@@ -269,7 +269,7 @@ Upgrade: *"Upgrade my TotalReclaw subscription."*
 
 - **MCP is stateless.** There's no first-run welcome, no lifecycle hooks, and no auto-restart on config change. You restart the host explicitly to pick up new config.
 - **One recommended setup path, two advanced ones.** The MCP server is stateless JSON-RPC — it has no HTTP server or lifecycle hooks of its own — but it still offers three setup paths:
-  1. **`totalreclaw_pair` (browser flow, agent-safe — the default).** The agent calls `totalreclaw_pair`, which returns a URL + 6-digit PIN. The user opens the URL in any browser, the browser generates (or imports) the recovery phrase, encrypts it, and uploads ciphertext to the MCP server, which decrypts it in-memory and writes `~/.totalreclaw/credentials.json`. The phrase never enters LLM context, chat, stdout, or logs. After pairing, the user restarts the host so the server re-reads the credentials file and switches out of unconfigured mode.
+  1. **`totalreclaw_pair` (browser flow, agent-safe — the default).** The agent calls `totalreclaw_pair`, which returns a URL + 6-digit PIN. The user opens the URL in any browser, the browser generates (or imports) the recovery phrase, encrypts it, and uploads ciphertext to the MCP server, which decrypts it in-memory and writes `~/.totalreclaw/credentials.json`. The phrase never enters LLM context, chat, stdout, or logs. After pairing, the server loads the new account right away, with no restart.
   2. **Advanced: `npx @totalreclaw/mcp-server setup` (terminal wizard, human-run only).** The wizard generates a phrase, registers with the relay, and prints a config snippet — including the phrase — to stdout. Because that stdout would enter an agent's context, this is for the **human** to run in their own terminal; an agent must never invoke it via a shell tool.
   3. **Advanced: phrase in the host config.** The user pastes an existing TotalReclaw phrase into the host config env (`TOTALRECLAW_RECOVERY_PHRASE`) themselves. It stays there in plaintext — see [Advanced: recovery phrase in the host config](#advanced-recovery-phrase-in-the-host-config-not-recommended).
 
