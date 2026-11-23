@@ -83,11 +83,7 @@ Open the link in any browser, on this computer or your phone, and enter the PIN.
 
 The link works for about 10 minutes. If it expires, ask Codex for a new one. When the page says you're all set, go back to Codex and say you're done.
 
-### 6. Quit Codex and open it again
-
-TotalReclaw reads your account only when Codex starts, so the memory tools work after this restart. Quit Codex completely and open it again, or start a new session.
-
-### 7. Try it
+### 6. Try it
 
 In a new session:
 
@@ -107,7 +103,7 @@ TotalReclaw also saves things it judges worth keeping without being asked, but n
 
 Other TotalReclaw apps on the same computer, such as Hermes, OpenClaw or Claude Desktop, keep your account in `~/.totalreclaw/credentials.json`. Codex uses the same file.
 
-- **The file holds your account in a form TotalReclaw for Codex can read.** It is used as is. After step 4, ask *"What's my TotalReclaw status?"*. If it shows your account, skip steps 5 and 6.
+- **The file holds your account in a form TotalReclaw for Codex can read.** It is used as is. After step 4, ask *"What's my TotalReclaw status?"*. If it shows your account, skip step 5.
 - **Hermes keeps your phrase in the system keychain.** The server can't read the keychain yet. It says so when you use a TotalReclaw tool, and it won't set up a new account over that file, so your Hermes account stays as it is.
 - **Setup never replaces an existing account file.** If `totalreclaw_pair` says TotalReclaw is already set up, it is. Don't move, rename or delete the file to get around this, because that would switch every TotalReclaw app on the computer to a different account.
 
@@ -173,7 +169,7 @@ The user asked you to install TotalReclaw. You can run the install commands, but
 6. Ask one question: *"Are you new to TotalReclaw, or do you already have a TotalReclaw recovery phrase?"* Then call `totalreclaw_pair` with `mode: "generate"` for a new user, or `mode: "import"` for an existing phrase.
    - If the result says `already_configured`, tell the user TotalReclaw is already set up. Never move, rename or delete the credentials file.
    - Otherwise, give the user the `url` and `pin` with this message, filling in the two values: *"Open this link in any browser, on this computer or your phone: <url>. Enter this PIN when asked: <pin>. The link works for about 10 minutes; if it stops working, tell me and I'll make a new one. Tell me when the page says you're all set."* Add *"The page will create your recovery phrase. Write it down and keep it safe: it is the only way back into your memories."* for a new user, or *"Type your recovery phrase into that page, not into this chat."* for an existing one.
-7. When the user says the page is done, tell them: *"Last step: quit Codex completely and open it again, or start a new session. TotalReclaw will work after that."* The memory tools return `not_configured` until they restart.
+7. When the user says the page is done, call `totalreclaw_status`. It shows the account, and TotalReclaw works in this session with no restart. Only if it still returns `not_configured`, tell the user to quit Codex completely and open it again.
 8. If the link expired or the page couldn't finish, call `totalreclaw_pair` again for a new link and PIN.
 
 **Phrase safety (never break):** never ask the user to type, paste or read out a recovery phrase in the chat, and never put one in a config file, an environment variable or a tool argument. The phrase is created or entered only on the setup page in the browser. If the user pastes a phrase into the chat anyway, don't repeat it. Tell them it has been exposed and should be replaced with a new account, and call `totalreclaw_support` for how to get help.
@@ -195,7 +191,7 @@ The user asked you to install TotalReclaw. You can run the install commands, but
 - **"MCP startup failed: No such file or directory (os error 2)".** Codex couldn't find `npx`. Install Node.js 20 or later, make sure `npx -v` works in a terminal, then quit and reopen Codex. A Codex started from the Dock, the Start menu or an IDE may not see the PATH of your terminal, especially if you installed Node.js with a version manager such as nvm. Start Codex from a terminal where `npx -v` works, or install Node.js in a place every app can see.
 - **No TotalReclaw tools after installing.** Quit Codex completely and open it again, or start a new session. Then check that `codex plugin list` shows `totalreclaw` as installed and enabled.
 - **Codex still asks for approval on every TotalReclaw call.** Check the section name in `~/.codex/config.toml`. For the plugin it is exactly `[plugins."totalreclaw@totalreclaw".mcp_servers.totalreclaw]`, and the key is `default_tools_approval_mode = "approve"`. For the MCP-only setup it is `[mcp_servers.totalreclaw]`. Setting this key with a `-c` option on the command line does not work. If you removed and reinstalled the plugin, add the block again. Then restart Codex.
-- **Tools say "not configured".** Setup hasn't finished, or Codex wasn't restarted after it. Ask Codex to *"Set up TotalReclaw"*, finish the page, then quit and reopen Codex.
+- **Tools say "not configured".** Setup hasn't finished. Ask Codex to *"Set up TotalReclaw"* and finish the page. If it still says so afterwards, quit and reopen Codex.
 - **Tools say "not configured" and mention the keychain.** Another TotalReclaw app (Hermes) set up this computer with the system keychain. See [Already using TotalReclaw on this computer?](#already-using-totalreclaw-on-this-computer)
 - **The setup page says the link expired, or setup can't finish.** Ask Codex for a new link.
 - **"Not authenticated" / 401 after importing a phrase.** Check the phrase: exact words, exact order.
