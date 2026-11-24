@@ -1,6 +1,6 @@
 # Changelog
 
-## [3.6.3] - Unreleased
+## [3.6.3] - 2026-11-24
 
 ### Fixed
 - **Claude Desktop: the one-time "main memory" tip now shows when the host uses the modern MCP era.** The 3.6.2 tip checked `getClientVersion()`. The SDK fills it only at the `initialize` handshake. The modern era (2026-07-28) has no handshake, and the SDK's stdio entry does not copy the per-request `_meta["io.modelcontextprotocol/clientInfo"]` into it. So the client name was unknown and the tip was dropped. A new helper, `src/client-identity.ts`, returns the client name in both eras. The tip text is unchanged. Unknown clients and clients other than `claude-ai` still get no tip. Tests: `tests/client-identity.test.ts`.
