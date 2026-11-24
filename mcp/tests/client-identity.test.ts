@@ -26,6 +26,7 @@ const modernMeta = (clientInfo?: unknown): Json => ({
 });
 
 beforeEach(() => {
+  delete process.env.TOTALRECLAW_HOST; // never depend on the developer's shell env
   resetClientIdentity();
   resetSetupNote();
 });

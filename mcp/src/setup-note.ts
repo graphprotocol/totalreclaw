@@ -10,7 +10,9 @@
  * Only Claude Desktop sees it (MCP `clientInfo.name` is exactly `claude-ai`, from
  * `initialize` or, in the 2026-07-28 era, the per-request `_meta`; see client-identity.ts).
  * For any other client, or when clientInfo is missing, the tip is dropped
- * silently and never shown.
+ * silently and never shown. One exception: when no client name is known and the
+ * `.mcpb` manifest env `TOTALRECLAW_HOST=claude-desktop` is set (see
+ * `hostFallbackName()`), the tip is shown. A known client name always wins.
  */
 
 import type { ToolResponse } from './tools/types.js';

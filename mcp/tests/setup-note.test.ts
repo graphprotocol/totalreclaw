@@ -3,7 +3,8 @@
  *
  * The Claude Desktop "main memory" tip appears exactly once, only after a
  * reload activation (pairing in this process), only on totalreclaw_account /
- * totalreclaw_status, and only for Claude Desktop (clientInfo.name `claude-ai`).
+ * totalreclaw_status, and only for Claude Desktop (clientInfo.name `claude-ai`; when no client
+ * name is known, only if the `.mcpb` env TOTALRECLAW_HOST=claude-desktop is set).
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -23,6 +24,7 @@ const textOf = (r: ToolResponse): string => (r.content[0] as { text: string }).t
 let tmpDir: string;
 let credsPath: string;
 beforeEach(() => {
+  delete process.env.TOTALRECLAW_HOST; // never depend on the developer's shell env
   resetSetupNote();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-setupnote-'));
   credsPath = path.join(tmpDir, 'credentials.json');
