@@ -445,11 +445,11 @@ describe('probe fallback (server/discover answered, client still falls back to i
 
 describe('client attribution (the input seam getClientIdentifier() reads)', () => {
   // `mcp/src/index.ts` `getClientIdentifier()` builds `X-TotalReclaw-Client`
-  // as `mcp-server:<name>` from `server.getClientVersion()` (index.ts, the
-  // "Client identification" section). That function is module-private and
-  // imports of index.ts boot the server, so these tests pin its INPUT on the
-  // live instance instead: after the era's handshake, `getClientVersion()`
-  // must reflect the client the host declared.
+  // as `mcp-server:<name>` from `getClientInfo(server)` (the initialize value,
+  // else the observed envelope; index.ts, the "Client identification"
+  // section). That function is module-private and imports of index.ts boot
+  // the server, so these tests pin its INPUT on the live instance instead:
+  // the client the host declared must be reflected in each era.
 
   it('legacy era: initialize populates getClientVersion() with the clientInfo the host sent', async () => {
     const { peer, instances } = startServer();

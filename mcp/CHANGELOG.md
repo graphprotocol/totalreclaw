@@ -1,7 +1,5 @@
 # Changelog
 
-## [Unreleased]
-
 ## [3.6.3] - Unreleased
 
 ### Fixed
