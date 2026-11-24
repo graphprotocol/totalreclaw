@@ -193,7 +193,9 @@ async def test_sidecar_handshake_reports_relay_metadata(
 
     def fake_get_client(self):
         class _C:
-            _eoa_address = "0xdeadbeef0123"
+            # The sidecar reads the public ``eoa_address`` property. Before
+            # failed completions nacked, a stub missing it still got an ack.
+            eoa_address = "0xdeadbeef0123"
 
         return _C()
 

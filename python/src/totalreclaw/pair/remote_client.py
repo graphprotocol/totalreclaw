@@ -71,18 +71,41 @@ DEFAULT_RELAY_URL = "wss://api.totalreclaw.xyz"
 #: this only bites when the RPC is slower than registration + the write).
 WALLET_RESOLVE_TIMEOUT_S = 3.0
 
-_WALLET_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+_WALLET_RE = re.compile(r"0x[0-9a-fA-F]{40}")
+_NACK_CODE_RE = re.compile(r"[a-z0-9_]{1,64}")
 
 
 def _clean_wallet(value: Any) -> Optional[str]:
     """Lowercased ``0x`` + 40-hex address, or ``None``."""
-    if isinstance(value, str) and _WALLET_RE.match(value):
+    if isinstance(value, str) and _WALLET_RE.fullmatch(value):
         return value.lower()
     return None
 
 
 def _completion_active(result: Any) -> bool:
     return isinstance(result, dict) and result.get("state") == "active"
+
+
+def _nack_code(result: Any) -> str:
+    """The nack ``error`` for a non-active completion. Only short snake_case
+    codes pass through: handlers put ``str(exception)`` in ``error``, which
+    must not leave the machine."""
+    error = result.get("error") if isinstance(result, dict) else None
+    if isinstance(error, str) and _NACK_CODE_RE.fullmatch(error):
+        return error
+    return "completion_failed"
+
+
+async def _nack_and_close(ws: Any, code: str) -> None:
+    try:
+        await ws.send(json.dumps({"type": "nack", "error": code}))
+    except Exception:
+        pass
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
 
 
 async def _await_wallet(task: "Optional[asyncio.Task]", deadline: float) -> Optional[str]:
@@ -625,14 +648,24 @@ async def await_phrase_upload(
         finally:
             phrase = ""  # noqa: F841 — drop our reference
 
+    if not _completion_active(result):
+        # The handler returned (rather than raised) a failure, e.g. the
+        # credentials write failed. Nack so the page shows the error instead
+        # of "You're all set", as MCP's ``awaitPhraseUpload`` does.
+        if wallet_task is not None:
+            wallet_task.cancel()
+        await _nack_and_close(ws, _nack_code(result))
+        logger.warning(
+            "pair.relay_nack_sent token=%s… mode=%s",
+            session.token[:8],
+            forward_mode or "unspecified",
+        )
+        return result
+
     # Ack the relay. With a wallet_address the relay can show the paired
     # account's plan on the pair page (200); without one the browser gets the
     # plain 204. The address is public (on-chain) — never phrase material.
-    wallet: Optional[str] = None
-    if _completion_active(result):
-        wallet = bundle_wallet or await _await_wallet(wallet_task, wallet_deadline)
-    elif wallet_task is not None:
-        wallet_task.cancel()
+    wallet = bundle_wallet or await _await_wallet(wallet_task, wallet_deadline)
     ack_frame: dict = {"type": "ack"}
     if wallet:
         ack_frame["wallet_address"] = wallet

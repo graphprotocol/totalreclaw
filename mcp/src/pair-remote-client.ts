@@ -82,9 +82,20 @@ export const WALLET_RESOLVE_TIMEOUT_MS = 3_000;
 
 const WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
 
+const NACK_CODE_RE = /^[a-z0-9_]{1,64}$/;
+
 /** Lowercased `0x` + 40-hex address, or undefined. */
 function cleanWallet(value: unknown): string | undefined {
   return typeof value === 'string' && WALLET_RE.test(value) ? value.toLowerCase() : undefined;
+}
+
+/**
+ * The nack `error` for a non-active completion. Only short snake_case codes
+ * pass through: handlers put `err.message` in `error`, and the relay logs it
+ * and returns it to the browser. Mirrors Python's `_nack_code`.
+ */
+function nackCode(error: unknown): string {
+  return typeof error === 'string' && NACK_CODE_RE.test(error) ? error : 'completion_failed';
 }
 
 /** Best-effort: the resolver's address if it lands before `deadlineMs`. */
@@ -547,7 +558,7 @@ export async function awaitPhraseUpload(
   }
 
   if (result.state !== 'active') {
-    safeSend(ws, { type: 'nack', error: result.error ?? 'completion_failed' });
+    safeSend(ws, { type: 'nack', error: nackCode(result.error) });
     safeClose(ws);
     return result;
   }

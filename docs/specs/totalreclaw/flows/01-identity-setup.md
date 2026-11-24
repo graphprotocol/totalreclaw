@@ -213,7 +213,8 @@ Once the relay has `authKeyHash` and the client has the EOA, the Smart Account a
 
 - Phrase path: the address is resolved through the same derivation each client uses at startup, started in parallel with the completion handler, and awaited for at most 3 s before the ack.
 - Bundle path (`derived-bundle-v1`): the address is `account.smart_account`, with no RPC.
-- The address is sent only when completion returned `state: "active"`. On any failure or timeout the ack is the plain `{"type": "ack"}`, which the relay treats exactly as before (page unchanged). The resolver never falls back to the EOA, unlike Python's `client._derive_smart_account_address`.
+- The address is sent only when completion returned `state: "active"`. If the completion fails, the gateway nacks instead (`{"type": "nack", "error": "<code>"}`) and the page shows the error; only short snake_case codes are forwarded, anything else becomes `completion_failed`.
+- If the address lookup fails, returns something that isn't an address, or misses the 3 s cap, the ack is the plain `{"type": "ack"}`, which the relay treats exactly as before (page unchanged). The resolver never falls back to the EOA, unlike Python's `client._derive_smart_account_address`.
 
 ---
 

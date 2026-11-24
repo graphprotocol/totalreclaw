@@ -455,10 +455,10 @@ async def test_sidecar_completed_client_never_eagerly_resolves_data_edge(
 
 
 @pytest.mark.asyncio
-async def test_bundle_completion_not_active_acks_without_wallet():
-    """totalreclaw-relay#79: a completion that did not reach ``active`` never
+async def test_bundle_completion_not_active_nacks_without_wallet():
+    """A completion that did not reach ``active`` nacks (as MCP) and never
     advertises the account (the relay would show a plan for credentials that
-    were not written)."""
+    were not written). Free-text errors are not forwarded."""
     relay = _BundleRelayStub(token="tok-bundle-err")
     relay.set_bundle_payload("derived-bundle-v1", _canonical_bundle_json().encode("utf-8"))
     await relay.start()
@@ -477,6 +477,7 @@ async def test_bundle_completion_not_active_acks_without_wallet():
             complete_pairing_bundle=complete_bundle,
         )
         await asyncio.sleep(0.1)
-        assert relay.ack_received == {"type": "ack"}
+        assert relay.ack_received is None
+        assert relay.nack_received == {"type": "nack", "error": "completion_failed"}
     finally:
         await relay.stop()

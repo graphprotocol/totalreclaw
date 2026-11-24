@@ -107,7 +107,7 @@ describe('pair ack wallet_address (totalreclaw-relay#79)', () => {
     expect(ws.sent).toEqual([{ type: 'ack' }]);
   });
 
-  it.each([undefined, '', '0x1234', 'not-an-address', SA + '00', 42 as any])(
+  it.each([undefined, '', '0x1234', 'not-an-address', SA + '00', SA + '\n', 42 as any])(
     'unknown / malformed address %p → plain ack',
     async (answer) => {
       const { ws } = await run({ resolveWalletAddress: async () => answer });
@@ -169,6 +169,19 @@ describe('pair ack wallet_address (totalreclaw-relay#79)', () => {
     });
     expect(result.state).toBe('error');
     expect(ws.sent).toEqual([{ type: 'nack', error: 'credentials_write_failed' }]);
+  });
+
+  it.each([
+    undefined,
+    '',
+    "EACCES: permission denied, open '/home/alice/.totalreclaw/credentials.json'",
+    'A'.repeat(10),
+    'x'.repeat(65),
+  ])('a failed completion never forwards free-text error %p', async (error) => {
+    const { ws } = await run({
+      completePairing: async () => ({ state: 'error', error }) as RelayCompletionResult,
+    });
+    expect(ws.sent).toEqual([{ type: 'nack', error: 'completion_failed' }]);
   });
 
   it('a completion that throws nacks without the address', async () => {

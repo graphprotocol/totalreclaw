@@ -299,7 +299,7 @@ async def test_ack_without_resolver_is_unchanged():
     assert relay.ack_received == {"type": "ack"}
 
 
-@pytest.mark.parametrize("answer", [None, "", "0x1234", "not-an-address", 42, SA + "00"])
+@pytest.mark.parametrize("answer", [None, "", "0x1234", "not-an-address", 42, SA + "00", SA + "\n"])
 @pytest.mark.asyncio
 async def test_unknown_or_malformed_wallet_sends_plain_ack(answer):
     async def resolver(phrase: str):
@@ -361,15 +361,34 @@ async def test_resolver_runs_in_parallel_with_completion():
 
 
 @pytest.mark.asyncio
-async def test_inactive_completion_never_reports_wallet():
+async def test_inactive_completion_nacks_and_never_reports_wallet():
+    """A completion that returns a failure (e.g. the credentials write failed)
+    nacks, so the page shows the error instead of "You're all set" (as MCP)."""
     async def resolver(phrase: str):
         return SA
 
     async def failed(phrase: str) -> dict:
         return {"state": "error", "error": "credentials_write_failed"}
 
-    relay, _ = await _run_with_resolver("tok-w-inactive", resolver, complete=failed)
-    assert relay.ack_received == {"type": "ack"}
+    relay, result = await _run_with_resolver("tok-w-inactive", resolver, complete=failed)
+    assert result["state"] == "error"
+    assert relay.ack_received is None
+    assert relay.nack_received == {"type": "nack", "error": "credentials_write_failed"}
+
+
+@pytest.mark.parametrize(
+    "error",
+    [None, "", "[Errno 28] No space left on device: '/home/alice/.totalreclaw'", "A" * 10, "x" * 65, 42],
+)
+@pytest.mark.asyncio
+async def test_inactive_completion_nack_never_forwards_free_text(error):
+    """Handlers put str(exception) in ``error``; only short snake_case codes
+    reach the relay (which logs it and returns it to the browser)."""
+    async def failed(phrase: str) -> dict:
+        return {"state": "error", "error": error}
+
+    relay, _ = await _run_with_resolver("tok-w-freetext", None, complete=failed)
+    assert relay.nack_received == {"type": "nack", "error": "completion_failed"}
 
 
 @pytest.mark.asyncio
