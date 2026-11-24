@@ -132,4 +132,36 @@ describe('Claude Desktop main-memory tip', () => {
       },
     );
   });
+
+  describe('TOTALRECLAW_HOST fallback (mcpb manifest env)', () => {
+    const prev = process.env.TOTALRECLAW_HOST;
+    afterEach(() => {
+      if (prev === undefined) delete process.env.TOTALRECLAW_HOST;
+      else process.env.TOTALRECLAW_HOST = prev;
+    });
+
+    it('unknown client + env claude-desktop: tip shown', () => {
+      process.env.TOTALRECLAW_HOST = 'claude-desktop';
+      armSetupNote();
+      expect(textOf(withSetupNote(ok('x'), undefined))).toBe(`x\n\n${SETUP_NOTE_TEXT}`);
+    });
+
+    it('known other client + env: no tip', () => {
+      process.env.TOTALRECLAW_HOST = 'claude-desktop';
+      armSetupNote();
+      expect(textOf(withSetupNote(ok('x'), 'claude-code'))).toBe('x');
+    });
+
+    it('unknown client, no env: no tip', () => {
+      delete process.env.TOTALRECLAW_HOST;
+      armSetupNote();
+      expect(textOf(withSetupNote(ok('x'), undefined))).toBe('x');
+    });
+
+    it('unknown client + a different env value: no tip', () => {
+      process.env.TOTALRECLAW_HOST = 'something-else';
+      armSetupNote();
+      expect(textOf(withSetupNote(ok('x'), undefined))).toBe('x');
+    });
+  });
 });

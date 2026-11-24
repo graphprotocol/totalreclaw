@@ -46,13 +46,23 @@ function isSoftError(text: string): boolean {
 }
 
 /**
+ * Fallback for a client that never identified itself (a modern-era client may
+ * omit `clientInfo`, a SHOULD in the spec). The Claude Desktop `.mcpb` manifest
+ * sets `TOTALRECLAW_HOST=claude-desktop`. Used ONLY when no client name is known;
+ * a known client name always wins.
+ */
+function hostFallbackName(): string | undefined {
+  return process.env.TOTALRECLAW_HOST === 'claude-desktop' ? CLAUDE_DESKTOP_CLIENT_NAME : undefined;
+}
+
+/**
  * Append the tip to a successful result, once, for Claude Desktop only.
  * Errors (isError, or a JSON `{"error": ...}` text) pass through and keep it armed. For any other client the tip is
  * disarmed without a trace.
  */
 export function withSetupNote(res: ToolResponse, clientName: string | undefined): ToolResponse {
   if (!pending || res.isError) return res;
-  if (clientName !== CLAUDE_DESKTOP_CLIENT_NAME) {
+  if ((clientName ?? hostFallbackName()) !== CLAUDE_DESKTOP_CLIENT_NAME) {
     pending = false;
     return res;
   }

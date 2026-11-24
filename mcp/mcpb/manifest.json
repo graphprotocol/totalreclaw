@@ -26,7 +26,8 @@
       "command": "node",
       "args": ["${__dirname}/server/dist/index.js"],
       "env": {
-        "TOTALRECLAW_SERVER_URL": "${user_config.server_url}"
+        "TOTALRECLAW_SERVER_URL": "${user_config.server_url}",
+        "TOTALRECLAW_HOST": "claude-desktop"
       }
     }
   },
