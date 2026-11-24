@@ -86,9 +86,9 @@ HKDF and BIP-32 are different functions over the seed, so neither branch can be 
 | `lshSeed` | Seeds the per-user random hyperplanes for LSH bucket hashes | Bucket hashes only |
 | Owner key | Signs UserOps for the user's Smart Account | Signatures and the public address only |
 
-**Where the keys live.** A client configured with a recovery phrase derives every key on the device; only `authKey` is ever sent anywhere. An agent host configured with a `derived-bundle-v1` bundle holds the four vault keys and the owner key directly, but never the phrase or seed (see [client consistency](specs/totalreclaw/client-consistency.md)).
+**Where the keys live.** A client configured with a recovery phrase derives every key on the device. It sends `authKey` with each request, and at registration also sends the HKDF salt (`seed[0..32]`) and `SHA-256(authKey)`. No other key or seed material leaves the device. An agent host configured with a `derived-bundle-v1` bundle holds the four vault keys and the owner key directly, but never the phrase or seed (see [client consistency](specs/totalreclaw/client-consistency.md)).
 
-**Legacy password path (self-hosted only).** The managed service always requires a BIP-39 phrase. Self-hosted deployments can still be configured with an arbitrary password instead: it is stretched with Argon2id (t=3, m=64 MB, p=4) over a random salt into a master key, which then takes the place of the seed in Step 2. This path has no owner key, since self-hosted mode doesn't use the chain.
+**Legacy password path (self-hosted only).** The managed service always requires a BIP-39 phrase. Self-hosted deployments can still be configured with an arbitrary password instead: it is stretched with Argon2id (t=3, m=64 MB, p=4) over a random 32-byte salt into a master key. Step 2 then runs with the master key as the HKDF input and that same random salt as the HKDF salt. This path has no owner key, since self-hosted mode doesn't use the chain.
 
 ### XChaCha20-Poly1305 Wire Format
 
