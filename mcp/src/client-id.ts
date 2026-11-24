@@ -1,6 +1,6 @@
 /**
  * Shared client identifier for X-TotalReclaw-Client header.
- * Set once after MCP initialize handshake from server.getClientVersion().
+ * Set once from the client identity (client-identity.ts): the initialize handshake (2025 era) or the per-request _meta (2026-07-28 era).
  */
 let _clientId = 'mcp-server';
 

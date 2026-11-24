@@ -7,7 +7,8 @@
  * one extra final paragraph: a tip for the user (not an instruction to the
  * host). Once per pairing (a new pairing in the same process arms it again). No other tool is touched.
  *
- * Only Claude Desktop sees it (MCP `clientInfo.name` is exactly `claude-ai`).
+ * Only Claude Desktop sees it (MCP `clientInfo.name` is exactly `claude-ai`, from
+ * `initialize` or, in the 2026-07-28 era, the per-request `_meta`; see client-identity.ts).
  * For any other client, or when clientInfo is missing, the tip is dropped
  * silently and never shown.
  */
