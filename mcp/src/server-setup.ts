@@ -48,6 +48,7 @@ import {
   readMemoryContext,
   invalidateMemoryContextCache,
 } from './resources/index.js';
+import { observeClientInfo } from './client-identity.js';
 import { setOnRememberCallback } from './tools/remember.js';
 import { createRequire } from 'node:module';
 
@@ -144,9 +145,14 @@ export function createTotalReclawServer(deps: ServerSetupDeps): Server {
   });
 
   // ── Tools ──────────────────────────────────────────────────────────────
-  server.setRequestHandler('tools/list', async () => ({ tools: TOOL_MANIFEST }));
+  server.setRequestHandler('tools/list', async (_request, ctx) => {
+    observeClientInfo(ctx.mcpReq.envelope);
+    return { tools: TOOL_MANIFEST };
+  });
 
-  server.setRequestHandler('tools/call', async (request) => {
+  server.setRequestHandler('tools/call', async (request, ctx) => {
+    // Modern era: the client names itself per request (see client-identity.ts).
+    observeClientInfo(ctx.mcpReq.envelope);
     const { name, arguments: args } = request.params;
     // Handlers type `content[].type` as `string`; at runtime it is always a
     // valid content-block type (`"text"`). The cast reconciles that widening

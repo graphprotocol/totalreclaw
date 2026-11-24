@@ -3,7 +3,8 @@
  *
  * The Claude Desktop "main memory" tip appears exactly once, only after a
  * reload activation (pairing in this process), only on totalreclaw_account /
- * totalreclaw_status, and only for Claude Desktop (clientInfo.name `claude-ai`).
+ * totalreclaw_status, and only for Claude Desktop (clientInfo.name `claude-ai`; when no client
+ * name is known, only if the `.mcpb` env TOTALRECLAW_HOST=claude-desktop is set).
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -23,6 +24,7 @@ const textOf = (r: ToolResponse): string => (r.content[0] as { text: string }).t
 let tmpDir: string;
 let credsPath: string;
 beforeEach(() => {
+  delete process.env.TOTALRECLAW_HOST; // never depend on the developer's shell env
   resetSetupNote();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-setupnote-'));
   credsPath = path.join(tmpDir, 'credentials.json');
@@ -131,5 +133,37 @@ describe('Claude Desktop main-memory tip', () => {
         expect(textOf(withSetupNote(ok('x'), DESKTOP))).toBe('x');
       },
     );
+  });
+
+  describe('TOTALRECLAW_HOST fallback (mcpb manifest env)', () => {
+    const prev = process.env.TOTALRECLAW_HOST;
+    afterEach(() => {
+      if (prev === undefined) delete process.env.TOTALRECLAW_HOST;
+      else process.env.TOTALRECLAW_HOST = prev;
+    });
+
+    it('unknown client + env claude-desktop: tip shown', () => {
+      process.env.TOTALRECLAW_HOST = 'claude-desktop';
+      armSetupNote();
+      expect(textOf(withSetupNote(ok('x'), undefined))).toBe(`x\n\n${SETUP_NOTE_TEXT}`);
+    });
+
+    it('known other client + env: no tip', () => {
+      process.env.TOTALRECLAW_HOST = 'claude-desktop';
+      armSetupNote();
+      expect(textOf(withSetupNote(ok('x'), 'claude-code'))).toBe('x');
+    });
+
+    it('unknown client, no env: no tip', () => {
+      delete process.env.TOTALRECLAW_HOST;
+      armSetupNote();
+      expect(textOf(withSetupNote(ok('x'), undefined))).toBe('x');
+    });
+
+    it('unknown client + a different env value: no tip', () => {
+      process.env.TOTALRECLAW_HOST = 'something-else';
+      armSetupNote();
+      expect(textOf(withSetupNote(ok('x'), undefined))).toBe('x');
+    });
   });
 });

@@ -98,7 +98,7 @@ Notes:
 Known gaps (from the PR #668 review):
 
 - **stdin EOF closes the transport** (SDK v2 behaviour; the 1.x server never listened for EOF). When the host closes its end of the pipe, the transport closes and any requests still in flight are **aborted and not answered** — a client that expects responses keeps stdin open until it has them (the SDK stdio transport's own contract).
-- **`Server.getClientVersion()` is deprecated in SDK v2.** It is the accessor `mcp/src/index.ts` (`getClientIdentifier()`) reads for `X-TotalReclaw-Client` attribution. On 2025-era connections it is fed by `initialize` and works; on a modern stdio connection it stays `undefined` — the SDK's stdio entry does not backfill it from the per-request envelope (only its HTTP entry does). Follow-up: read client identity from `ctx.mcpReq.envelope` in the handlers instead.
+- ~~**`Server.getClientVersion()` is deprecated in SDK v2.**~~ Closed in 3.6.3. On a modern stdio connection `getClientVersion()` stays `undefined` (the SDK's stdio entry does not backfill it from the per-request envelope; only its HTTP entry does). Client identity now comes from `getClientInfo()` (`mcp/src/client-identity.ts`): the `initialize` value, else the `_meta["io.modelcontextprotocol/clientInfo"]` seen on `tools/list` / `tools/call`. It feeds the Claude Desktop tip gate, `X-TotalReclaw-Client` and the support log. Observable change: in the modern era `X-TotalReclaw-Client` is now `mcp-server:<name>` after the first `tools/list` or `tools/call` (it was `mcp-server`). `clientInfo` is a SHOULD in 2026-07-28, so a client that omits it stays unknown.
 
 ## 6. What the enclave (Python, Streamable HTTP) must mirror
 

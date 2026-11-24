@@ -7,9 +7,12 @@
  * one extra final paragraph: a tip for the user (not an instruction to the
  * host). Once per pairing (a new pairing in the same process arms it again). No other tool is touched.
  *
- * Only Claude Desktop sees it (MCP `clientInfo.name` is exactly `claude-ai`).
+ * Only Claude Desktop sees it (MCP `clientInfo.name` is exactly `claude-ai`, from
+ * `initialize` or, in the 2026-07-28 era, the per-request `_meta`; see client-identity.ts).
  * For any other client, or when clientInfo is missing, the tip is dropped
- * silently and never shown.
+ * silently and never shown. One exception: when no client name is known and the
+ * `.mcpb` manifest env `TOTALRECLAW_HOST=claude-desktop` is set (see
+ * `hostFallbackName()`), the tip is shown. A known client name always wins.
  */
 
 import type { ToolResponse } from './tools/types.js';
@@ -45,13 +48,23 @@ function isSoftError(text: string): boolean {
 }
 
 /**
+ * Fallback for a client that never identified itself (a modern-era client may
+ * omit `clientInfo`, a SHOULD in the spec). The Claude Desktop `.mcpb` manifest
+ * sets `TOTALRECLAW_HOST=claude-desktop`. Used ONLY when no client name is known;
+ * a known client name always wins.
+ */
+function hostFallbackName(): string | undefined {
+  return process.env.TOTALRECLAW_HOST === 'claude-desktop' ? CLAUDE_DESKTOP_CLIENT_NAME : undefined;
+}
+
+/**
  * Append the tip to a successful result, once, for Claude Desktop only.
  * Errors (isError, or a JSON `{"error": ...}` text) pass through and keep it armed. For any other client the tip is
  * disarmed without a trace.
  */
 export function withSetupNote(res: ToolResponse, clientName: string | undefined): ToolResponse {
   if (!pending || res.isError) return res;
-  if (clientName !== CLAUDE_DESKTOP_CLIENT_NAME) {
+  if ((clientName ?? hostFallbackName()) !== CLAUDE_DESKTOP_CLIENT_NAME) {
     pending = false;
     return res;
   }

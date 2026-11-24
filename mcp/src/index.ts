@@ -190,6 +190,7 @@ export { getSessionId };
 
 // ── Client identification ──────────────────────────────────────────────────
 import { setClientId, getClientId } from './client-id.js';
+import { getClientInfo } from './client-identity.js';
 import { getRecallTopK, setServerRecallTopK, resetServerRecallTopK } from './recall-top-k.js';
 let clientIdentifierResolved = false;
 
@@ -1914,7 +1915,7 @@ let server: ReturnType<typeof createTotalReclawServer> | undefined;
 
 function getClientIdentifier(): string {
   if (!clientIdentifierResolved) {
-    const clientInfo = server?.getClientVersion();
+    const clientInfo = getClientInfo(server);
     if (clientInfo?.name) {
       const name = clientInfo.name.toLowerCase().replace(/\s+/g, '-');
       setClientId(`mcp-server:${name}`);
@@ -1929,7 +1930,7 @@ let clientLogged = false;
 /** Log `client: <name> <version>` once (support diagnostic), from initialize or the first tool call, whichever sees clientInfo first. */
 function logClientOnce(): void {
   if (clientLogged) return;
-  const ci = server?.getClientVersion();
+  const ci = getClientInfo(server);
   if (!ci?.name) return;
   clientLogged = true;
   console.error(`client: ${ci.name} ${ci.version ?? 'unknown'}`);
@@ -2012,9 +2013,9 @@ async function accountHandler(args: unknown): Promise<ToolResponse> {
 }
 
 const commonHandlers: HandlerBundle = {
-  totalreclaw_status: async (args) => withSetupNote(await statusHandler(args), server?.getClientVersion()?.name),
+  totalreclaw_status: async (args) => withSetupNote(await statusHandler(args), getClientInfo(server)?.name),
   totalreclaw_upgrade: upgradeHandler,
-  totalreclaw_account: async (args) => withSetupNote(await accountHandler(args), server?.getClientVersion()?.name),
+  totalreclaw_account: async (args) => withSetupNote(await accountHandler(args), getClientInfo(server)?.name),
 };
 
 // ── Managed-service (subgraph) tool bundle ───────────────────────────────────

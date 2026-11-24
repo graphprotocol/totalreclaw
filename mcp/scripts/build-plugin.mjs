@@ -154,6 +154,13 @@ function main() {
   const pj = JSON.parse(readFileSync(pjPath, 'utf8'));
   if (version) pj.version = version;
   if (opts.entry === 'mcpb') {
+    // KNOWN LIMIT: the bundle's manifest sets server.mcp_config.env.TOTALRECLAW_HOST=claude-desktop
+    // (a Desktop-only tip fallback, see src/setup-note.ts). It is copied here unchanged, so a
+    // non-Desktop host that loads this plugin artifact would inherit it. No `mcpb`-entry plugin
+    // artifact is distributed today (the shipped plugin pins the npx entry, which has no such env).
+    // Stripping it needs a zip rewriter (this script has no zip writer), and a build-time guard
+    // cannot fail on it because every bundle carries the key. Before shipping an mcpb-entry plugin,
+    // strip that env key from the embedded manifest.
     writeFileSync(join(dest, 'totalreclaw.mcpb'), bundleBuf);
     pj.mcpServers = './totalreclaw.mcpb';
     rmSync(join(dest, '.mcp.json'), { force: true }); // single file we just copied
