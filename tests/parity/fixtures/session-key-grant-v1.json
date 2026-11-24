@@ -1,7 +1,7 @@
 {
   "meta": {
     "version": 1,
-    "description": "Cross-language parity fixture for SessionKeyPermissionGrant (cred-9, spec §3.1 + §6.4). Locks the EIP-712 digest + master ECDSA signature + ABI-encoded install blob across Solidity (SessionKeyModule.sol), TS (viem), Python (eth_account). The Solidity validator uses a non-standard `bytes4[]` encoding — see generate-session-key-grant-v1.ts for the digest implementation siblings MUST mirror. Regenerate via: npx tsx fixtures/generate-session-key-grant-v1.ts",
+    "description": "Cross-language parity fixture for SessionKeyPermissionGrant (cred-9, spec §3.1 + §6.4). Locks the EIP-712 digest + master ECDSA signature + ABI-encoded install blob across Solidity (TotalReclawAccount.sol), TS (viem), Python (eth_account). The Solidity validator uses a non-standard `bytes4[]` encoding — see generate-session-key-grant-v1.ts for the digest implementation siblings MUST mirror. Regenerate via: npx tsx fixtures/generate-session-key-grant-v1.ts",
     "grant_version": 1,
     "generator": "tests/parity/fixtures/generate-session-key-grant-v1.ts"
   },

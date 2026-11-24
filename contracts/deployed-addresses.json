@@ -29,7 +29,17 @@
       "deployedAt": "2026-03-20T12:55:55.353Z",
       "deployer": "0x5C6A2E495F032E31Fc4c042085Bea0006B9C7A06",
       "blockNumber": 39121533,
-      "status": "RETIRED \u2014 free tier lived here before the ops-1 single-chain Gnosis migration (2026-06-05). The free\u2192Base-Sepolia routing no longer exists; kept as the historical deploy record only."
+      "status": "RETIRED \u2014 free tier lived here before the ops-1 single-chain Gnosis migration (2026-06-05). The free\u2192Base-Sepolia routing no longer exists; kept as the historical deploy record only.",
+      "note": "totalReclawPaymaster here is likewise inert (zero transactions/internal calls since creation, verified 2026-10-15). Source removed from the repo (see git history)."
+    },
+    "gnosisPaymaster": {
+      "network": "gnosis",
+      "chainId": 100,
+      "totalReclawPaymaster": "0xd10Be4669c739C3315616f7E6a2D7Dbd7033e7aD",
+      "deployedAt": "2026-03-18",
+      "deployTx": "0x1d9ecbc3ac8be98346c1416c281c98e70e832bd13e29179327d15e520fc0d144",
+      "deployer": "0x5C6A2E495F032E31Fc4c042085Bea0006B9C7A06",
+      "status": "INERT \u2014 deployed alongside the prod DataEdge but never used: gas sponsorship goes through Pimlico's paymaster. Verified 2026-10-15: zero transactions, zero internal calls, zero balance, zero EntryPoint deposit. Source removed from the repo (see git history)."
     }
   }
 }
