@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [3.6.3] - Unreleased
+
+### Fixed
+- **Claude Desktop: the one-time "main memory" tip now shows when the host uses the modern MCP era.** The 3.6.2 tip checked `getClientVersion()`. The SDK fills it only at the `initialize` handshake. The modern era (2026-07-28) has no handshake, and the SDK's stdio entry does not copy the per-request `_meta["io.modelcontextprotocol/clientInfo"]` into it. So the client name was unknown and the tip was dropped. A new helper, `src/client-identity.ts`, returns the client name in both eras. The tip text is unchanged. Unknown clients and clients other than `claude-ai` still get no tip. Tests: `tests/client-identity.test.ts`.
+- **The `.mcpb` manifest sets `TOTALRECLAW_HOST=claude-desktop`.** The tip uses it only when no client name is known (a modern client may omit `clientInfo`). A known client name always wins.
+
+### Changed
+- **Modern era: `X-TotalReclaw-Client` is now `mcp-server:<name>`** after the first `tools/list` or `tools/call` (it was `mcp-server`). The 2025 era is unchanged. The `TOTALRECLAW_HOST` fallback does not change this header.
+- **The `client: <name> <version>` support log line now also appears in the modern era**, at the first tool call.
+
 ## [3.6.2] - 2026-11-23
 
 ### Added

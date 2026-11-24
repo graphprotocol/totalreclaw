@@ -28,6 +28,7 @@ import {
   type ServerSetupDeps,
 } from '../src/server-setup';
 import { SERVER_INSTRUCTIONS } from '../src/prompts';
+import { getClientInfo, resetClientIdentity } from '../src/client-identity';
 import type { ToolResponse } from '../src/tools/types';
 
 // serverInfo.version is the package version (#743), not a hard-coded 1.0.0.
@@ -163,6 +164,7 @@ function startServer(): Harness {
 let stderrSpy: jest.SpyInstance;
 
 beforeEach(() => {
+  resetClientIdentity();
   // serveStdio reports rejected openings through onerror → console.error.
   stderrSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 });
@@ -457,18 +459,11 @@ describe('client attribution (the input seam getClientIdentifier() reads)', () =
     expect(console.error).not.toHaveBeenCalled();
   });
 
-  // SKIPPED — finding from the PR #668 review, verified against
-  // @modelcontextprotocol/server 2.2.0: the SDK's stdio entry (`serveStdio`)
-  // never seeds the connection-scoped client identity from the per-request
-  // `_meta` envelope (`seedClientIdentityFromEnvelope` is called only by the
-  // HTTP entry, `createMcpHandler`). So on a modern stdio connection
-  // `getClientVersion()` stays undefined and `getClientIdentifier()`
-  // (mcp/src/index.ts) keeps the default `mcp-server` id instead of
-  // `mcp-server:<host>`. Product code is unchanged per the review decision;
-  // the fix belongs to the follow-up that moves client attribution to
-  // `ctx.mcpReq.envelope` (docs/specs/totalreclaw/mcp-dual-era.md §5 known
-  // gaps). Un-skip when that lands.
-  it.skip('modern era: a tools/call envelope carrying clientInfo is reflected in getClientVersion()', async () => {
+  // The SDK's stdio entry never seeds `getClientVersion()` from the per-request
+  // `_meta` envelope (only its HTTP entry does), so on a modern stdio connection
+  // that accessor stays undefined. Client attribution therefore goes through
+  // `getClientInfo()` (src/client-identity.ts); more cases: client-identity.test.ts.
+  it('modern era: getClientVersion() stays undefined, getClientInfo() reads the envelope clientInfo', async () => {
     const { peer, instances } = startServer();
     await peer.request('discover-1', 'server/discover', { _meta: MODERN_META });
     await peer.request(2, 'tools/call', {
@@ -477,6 +472,7 @@ describe('client attribution (the input seam getClientIdentifier() reads)', () =
       _meta: MODERN_META,
     });
     const live = instances[instances.length - 1];
-    expect(live.getClientVersion()?.name).toBe(MODERN_META['io.modelcontextprotocol/clientInfo'].name);
+    expect(live.getClientVersion()).toBeUndefined();
+    expect(getClientInfo(live)?.name).toBe(MODERN_META['io.modelcontextprotocol/clientInfo'].name);
   });
 });
