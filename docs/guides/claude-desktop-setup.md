@@ -12,8 +12,8 @@ Download the file for your computer:
 
 | Your computer | Download |
 |---|---|
-| macOS (Apple silicon) | [totalreclaw-3.6.2-darwin-arm64.mcpb](https://github.com/graphprotocol/totalreclaw/releases/download/mcp-server-v3.6.2/totalreclaw-3.6.2-darwin-arm64.mcpb) |
-| Windows | [totalreclaw-3.6.2-win32-x64.mcpb](https://github.com/graphprotocol/totalreclaw/releases/download/mcp-server-v3.6.2/totalreclaw-3.6.2-win32-x64.mcpb) |
+| macOS (Apple silicon) | [totalreclaw-3.6.3-darwin-arm64.mcpb](https://github.com/graphprotocol/totalreclaw/releases/download/mcp-server-v3.6.3/totalreclaw-3.6.3-darwin-arm64.mcpb) |
+| Windows | [totalreclaw-3.6.3-win32-x64.mcpb](https://github.com/graphprotocol/totalreclaw/releases/download/mcp-server-v3.6.3/totalreclaw-3.6.3-win32-x64.mcpb) |
 
 Double-click the file, click **Install**, and leave **Server URL (advanced)** empty. If double-clicking doesn't open Claude Desktop, open it, go to **Settings → Extensions**, and drag the file there.
 
