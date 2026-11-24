@@ -29,7 +29,12 @@ from totalreclaw.pair.crypto import (
 from totalreclaw.pair.remote_client import (
     await_phrase_upload,
     open_remote_pair_session,
+    resolve_paired_smart_account,
 )
+# Bound at import time — conftest's autouse fixture stubs the module attribute
+# so no test reaches the real RPC; the strict-helper tests below need the
+# original function (with httpx patched instead).
+from totalreclaw.client import derive_smart_account_address_strict as _strict_original
 
 
 TEST_PHRASE = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
@@ -241,3 +246,211 @@ async def test_open_session_rejects_rate_limited():
     finally:
         server.close()
         await server.wait_closed()
+
+
+# ---------------------------------------------------------------------------
+# totalreclaw-relay#79 — wallet_address on the ack
+# ---------------------------------------------------------------------------
+
+SA = "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01"
+
+
+async def _run_with_resolver(token, resolver, complete=None, **kwargs):
+    relay = RelayStub(token=token)
+    relay.set_phrase(TEST_PHRASE)
+    await relay.start()
+    try:
+        session = await open_remote_pair_session(
+            relay_base_url=relay.url, pin="246810", client_id="gw-wallet"
+        )
+
+        async def _active(phrase: str) -> dict:
+            return {"state": "active"}
+
+        result = await await_phrase_upload(
+            session,
+            complete_pairing=complete or _active,
+            resolve_wallet_address=resolver,
+            **kwargs,
+        )
+        await asyncio.sleep(0.1)
+        return relay, result
+    finally:
+        await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_ack_carries_resolved_wallet_lowercased():
+    seen: List[str] = []
+
+    async def resolver(phrase: str):
+        seen.append(phrase)
+        return SA
+
+    relay, result = await _run_with_resolver("tok-w-ok", resolver)
+    assert seen == [TEST_PHRASE]
+    assert result == {"state": "active"}
+    assert relay.ack_received == {"type": "ack", "wallet_address": SA.lower()}
+
+
+@pytest.mark.asyncio
+async def test_ack_without_resolver_is_unchanged():
+    relay, _ = await _run_with_resolver("tok-w-none", None)
+    assert relay.ack_received == {"type": "ack"}
+
+
+@pytest.mark.parametrize("answer", [None, "", "0x1234", "not-an-address", 42, SA + "00"])
+@pytest.mark.asyncio
+async def test_unknown_or_malformed_wallet_sends_plain_ack(answer):
+    async def resolver(phrase: str):
+        return answer
+
+    relay, _ = await _run_with_resolver(f"tok-w-bad", resolver)
+    assert relay.ack_received == {"type": "ack"}
+
+
+@pytest.mark.asyncio
+async def test_resolver_error_sends_plain_ack():
+    async def resolver(phrase: str):
+        raise RuntimeError("rpc down")
+
+    relay, result = await _run_with_resolver("tok-w-err", resolver)
+    assert result == {"state": "active"}
+    assert relay.ack_received == {"type": "ack"}
+
+
+@pytest.mark.asyncio
+async def test_slow_resolver_is_bounded_and_cancelled():
+    cancelled = asyncio.Event()
+
+    async def resolver(phrase: str):
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return SA
+
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    relay, result = await _run_with_resolver("tok-w-slow", resolver, wallet_timeout_s=0.2)
+    assert loop.time() - t0 < 2.0
+    assert result == {"state": "active"}
+    assert relay.ack_received == {"type": "ack"}
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_resolver_runs_in_parallel_with_completion():
+    """The lookup overlaps the completion handler instead of adding to it."""
+
+    async def resolver(phrase: str):
+        await asyncio.sleep(0.4)
+        return SA
+
+    async def slow_complete(phrase: str) -> dict:
+        await asyncio.sleep(0.4)
+        return {"state": "active"}
+
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    relay, _ = await _run_with_resolver("tok-w-par", resolver, complete=slow_complete)
+    # Sequential would be >= 0.8s (+0.1 settle sleep); parallel ~0.5s.
+    assert loop.time() - t0 < 0.75
+    assert relay.ack_received == {"type": "ack", "wallet_address": SA.lower()}
+
+
+@pytest.mark.asyncio
+async def test_inactive_completion_never_reports_wallet():
+    async def resolver(phrase: str):
+        return SA
+
+    async def failed(phrase: str) -> dict:
+        return {"state": "error", "error": "credentials_write_failed"}
+
+    relay, _ = await _run_with_resolver("tok-w-inactive", resolver, complete=failed)
+    assert relay.ack_received == {"type": "ack"}
+
+
+@pytest.mark.asyncio
+async def test_completion_raising_cancels_resolver_and_nacks():
+    cancelled = asyncio.Event()
+
+    async def resolver(phrase: str):
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    async def boom(phrase: str) -> dict:
+        await asyncio.sleep(0.05)  # let the in-flight lookup start
+        raise RuntimeError("disk full")
+
+    relay = RelayStub(token="tok-w-raise")
+    relay.set_phrase(TEST_PHRASE)
+    await relay.start()
+    try:
+        session = await open_remote_pair_session(
+            relay_base_url=relay.url, pin="246810", client_id="gw-wallet"
+        )
+        with pytest.raises(RuntimeError, match="disk full"):
+            await await_phrase_upload(
+                session, complete_pairing=boom, resolve_wallet_address=resolver
+            )
+        await asyncio.sleep(0.1)
+        assert relay.ack_received is None
+        assert relay.nack_received == {"type": "nack", "error": "completion_failed"}
+        assert cancelled.is_set()
+    finally:
+        await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_default_call_site_resolver_is_stubbed_in_tests():
+    """Guards the conftest fixture: the shared resolver never hits the RPC."""
+    assert await resolve_paired_smart_account(TEST_PHRASE) is None
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class _FakeAsyncClient:
+    answer: object = None
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, json):
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return _FakeResp(self.answer)
+
+
+@pytest.mark.parametrize(
+    "answer, expected",
+    [
+        ({"result": "0x" + "0" * 24 + SA[2:]}, SA.lower()),
+        ({"result": "0x"}, None),  # empty — the lenient helper would return the EOA
+        ({"error": {"code": -32000}}, None),
+        (ConnectionError("rpc unreachable"), None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_strict_derivation_never_falls_back_to_eoa(monkeypatch, answer, expected):
+    import httpx
+
+    monkeypatch.setattr(_FakeAsyncClient, "answer", answer)
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
+    assert await _strict_original(TEST_PHRASE) == expected

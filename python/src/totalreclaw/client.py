@@ -214,18 +214,16 @@ def _get_eoa_address(mnemonic: str) -> str:
     return _get_eoa_account(mnemonic).address
 
 
-async def _derive_smart_account_address(mnemonic: str, rpc_url: str = "https://sepolia.base.org") -> str:
-    """Derive the CREATE2 Smart Account address by querying the factory contract.
+async def _query_smart_account_for_owner(eoa_address: str, rpc_url: str) -> Optional[str]:
+    """``SimpleAccountFactory.getAddress(owner, 0)`` via ``eth_call``.
 
-    Calls SimpleAccountFactory.getAddress(owner, 0) via eth_call on a public RPC.
-    This matches the `toSimpleSmartAccount` logic in permissionless/viem.
+    Returns the lowercased Smart Account address, or ``None`` when the RPC
+    answers with an empty / malformed result. Network errors propagate.
 
     Factory: 0x91E60e0613810449d098b0b5Ec8b51A0FE8c8985 (v0.7)
     Method: getAddress(address owner, uint256 salt) view returns (address)
     """
     import httpx
-
-    eoa_address = _get_eoa_address(mnemonic)
 
     # ABI-encode: getAddress(address,uint256)
     # keccak256("getAddress(address,uint256)")[:4] = 0x8cb84e18
@@ -252,11 +250,46 @@ async def _derive_smart_account_address(mnemonic: str, rpc_url: str = "https://s
         )
         result = resp.json().get("result", "")
         if not result or result == "0x" or len(result) < 66:
-            # Fallback to EOA if RPC fails
-            return eoa_address.lower()
+            return None
         # Result is ABI-encoded address (32 bytes, last 20 bytes are the address)
-        address = "0x" + result[-40:]
-        return address.lower()
+        return ("0x" + result[-40:]).lower()
+
+
+async def _derive_smart_account_address(mnemonic: str, rpc_url: str = "https://sepolia.base.org") -> str:
+    """Derive the CREATE2 Smart Account address by querying the factory contract.
+
+    Calls SimpleAccountFactory.getAddress(owner, 0) via eth_call on a public RPC.
+    This matches the `toSimpleSmartAccount` logic in permissionless/viem.
+    Falls back to the EOA address when the RPC returns no usable result.
+    """
+    eoa_address = _get_eoa_address(mnemonic)
+    address = await _query_smart_account_for_owner(eoa_address, rpc_url)
+    if address is None:
+        # Fallback to EOA if RPC fails
+        return eoa_address.lower()
+    return address
+
+
+async def derive_smart_account_address_strict(
+    mnemonic: str, rpc_url: str = "https://sepolia.base.org"
+) -> Optional[str]:
+    """Like :func:`_derive_smart_account_address` but never falls back.
+
+    Returns ``None`` on ANY failure (RPC error, empty result) instead of the
+    EOA address — for callers that report the address to someone else and
+    must never present the EOA as the Smart Account (e.g. the pair ``ack``
+    frame, which the relay uses to look up billing). The EOA is derived
+    synchronously before the first ``await``, so the phrase is only needed
+    for that instant.
+    """
+    try:
+        eoa_address = _get_eoa_address(mnemonic)
+    except Exception:
+        return None
+    try:
+        return await _query_smart_account_for_owner(eoa_address, rpc_url)
+    except Exception:
+        return None
 
 
 class BatchIds(list):

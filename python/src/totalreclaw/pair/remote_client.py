@@ -16,7 +16,9 @@ Flow (this file implements the gateway half):
   6. Decrypt locally via ``pair.crypto.decrypt_pairing_payload`` using the
      gateway's private key. If decrypt succeeds + phrase is valid, call the
      ``complete_pairing`` handler (writes credentials.json).
-  7. Send ``{type: "ack"}`` back. Close the WebSocket.
+  7. Send ``{type: "ack"}`` back — plus ``wallet_address`` (the paired
+     Smart Account, public) when known, so the relay can show the account's
+     plan on the pair page (totalreclaw-relay#79). Close the WebSocket.
 
 Phrase-safety invariants preserved:
   - Relay sees only ciphertext; it cannot derive the symmetric key without
@@ -34,6 +36,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import unicodedata
 from dataclasses import dataclass
@@ -61,6 +64,46 @@ logger = logging.getLogger(__name__)
 # the drift between the guide's documented default and the package
 # behaviour. 2.3.6rc5 aligns them.
 DEFAULT_RELAY_URL = "wss://api.totalreclaw.xyz"
+
+
+#: Upper bound on how long the ack waits for the Smart Account address
+#: (``resolve_wallet_address`` runs in parallel with ``complete_pairing``, so
+#: this only bites when the RPC is slower than registration + the write).
+WALLET_RESOLVE_TIMEOUT_S = 3.0
+
+_WALLET_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+
+def _clean_wallet(value: Any) -> Optional[str]:
+    """Lowercased ``0x`` + 40-hex address, or ``None``."""
+    if isinstance(value, str) and _WALLET_RE.match(value):
+        return value.lower()
+    return None
+
+
+def _completion_active(result: Any) -> bool:
+    return isinstance(result, dict) and result.get("state") == "active"
+
+
+async def _await_wallet(task: "Optional[asyncio.Task]", deadline: float) -> Optional[str]:
+    """Best-effort: the task's address if it lands before ``deadline``."""
+    if task is None:
+        return None
+    remaining = deadline - asyncio.get_running_loop().time()
+    try:
+        return _clean_wallet(await asyncio.wait_for(task, timeout=max(0.0, remaining)))
+    except Exception:  # timeout, cancellation, resolver error — all "unknown"
+        return None
+
+
+async def resolve_paired_smart_account(phrase: str) -> Optional[str]:
+    """Default ``resolve_wallet_address`` for call sites: the CREATE2 Smart
+    Account for ``phrase`` via the factory ``eth_call``, or ``None`` on any
+    failure (never the EOA fallback ``client._derive_smart_account_address``
+    uses)."""
+    from totalreclaw.client import derive_smart_account_address_strict
+
+    return await derive_smart_account_address_strict(phrase)
 
 
 @dataclass
@@ -295,6 +338,8 @@ async def await_phrase_upload(
     complete_pairing_bundle: Optional[CompleteBundleHandler] = None,
     phrase_validator: Optional[Callable[[str], bool]] = None,
     timeout_s: float = 300.0,
+    resolve_wallet_address: Optional[Callable[[str], Awaitable[Optional[str]]]] = None,
+    wallet_timeout_s: float = WALLET_RESOLVE_TIMEOUT_S,
 ) -> dict:
     """Block until the relay pushes the encrypted payload, then decrypt and
     persist via ``complete_pairing`` / ``complete_pairing_bundle``.
@@ -319,6 +364,15 @@ async def await_phrase_upload(
     ``phrase_validator`` checks BIP-39 word-count / casing. Defaults to the
     same 12/24-word lowercase-ASCII check the local HTTP server uses. Only
     applies to the ``legacy-mnemonic`` path.
+
+    ``resolve_wallet_address`` (optional, totalreclaw-relay#79) maps the
+    validated phrase to the paired Smart Account address. It is started in
+    parallel with ``complete_pairing`` and awaited for at most
+    ``wallet_timeout_s`` before the ack; the address rides on the ack as
+    ``wallet_address`` only when the completion returned
+    ``state == "active"``. It MUST return ``None`` rather than a fallback
+    (never the EOA). Any failure or timeout just sends the plain ack. The
+    bundle path needs no resolver: the address is ``bundle.account.smart_account``.
 
     **Note on today's relay:** as of Phase 2's P2-0 pre-flight, the relay
     does not yet forward a ``payload_type`` field on the pair envelope at
@@ -443,6 +497,10 @@ async def await_phrase_upload(
                 pass
         raise
 
+    bundle_wallet: Optional[str] = None
+    wallet_task: "Optional[asyncio.Task]" = None
+    wallet_deadline = 0.0
+
     if payload_type == "derived-bundle-v1":
         # Option E Phase 2 / #581 (P2-10). The inner plaintext IS the
         # bundle JSON itself (not a phrase) — see derived-bundle-v1.md §5.
@@ -500,6 +558,7 @@ async def await_phrase_upload(
                 "call site has no complete_pairing_bundle handler"
             )
 
+        bundle_wallet = _clean_wallet(bundle.account.smart_account)
         try:
             result = await complete_pairing_bundle(bundle)
         except Exception as err:
@@ -539,10 +598,22 @@ async def await_phrase_upload(
                     pass
             raise RuntimeError("pair.relay: phrase failed BIP-39 validation")
 
+        # Start the (network-bound) address lookup now so it overlaps the
+        # completion handler's own network work instead of adding to it.
+        if resolve_wallet_address is not None:
+            loop = asyncio.get_running_loop()
+            wallet_deadline = loop.time() + wallet_timeout_s
+            try:
+                wallet_task = asyncio.ensure_future(resolve_wallet_address(phrase))
+            except Exception:
+                wallet_task = None
+
         try:
             result = await complete_pairing(phrase)
         except Exception as err:
             logger.error("pair.remote_client: complete_pairing raised: %r", err)
+            if wallet_task is not None:
+                wallet_task.cancel()
             try:
                 await ws.send(json.dumps({"type": "nack", "error": "completion_failed"}))
             finally:
@@ -554,18 +625,29 @@ async def await_phrase_upload(
         finally:
             phrase = ""  # noqa: F841 — drop our reference
 
-    # Ack the relay so the browser gets a 204.
+    # Ack the relay. With a wallet_address the relay can show the paired
+    # account's plan on the pair page (200); without one the browser gets the
+    # plain 204. The address is public (on-chain) — never phrase material.
+    wallet: Optional[str] = None
+    if _completion_active(result):
+        wallet = bundle_wallet or await _await_wallet(wallet_task, wallet_deadline)
+    elif wallet_task is not None:
+        wallet_task.cancel()
+    ack_frame: dict = {"type": "ack"}
+    if wallet:
+        ack_frame["wallet_address"] = wallet
     ack_sent = False
     try:
-        await ws.send(json.dumps({"type": "ack"}))
+        await ws.send(json.dumps(ack_frame))
         ack_sent = True
         # Structured event — makes rc.13 gateway-side pair successes
         # grep-able in ``docker compose logs`` alongside the relay's
         # ``pair.respond_success`` event.
         logger.info(
-            "pair.relay_ack_sent token=%s… mode=%s",
+            "pair.relay_ack_sent token=%s… mode=%s wallet=%s",
             session.token[:8],
             forward_mode or "unspecified",
+            "yes" if wallet else "no",
         )
     except Exception as err:
         logger.warning(

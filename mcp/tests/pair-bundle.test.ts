@@ -135,7 +135,8 @@ describe('awaitPhraseUpload — payload_type: derived-bundle-v1 (Option E Phase 
     expect(receivedBundle?.signing.kind).toBe('owner-eoa');
 
     // Acks the relay on success.
-    expect(ws.sent).toContainEqual({ type: 'ack' });
+    // totalreclaw-relay#79: the bundle's Smart Account rides on the ack.
+    expect(ws.sent).toContainEqual({ type: 'ack', wallet_address: TEST_SMART_ACCOUNT.toLowerCase() });
     expect(ws.closed).toBe(true);
   });
 

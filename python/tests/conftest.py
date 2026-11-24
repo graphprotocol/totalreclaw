@@ -225,3 +225,18 @@ def _reset_hermes_turn_dedup():
 
     hooks._recent_turns.clear()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_real_smart_account_rpc(monkeypatch):
+    """totalreclaw-relay#79: the pair call sites resolve the paired Smart
+    Account (an ``eth_call`` to a public RPC) so the relay ack can carry
+    ``wallet_address``. No test may reach that RPC: the default stub answers
+    "unknown", so the ack stays the plain ``{"type": "ack"}`` existing tests
+    expect. Tests of the address-on-ack path pass their own resolver."""
+    from totalreclaw import client as _client
+
+    async def _unknown(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(_client, "derive_smart_account_address_strict", _unknown)

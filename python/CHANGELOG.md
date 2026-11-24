@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The pair page now shows the paired account's plan (totalreclaw-relay#79).** After a relay pairing completes, the ack to the relay carries the paired Smart Account address (`wallet_address`), so the relay can show the tier, monthly usage and an upgrade button on the "You're all set" screen. The address is resolved in parallel with writing credentials and waited for at most 3 s (`WALLET_RESOLVE_TIMEOUT_S`); a bundle pairing uses the bundle's `account.smart_account`. It is sent only when pairing completed (`state == "active"`). On any failure the ack is unchanged and the page looks as before. The lookup never falls back to the EOA (new `client.derive_smart_account_address_strict`). Wired in the Hermes pair tool and the pair sidecar. Tests: `tests/test_pair_remote_client.py`, `tests/test_pair_completion_bundle.py`; `tests/conftest.py` stubs the RPC for every test.
+
 ### Fixed
 
 - **Agent-facing wording (internal#651, #727, #514, #472).**

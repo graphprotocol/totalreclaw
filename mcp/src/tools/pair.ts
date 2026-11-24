@@ -78,6 +78,7 @@ import {
   ReplaceNotSupportedError,
   type RemotePairSession,
 } from '../pair-remote-client.js';
+import { resolvePairedSmartAccount } from '../smart-account-address.js';
 import { deriveAuthKey, computeAuthKeyHash } from '../cli/setup.js';
 import { redactedBundleSummary, type DerivedBundleV1 } from '../subgraph/bundle.js';
 
@@ -465,6 +466,12 @@ export async function runPairBackgroundTask(opts: {
   credentialsPath?: string;
   /** See `HandlePairOptions.onCredentialsWritten`. */
   onCredentialsWritten?: () => void | Promise<void>;
+  /**
+   * Resolves the paired Smart Account for the relay ack (totalreclaw-relay#79)
+   * so the pair page can show the account's plan. Defaults to the same
+   * derivation managed-mode startup uses; `undefined` on any failure.
+   */
+  resolveWalletAddress?: (mnemonic: string) => Promise<string | undefined>;
 }): Promise<void> {
   const log =
     opts.log ??
@@ -540,6 +547,7 @@ export async function runPairBackgroundTask(opts: {
 
   const phraseUploadPromise = awaitPhraseUpload(opts.session, {
     phraseValidator: (p: string) => validateMnemonic(p, wordlist),
+    resolveWalletAddress: opts.resolveWalletAddress ?? resolvePairedSmartAccount,
     completePairing: async ({ mnemonic }) => {
       const preserved = preserveIfReplacing();
       if (preserved.failure) return preserved.failure;

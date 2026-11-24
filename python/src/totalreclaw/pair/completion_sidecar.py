@@ -438,6 +438,7 @@ async def _drive_full_pair_session(
         ReplaceNotSupportedError,
         await_phrase_upload,
         open_remote_pair_session,
+        resolve_paired_smart_account,
     )
 
     handshake_path = _handshake_path_for(handshake_id)
@@ -644,6 +645,8 @@ async def _drive_full_pair_session(
             session,
             complete_pairing=_complete_pairing,
             complete_pairing_bundle=_complete_pairing_bundle,
+            # totalreclaw-relay#79: lets the pair page show the plan.
+            resolve_wallet_address=resolve_paired_smart_account,
         )
         logger.info(
             "pair.sidecar: completion done token=%s… outcome=ok state=%s",
