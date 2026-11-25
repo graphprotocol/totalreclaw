@@ -9,9 +9,11 @@ import asyncio
 import dataclasses
 import logging
 import hashlib
+import json
 import os
 import threading
 import time
+import uuid
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -33,7 +35,12 @@ from totalreclaw.agent.lifecycle import (
     STORE_DEDUP_THRESHOLD,
 )
 from totalreclaw.agent.loop_runner import run_sync
-from totalreclaw.agent.pending_drain import drain_pending, has_pending
+from totalreclaw.agent.pending_drain import (
+    discard_record as _discard_pending_record,
+    drain_pending,
+    enqueue_messages as _enqueue_messages,
+    has_pending,
+)
 from totalreclaw.agent.recall import auto_recall
 from totalreclaw.pii import note_turn_completed as _pii_note_turn_completed
 from totalreclaw.agent.extraction import extract_facts_llm, extract_facts_heuristic
@@ -792,27 +799,71 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
         try:
             state._extraction_outage_streak = 0
             state._extraction_llm_outage = False
+            state._requeue_crystal = False
         except Exception:
             pass
     return total
 
 
+# Original sessions whose deferred Crystal this process already wrote. Queue
+# delivery is at-least-once (a kill between the Crystal store and the journal
+# discard replays the batch), so a replay in the same process must not store a
+# second copy. Records without a session id are keyed on a hash of their
+# messages. Across processes a replay can still duplicate one Crystal.
+_deferred_crystals_done: set[str] = set()
+
+
+def _batch_fields(batch) -> tuple[list, Optional[str], int, bool]:
+    if isinstance(batch, dict):
+        att = batch.get("attempts")
+        if not isinstance(att, int) or isinstance(att, bool) or att < 0:
+            att = 0
+        return (
+            batch.get("messages") or [],
+            batch.get("session_id") or None,
+            att,
+            bool(batch.get("crystal")),
+        )
+    return batch, None, 0, False
+
+
 def _drain_batches(state: "PluginState", batches: list) -> int:
+    # ``drain_pending`` already removed these batches from the queue file, so
+    # a kill between here and the end of a batch's extraction would lose them
+    # (#657). Journal each batch back (keeping its session id, attempt count
+    # and Crystal flag) under a token before any LLM work; the token is
+    # dropped once the batch has landed, been queued again, or been consumed.
+    tokens: list[Optional[str]] = []
+    for batch in batches:
+        b_msgs, b_sid, b_att, b_crystal = _batch_fields(batch)
+        tokens.append(
+            _journal_messages(state, b_msgs, b_sid, crystal=b_crystal, attempts=b_att, fallback_sid=False)
+        )
+
+    # Time-box the drain: one-shot sessions defer their work here, so N of them
+    # must not stall the first turn for minutes. Batches not started in time
+    # keep their journal record and are drained by a later session start.
+    deadline = _clock() + _finalize_budget_s()
+    # Batches replayed into an empty buffer must not bleed into each other's
+    # Crystal; a buffer that already held live turns is left alone.
+    isolate = (
+        callable(getattr(state, "clear_messages", None))
+        and callable(getattr(state, "get_all_messages", None))
+        and not state.get_all_messages()
+    )
     total = 0
     for idx, batch in enumerate(batches):
-        # Tolerate both the meta-dict shape and a bare message-list (older
-        # callers) so this stays robust to the ``with_meta`` flag.
-        if isinstance(batch, dict):
-            msgs = batch.get("messages") or []
-            session_id = batch.get("session_id") or None
-            attempts = batch.get("attempts")
-            if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 0:
-                attempts = 0
-        else:
-            msgs = batch
-            session_id = None
-            attempts = 0
+        msgs, session_id, attempts, want_crystal = _batch_fields(batch)
 
+        if idx > 0 and deadline - _clock() < _stage_estimate("extract"):
+            logger.info(
+                "TotalReclaw: session-start drain budget spent; %d batch(es) stay queued "
+                "for a later session.", len(batches) - idx,
+            )
+            break
+
+        if isolate:
+            state.clear_messages()
         added = 0
         for msg in msgs:
             role = msg.get("role") if isinstance(msg, dict) else None
@@ -822,43 +873,70 @@ def _drain_batches(state: "PluginState", batches: list) -> int:
                 added += 1
 
         if added == 0:
+            _discard_journal(tokens[idx])
             continue
 
         try:
             state._extraction_requeued = False
             state._extraction_llm_outage = False
             state._extraction_outage_streak = attempts
+            state._requeue_crystal = want_crystal
         except Exception:
             pass
+        drained_texts: list[str] = []
         try:
-            _auto_extract_queueing(
+            drained_texts = _auto_extract_queueing(
                 state,
                 mode="full",
                 llm_config=_get_hermes_llm_config(),
                 session_id_override=session_id,
-            )
+            ) or []
         except Exception as exc:
             logger.warning("TotalReclaw: drain-side auto_extract failed: %s", exc)
 
         outage = getattr(state, "_extraction_llm_outage", False) is True
+        requeued = getattr(state, "_extraction_requeued", False) is True
+
+        # A finalize that ran out of time deferred this segment's Crystal too.
+        # Its length gate was decided then, so do not re-run it on this
+        # (deduplicated, possibly empty) fact list.
+        if want_crystal and not requeued and not outage:
+            crystal_key = session_id or hashlib.sha256(
+                json.dumps(msgs, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+            if crystal_key in _deferred_crystals_done:
+                logger.info("TotalReclaw: deferred Crystal already stored for this session; skipped.")
+            else:
+                try:
+                    _session_debrief(
+                        state,
+                        stored_fact_texts=drained_texts,
+                        gate_already_passed=True,
+                        session_id=session_id,
+                    )
+                    _deferred_crystals_done.add(crystal_key)
+                except Exception as exc:
+                    logger.warning("TotalReclaw: drain-side Crystal failed: %s", exc)
+
+        # Done: landed, queued again (its own record carries attempts + the
+        # Crystal flag), or failed and consumed as before.
+        _discard_journal(tokens[idx])
+
         # A batch that was queued again (reads still paused, LLM outage) has not landed.
-        if getattr(state, "_extraction_requeued", False) is not True and not outage:
+        if not requeued and not outage:
             total += added
+
+        if isolate:
+            state.clear_messages()
 
         if outage:
             # The LLM is down: do not spend its retry budget on every remaining
             # batch. Age them one attempt each and put them back (bounded).
-            for rest in batches[idx + 1:]:
-                if isinstance(rest, dict):
-                    r_msgs = rest.get("messages") or []
-                    r_sid = rest.get("session_id") or None
-                    r_att = rest.get("attempts")
-                    if not isinstance(r_att, int) or isinstance(r_att, bool) or r_att < 0:
-                        r_att = 0
-                else:
-                    r_msgs, r_sid, r_att = rest, None, 0
+            for ridx in range(idx + 1, len(batches)):
+                r_msgs, r_sid, r_att, r_crystal = _batch_fields(batches[ridx])
                 if r_msgs:
-                    requeue_batch_after_outage(state, r_msgs, r_sid, r_att)
+                    requeue_batch_after_outage(state, r_msgs, r_sid, r_att, crystal=r_crystal)
+                _discard_journal(tokens[ridx])
             break
 
     return total
@@ -1379,24 +1457,174 @@ def on_session_end(state: "PluginState", **kwargs) -> None:
     return None
 
 
-def _finalize_one_conversation(state: "PluginState") -> bool:
+# --- finalize budget (#657) -------------------------------------------------
+# Hermes gives the session-finalize hooks 10 s and then proceeds without us
+# ("Session finalize hooks ... exceeded 10.0s"); the process may exit right
+# after, taking any in-flight work with it. Finalize therefore works to a
+# deadline: the unprocessed messages are persisted to the #148 pending queue
+# FIRST (cheap, durable), inline extraction / Crystal only run when the
+# remaining budget covers what that stage took last time, and anything
+# skipped stays queued for the next session's drain. Nothing is dropped.
+_FINALIZE_BUDGET_ENV = "TOTALRECLAW_FINALIZE_BUDGET_SECONDS"
+_FINALIZE_BUDGET_DEFAULT_S = 8.0  # under Hermes' 10 s with margin
+# Stage cost assumed before this process has timed one. LLM stages routinely
+# take 10-25 s, so a cold finalize defers them rather than overrun.
+_STAGE_ESTIMATE_DEFAULT_S = 12.0
+_stage_seconds: dict[str, float] = {}
+_clock = time.monotonic  # tests replace this
+
+
+def _finalize_budget_s() -> float:
+    raw = os.environ.get(_FINALIZE_BUDGET_ENV, "").strip()
+    if raw:
+        try:
+            val = float(raw)
+            if val >= 0:
+                return val
+        except ValueError:
+            pass
+    return _FINALIZE_BUDGET_DEFAULT_S
+
+
+_STAGE_ESTIMATE_ENV = "TOTALRECLAW_FINALIZE_STAGE_ESTIMATE_SECONDS"
+
+
+def _stage_estimate(stage: str) -> float:
+    if stage in _stage_seconds:
+        return _stage_seconds[stage]
+    raw = os.environ.get(_STAGE_ESTIMATE_ENV, "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    return _STAGE_ESTIMATE_DEFAULT_S
+
+
+def _journal_messages(
+    state: "PluginState",
+    messages: list,
+    session_id: Optional[str] = None,
+    crystal: bool = False,
+    attempts: int = 0,
+    fallback_sid: bool = True,
+) -> Optional[str]:
+    """Persist ``messages`` to the pending queue under a fresh token.
+    ``None`` when there was nothing to write or the write failed."""
+    if not messages:
+        return None
+    try:
+        owner = _owner_address(state)
+    except Exception:
+        owner = ""
+    if not owner:
+        return None
+    if session_id is None and fallback_sid:
+        # The conversation being finalized: still the active session here.
+        sid = getattr(state, "session_id", None)
+        session_id = sid if isinstance(sid, str) else None
+    token = uuid.uuid4().hex
+    try:
+        ok = _enqueue_messages(
+            owner, list(messages), session_id=session_id, token=token, crystal=crystal,
+            attempts=attempts,
+        )
+    except Exception as exc:
+        logger.warning("TotalReclaw: pending-queue journal failed: %s", exc)
+        return None
+    return token if ok else None
+
+
+def _discard_journal(token: Optional[str]) -> None:
+    if token:
+        try:
+            _discard_pending_record(token)
+        except Exception as exc:  # pragma: no cover - never raises
+            logger.debug("journal discard failed: %s", exc)
+
+
+def _defer_conversation(state: "PluginState", messages: list, with_crystal: bool) -> bool:
+    """Queue ``messages`` for the next session. ``False`` when the write
+    failed (the caller then keeps them in the live buffer)."""
+    if _journal_messages(state, messages, crystal=with_crystal) is None:
+        return False
+    state.mark_messages_processed()
+    return True
+
+
+def _finalize_one_conversation(state: "PluginState", deadline: Optional[float] = None) -> bool:
     """Flush any unprocessed messages + run the session debrief (Crystal) for
     the CURRENTLY-ACTIVE conversation slot. Best-effort — never raises.
 
+    ``deadline`` (a ``_clock()`` value) bounds the work: stages that do not fit
+    are queued for the next session instead of run (#657). ``None`` runs
+    everything inline, as the idle-roll callers want.
+
     Returns whether the segment was long enough for a Crystal. ``False`` means
     the caller may carry the segment over instead of dropping it (#630)."""
-    stored_fact_texts: list[str] = []
+    if deadline is None:
+        stored_fact_texts: list[str] = []
+        if state.has_unprocessed_messages():
+            try:
+                stored_fact_texts = _auto_extract_queueing(
+                    state, mode="full", llm_config=_get_hermes_llm_config(),
+                ) or []
+            except Exception as e:
+                logger.warning("TotalReclaw on_session_finalize flush failed: %s", e)
+
+        eligible = crystal_gate_passes(len(state.get_all_messages()), len(stored_fact_texts))
+        try:
+            _session_debrief(state, stored_fact_texts=stored_fact_texts)
+        except Exception as e:
+            logger.warning("TotalReclaw on_session_finalize debrief failed: %s", e)
+        return eligible
+
+    stored_fact_texts = []
+    all_messages = list(state.get_all_messages())
     if state.has_unprocessed_messages():
+        unprocessed = list(state.get_unprocessed_messages())
+        if deadline - _clock() < _stage_estimate("extract"):
+            # Does not fit: hand the work to the next session's drain. When the
+            # segment qualifies for a Crystal the whole conversation goes, so
+            # the drain can write it too.
+            eligible = crystal_gate_passes(len(all_messages), 0)
+            queued = all_messages if eligible else unprocessed
+            if _defer_conversation(state, queued, eligible):
+                logger.info(
+                    "TotalReclaw finalize: %d message(s) queued for the next session "
+                    "(not enough of the %.0fs budget left to extract).",
+                    len(queued), _finalize_budget_s(),
+                )
+                return eligible
+            # Queue write failed: fall through and try inline rather than drop.
+        token = _journal_messages(state, unprocessed)
+        started = _clock()
         try:
             stored_fact_texts = _auto_extract_queueing(
                 state, mode="full", llm_config=_get_hermes_llm_config(),
             ) or []
+            _stage_seconds["extract"] = max(_stage_seconds.get("extract", 0.0), _clock() - started)
         except Exception as e:
             logger.warning("TotalReclaw on_session_finalize flush failed: %s", e)
+        else:
+            # The extraction call returned (landed, queued again by its own
+            # paused/shutdown path, or an empty answer): finalize drops the
+            # buffer next, so the journal record has nothing left to protect.
+            # An exception above keeps it for the next session's drain.
+            _discard_journal(token)
 
-    eligible = crystal_gate_passes(len(state.get_all_messages()), len(stored_fact_texts))
+    eligible = crystal_gate_passes(len(all_messages), len(stored_fact_texts))
+    if eligible and deadline - _clock() < _stage_estimate("crystal"):
+        # Facts are in; only the summary is outstanding. Queue the conversation
+        # with the Crystal flag (the drain re-extracts, deduped, then writes it).
+        if _journal_messages(state, all_messages, crystal=True) is not None:
+            logger.info("TotalReclaw finalize: Crystal queued for the next session (budget).")
+            return eligible
+    started = _clock()
     try:
         _session_debrief(state, stored_fact_texts=stored_fact_texts)
+        if eligible:
+            _stage_seconds["crystal"] = max(_stage_seconds.get("crystal", 0.0), _clock() - started)
     except Exception as e:
         logger.warning("TotalReclaw on_session_finalize debrief failed: %s", e)
     return eligible
@@ -1433,6 +1661,7 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
 
     carried: dict = {}
     host_session_id = kwargs.get("session_id") or None
+    deadline = _clock() + _finalize_budget_s()
     try:
         if hasattr(state, "stash_active_conversation") and hasattr(state, "pop_next_conversation"):
             # Stash the live conversation, then crystallize each stashed
@@ -1440,13 +1669,13 @@ def on_session_finalize(state: "PluginState", **kwargs) -> None:
             # slot and loops exactly once → byte-identical to the old behavior.
             state.stash_active_conversation()
             while state.pop_next_conversation():
-                eligible = _finalize_one_conversation(state)
+                eligible = _finalize_one_conversation(state, deadline)
                 key = state.active_conversation_key or host_session_id
                 if not eligible and key and state.get_all_messages():
                     carried[key] = state.capture_live_conversation()
         else:
             # Legacy state subclass / test mock without slot support.
-            _finalize_one_conversation(state)
+            _finalize_one_conversation(state, deadline)
     finally:
         state.clear_messages()
         # memq-3 — clear session id alongside the message buffer so the
