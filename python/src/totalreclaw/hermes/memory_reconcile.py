@@ -261,6 +261,7 @@ def reconcile(
         _find_mirrored_facts,
         _mirror_forget,
         _mirror_remember,
+        _mirror_remember_many,
         _same_fact,
     )
 
@@ -334,6 +335,7 @@ def reconcile(
             snap.save()
 
         exists = _already_in_vault(state, added)
+        to_store: List[str] = []
         for text, in_vault in zip(added, exists):
             if in_vault:
                 counts["skipped"] += 1
@@ -341,16 +343,24 @@ def reconcile(
                 continue
             if not budget():
                 continue
+            to_store.append(text)
+        # One batched write for the whole group (#646: a first run with 15
+        # entries made 15 sequential single writes; now 1 or 2 UserOps). The
+        # snapshot moves on per entry, from the per-entry outcome.
+        if to_store:
             try:
-                stored = _mirror_remember(state, {"text": text})
+                oks = _mirror_remember_many(state, to_store)
             except Exception as exc:
                 logger.debug("memory reconcile: store failed: %s", exc)
-                stored = False
-            if not stored:
-                counts["deferred"] += 1
-                continue
-            counts["added"] += 1
-            snap.add(target, text)
+                oks = [False] * len(to_store)
+            for text, stored in zip(to_store, oks):
+                if stored is False or not stored:
+                    counts["deferred"] += 1
+                    continue
+                # "skipped": the gate / PII filter / forget guard stopped it. The
+                # snapshot still moves on (nothing to retry) but it was not added.
+                counts["skipped" if stored == "skipped" else "added"] += 1
+                snap.add(target, text)
             snap.save()
 
         # Removed from the profile (usually evicted for space): kept in the
