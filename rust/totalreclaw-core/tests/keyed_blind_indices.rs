@@ -97,7 +97,8 @@ fn entity_marker_and_separation_vectors() {
     let f = fx();
     let ix = indexer();
     for v in f["entity_vectors"].as_array().unwrap() {
-        assert_eq!(ix.entity_tag(v["normalized"].as_str().unwrap()), v["tag"].as_str().unwrap());
+        // The RAW name goes in; normalisation happens in core.
+        assert_eq!(ix.entity_tag(v["name"].as_str().unwrap()), v["tag"].as_str().unwrap());
     }
     // Whitespace and case variants of one entity share one tag.
     assert_eq!(ix.entity_tag("PostgreSQL"), ix.entity_tag("postgresql"));
@@ -218,7 +219,7 @@ fn walk(buf: &[u8]) -> Vec<(u32, Vec<u8>)> {
 fn keyed_fact_wire_bytes_match_frozen_vector() {
     let f = fx();
     let w = &f["wire"]["fact"];
-    let bytes = encode_fact_protobuf_keyed(&payload_from(&w["input"]));
+    let bytes = encode_fact_protobuf_keyed(&payload_from(&w["input"])).unwrap();
     assert_eq!(hex::encode(&bytes), w["expected_hex"].as_str().unwrap());
     let fields: Vec<u32> = walk(&bytes).iter().map(|(n, _)| *n).collect();
     assert_eq!(*fields.last().unwrap(), 14, "field 14 is written last");
@@ -231,7 +232,6 @@ fn keyed_tombstone_wire_bytes_match_frozen_vector() {
     let bytes = encode_tombstone_protobuf_keyed_at(
         t["fact_id"].as_str().unwrap(),
         t["owner"].as_str().unwrap(),
-        t["version"].as_u64().unwrap() as u32,
         t["timestamp"].as_str().unwrap(),
     );
     assert_eq!(hex::encode(&bytes), t["expected_hex"].as_str().unwrap());
@@ -271,7 +271,7 @@ fn keyed_encoder_sorts_and_dedups_field_5_for_any_input_order() {
         }
         let mut p = base.clone();
         p.blind_indices = tags.clone();
-        let out: Vec<String> = walk(&encode_fact_protobuf_keyed(&p))
+        let out: Vec<String> = walk(&encode_fact_protobuf_keyed(&p).unwrap())
             .into_iter()
             .filter(|(n, _)| *n == 5)
             .map(|(_, v)| String::from_utf8(v).unwrap())
@@ -300,7 +300,7 @@ fn no_keyed_output_equals_a_legacy_sha256_value() {
         }
     }
     for v in f["entity_vectors"].as_array().unwrap() {
-        produced.push(ix.entity_tag(v["normalized"].as_str().unwrap()));
+        produced.push(ix.entity_tag(v["name"].as_str().unwrap()));
     }
     produced.push(ix.digest_marker_tag());
     produced.extend(lsh_hasher(&f["lsh"]).hash_keyed(&lsh_embedding(&f["lsh"])).unwrap());
@@ -349,10 +349,10 @@ fn store_tags_meet_query_trapdoors_and_pipeline_is_keyed() {
     let hasher = LshHasher::new(&seed, 640).unwrap();
     let embedding: Vec<f32> = (0..640).map(|i| ((i as f32) * 0.1).sin() * 0.5).collect();
     let ix = indexer();
-    let extra = vec![ix.entity_tag("PostgreSQL"), ix.digest_marker_tag()];
+    let entities = vec!["PostgreSQL".to_string()];
 
     let p = prepare_fact_v1_keyed(
-        r#"{"t":"x"}"#, "User prefers dark mode", &extra, &enc, &ded, &hasher, &embedding, 8.0, "s", "0xabc", "a",
+        r#"{"t":"x"}"#, "User prefers dark mode", &entities, true, &enc, &ded, &hasher, &embedding, 8.0, "s", "0xabc", "a",
     )
     .unwrap();
     assert!(is_sorted_unique(&p.blind_indices));
@@ -370,7 +370,7 @@ fn store_tags_meet_query_trapdoors_and_pipeline_is_keyed() {
     assert_eq!(get(8)[0], 4);
 
     // A query for the same words meets the stored tags, and no tag is a legacy hash.
-    let q = generate_search_trapdoors_keyed("dark mode preferences", &embedding, &ix, &hasher).unwrap();
+    let q = generate_search_trapdoors_keyed("dark mode preferences", &[], &embedding, &ix, &hasher).unwrap();
     assert!(is_sorted_unique(&q));
     let stored: HashSet<&String> = p.blind_indices.iter().collect();
     // "dark", "mode", "prefer" (from "preferences") and the 20 LSH tags (same embedding).
@@ -381,7 +381,41 @@ fn store_tags_meet_query_trapdoors_and_pipeline_is_keyed() {
         .collect();
     assert!(p.blind_indices.iter().chain(q.iter()).all(|t| !legacy.contains(t)));
 
+    // Entity and marker tags are derived inside prepare, not passed in.
+    assert!(p.blind_indices.contains(&ix.entity_tag("postgresql")));
+    assert!(p.blind_indices.contains(&ix.digest_marker_tag()));
+    // A query naming the entity meets the stored entity tag.
+    let qe = generate_search_trapdoors_keyed("x", &["POSTGRESQL".to_string()], &embedding, &ix, &hasher).unwrap();
+    assert!(qe.contains(&ix.entity_tag("postgresql")) && is_sorted_unique(&qe));
+
     let tomb = walk(&prepare_tombstone_v1_keyed("id", "0xabc"));
     assert_eq!(tomb.iter().find(|(k, _)| *k == 14).unwrap().1[0], 1);
     assert_eq!(tomb.iter().find(|(k, _)| *k == 8).unwrap().1[0], 4);
+}
+
+#[test]
+fn keyed_encoder_always_writes_version_4() {
+    let f = fx();
+    let mut p = payload_from(&f["wire"]["fact"]["input"]);
+    for v in [0u32, 3, 4, 9] {
+        p.version = v;
+        let fields = walk(&encode_fact_protobuf_keyed(&p).unwrap());
+        assert_eq!(fields.iter().find(|(k, _)| *k == 8).unwrap().1[0], 4, "input version {v}");
+    }
+    let t = walk(&totalreclaw_core::protobuf::encode_tombstone_protobuf_keyed("id", "0xabc"));
+    assert_eq!(t.iter().find(|(k, _)| *k == 8).unwrap().1[0], 4);
+}
+
+#[test]
+fn keyed_encoder_rejects_tags_that_are_not_64_lowercase_hex() {
+    let f = fx();
+    let good = "a".repeat(64);
+    for bad in ["prefers", "", &"A".repeat(64), &"a".repeat(63), &"a".repeat(65), &format!("{}g", "a".repeat(63))] {
+        let mut p = payload_from(&f["wire"]["fact"]["input"]);
+        p.blind_indices = vec![good.clone(), bad.to_string()];
+        assert!(encode_fact_protobuf_keyed(&p).is_err(), "accepted {bad:?}");
+    }
+    let mut p = payload_from(&f["wire"]["fact"]["input"]);
+    p.blind_indices = vec![good];
+    assert!(encode_fact_protobuf_keyed(&p).is_ok());
 }

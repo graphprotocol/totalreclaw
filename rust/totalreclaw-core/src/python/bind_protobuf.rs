@@ -26,10 +26,12 @@ pub(crate) fn py_encode_fact_protobuf<'py>(py: Python<'py>, json_str: &str) -> P
     Ok(PyBytes::new(py, &encoded))
 }
 
-/// Encode a scheme-1 fact: field 5 sorted and deduplicated, field 14 `index_scheme = 1`.
+/// Encode a scheme-1 fact: field 5 sorted and deduplicated, field 14 `index_scheme = 1`,
+/// outer version always 4 (any ``version`` in the JSON is ignored).
 ///
 /// Args:
-///     json_str: same JSON as ``encode_fact_protobuf``; ``blind_indices`` must be keyed tags.
+///     json_str: same JSON as ``encode_fact_protobuf``; every ``blind_indices`` entry must be
+///               64 lowercase hex characters (raises ``ValueError`` otherwise).
 ///
 /// Returns:
 ///     bytes (protobuf wire format).
@@ -37,7 +39,7 @@ pub(crate) fn py_encode_fact_protobuf<'py>(py: Python<'py>, json_str: &str) -> P
 #[pyo3(name = "encode_fact_protobuf_keyed")]
 pub(crate) fn py_encode_fact_protobuf_keyed<'py>(py: Python<'py>, json_str: &str) -> PyResult<Bound<'py, PyBytes>> {
     let payload = fact_payload_from_json(json_str)?;
-    let encoded = protobuf::encode_fact_protobuf_keyed(&payload);
+    let encoded = protobuf::encode_fact_protobuf_keyed(&payload).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &encoded))
 }
 
@@ -139,20 +141,14 @@ pub(crate) fn py_encode_tombstone_protobuf<'py>(
 }
 
 
-/// Encode a scheme-1 tombstone: like ``encode_tombstone_protobuf`` plus field 14 `index_scheme = 1`.
+/// Encode a scheme-1 tombstone: outer version 4 plus field 14 `index_scheme = 1`.
 #[pyfunction]
-#[pyo3(signature = (fact_id, owner, version=None))]
 #[pyo3(name = "encode_tombstone_protobuf_keyed")]
 pub(crate) fn py_encode_tombstone_protobuf_keyed<'py>(
     py: Python<'py>,
     fact_id: &str,
     owner: &str,
-    version: Option<u32>,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let encoded = protobuf::encode_tombstone_protobuf_keyed(
-        fact_id,
-        owner,
-        version.unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),
-    );
+    let encoded = protobuf::encode_tombstone_protobuf_keyed(fact_id, owner);
     Ok(PyBytes::new(py, &encoded))
 }

@@ -134,6 +134,13 @@ impl BlindIndexer {
     /// that is neither alphanumeric nor whitespace with a space, split on
     /// whitespace, drop tokens under 2 BYTES, Porter-stem (ASCII only); a stem
     /// under 2 bytes falls back to the token. Words themselves are not tagged.
+    ///
+    /// Character classes: alphanumeric = Unicode `Alphabetic` or General_Category
+    /// `N*` (Rust `char::is_alphanumeric`); whitespace = `White_Space`
+    /// (`char::is_whitespace`); Unicode version = that of the pinned release
+    /// toolchain (`rust-toolchain.toml`). Combining marks that are `Alphabetic`
+    /// (Devanagari vowel signs, Arabic and Hebrew vowel points, some Thai vowels)
+    /// stay in the word; the others (virama, Thai tone marks) split it.
     pub fn stem_tags(&self, text: &str) -> Vec<String> {
         let tags: BTreeSet<String> =
             stem_inputs(text).iter().map(|input| self.tag(DOMAIN_STEM, input)).collect();

@@ -52,9 +52,20 @@ pub fn encode_fact_protobuf(fact: &FactPayload) -> Vec<u8> {
 }
 
 /// Encode a scheme-1 fact: field 5 sorted ascending and deduplicated, and
-/// field 14 `index_scheme = 1`. The caller supplies keyed tags.
-pub fn encode_fact_protobuf_keyed(fact: &FactPayload) -> Vec<u8> {
-    encode_fact(fact, INDEX_SCHEME_KEYED_V1)
+/// field 14 `index_scheme = 1`. Always writes outer version 4 (`fact.version`
+/// is ignored). Rejects any tag that is not 64 lowercase hex characters, so a
+/// caller cannot stamp scheme 1 on a hand-hashed tag such as a plain word.
+pub fn encode_fact_protobuf_keyed(fact: &FactPayload) -> crate::Result<Vec<u8>> {
+    for tag in &fact.blind_indices {
+        if tag.len() != 64 || !tag.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+            return Err(crate::Error::InvalidInput(
+                "keyed blind index must be 64 lowercase hex characters".into(),
+            ));
+        }
+    }
+    let mut keyed = fact.clone();
+    keyed.version = PROTOBUF_VERSION_V4;
+    Ok(encode_fact(&keyed, INDEX_SCHEME_KEYED_V1))
 }
 
 /// `index_scheme == 0` writes the legacy layout byte for byte.
@@ -117,22 +128,17 @@ pub fn encode_tombstone_protobuf(fact_id: &str, owner: &str, version: u32) -> Ve
     encode_tombstone(fact_id, owner, version, &chrono::Utc::now().to_rfc3339(), 0)
 }
 
-/// Encode a scheme-1 tombstone: same as [`encode_tombstone_protobuf`] plus
-/// field 14 `index_scheme = 1`. A tombstone without it is ignored by the
-/// keyed-scheme indexer.
-pub fn encode_tombstone_protobuf_keyed(fact_id: &str, owner: &str, version: u32) -> Vec<u8> {
-    encode_tombstone_protobuf_keyed_at(fact_id, owner, version, &chrono::Utc::now().to_rfc3339())
+/// Encode a scheme-1 tombstone: [`encode_tombstone_protobuf`] with outer
+/// version 4 plus field 14 `index_scheme = 1`. A tombstone without field 14 is
+/// ignored by the keyed-scheme indexer.
+pub fn encode_tombstone_protobuf_keyed(fact_id: &str, owner: &str) -> Vec<u8> {
+    encode_tombstone_protobuf_keyed_at(fact_id, owner, &chrono::Utc::now().to_rfc3339())
 }
 
 /// [`encode_tombstone_protobuf_keyed`] with an explicit timestamp (field 2),
 /// for byte-exact tests.
-pub fn encode_tombstone_protobuf_keyed_at(
-    fact_id: &str,
-    owner: &str,
-    version: u32,
-    timestamp: &str,
-) -> Vec<u8> {
-    encode_tombstone(fact_id, owner, version, timestamp, INDEX_SCHEME_KEYED_V1)
+pub fn encode_tombstone_protobuf_keyed_at(fact_id: &str, owner: &str, timestamp: &str) -> Vec<u8> {
+    encode_tombstone(fact_id, owner, PROTOBUF_VERSION_V4, timestamp, INDEX_SCHEME_KEYED_V1)
 }
 
 fn encode_tombstone(

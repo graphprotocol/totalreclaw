@@ -59,8 +59,9 @@ for (const v of fx.stem_vectors) {
 
 // 3. Entities, marker, separation.
 for (const v of fx.entity_vectors) {
-  check(ix.entityTag(v.normalized) === v.tag, `entity tag: ${v.normalized}`);
-  produced.push(ix.entityTag(v.normalized));
+  // The RAW name goes in; normalisation happens in core.
+  check(ix.entityTag(v.name) === v.tag, `entity tag (raw name): ${JSON.stringify(v.name)}`);
+  produced.push(ix.entityTag(v.name));
 }
 check(ix.entityTag('PostgreSQL') === ix.entityTag('  postgresql '), 'entity case/whitespace variants agree');
 check(ix.entityTag('Postgre   SQL') === ix.entityTag('postgre sql'), 'entity inner whitespace collapses');
@@ -93,10 +94,29 @@ const wf = fx.wire.fact;
 check(hex(wasm.encodeFactProtobufKeyed(JSON.stringify(wf.input))) === wf.expected_hex, 'keyed fact protobuf bytes');
 check(hex(wasm.encodeFactProtobuf(JSON.stringify(wf.input))) !== wf.expected_hex, 'legacy encoder output differs (no field 14, unsorted)');
 const wt = fx.wire.tombstone;
-const tomb = hex(wasm.encodeTombstoneProtobufKeyed(wt.fact_id, wt.owner, wt.version));
+const tomb = hex(wasm.encodeTombstoneProtobufKeyed(wt.fact_id, wt.owner));
 const mid = tomb.slice(wt.prefix_hex.length, tomb.length - wt.suffix_hex.length);
 check(tomb.startsWith(wt.prefix_hex) && tomb.endsWith(wt.suffix_hex) && mid.startsWith('12'), 'keyed tombstone: prefix, timestamp field, suffix with field 14');
 check(tomb.endsWith('7001'), 'keyed tombstone ends with field 14 = 1');
+
+check(tomb.includes('4004'), 'keyed tombstone carries outer version 4');
+const v0 = { ...wf.input, version: 0 };
+check(hex(wasm.encodeFactProtobufKeyed(JSON.stringify(v0))) === wf.expected_hex, 'keyed fact with version 0 still encodes version 4');
+let rejected = 0;
+for (const bad of ['prefers', 'A'.repeat(64), 'a'.repeat(63)]) {
+  try { wasm.encodeFactProtobufKeyed(JSON.stringify({ ...wf.input, blind_indices: [bad] })); } catch { rejected++; }
+}
+check(rejected === 3, 'keyed encoder rejects tags that are not 64 lowercase hex');
+
+// 6b. Keyed query binding.
+const queryText = 'prefers dark mode';
+const names = ['PostgreSQL', 'Café'];
+const f32 = Float32Array.from(l.embedding);
+const trap = wasm.generateSearchTrapdoorsKeyed(queryText, names, f32, ix, hasher) as string[];
+const expectTrap = [...new Set([...(ix.stemTags(queryText) as string[]), ...names.map((n) => ix.entityTag(n)), ...keyed])].sort();
+check(same(trap, expectTrap), 'keyed query trapdoors == sorted(stems U entities U keyed LSH)');
+const legacyTrap = new Set<string>(wasm.generateSearchTrapdoors(queryText, f32, hasher) as string[]);
+check(trap.every((t) => !legacyTrap.has(t)), 'keyed trapdoors share nothing with legacy trapdoors');
 
 // 7. No keyed output equals a legacy sha256 value.
 const banned = new Set<string>([...fx.legacy_sha256.tokens, ...fx.legacy_sha256.stems, ...fx.legacy_sha256.entities, ...fx.legacy_sha256.lsh, fx.legacy_sha256.marker]);

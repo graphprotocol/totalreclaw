@@ -28,11 +28,12 @@ pub fn wasm_encode_fact_protobuf(json: &str) -> Result<Vec<u8>, JsError> {
     Ok(protobuf::encode_fact_protobuf(&fact_payload_from_json(json)?))
 }
 
-/// Encode a scheme-1 fact: field 5 sorted and deduplicated, field 14 `index_scheme = 1`.
-/// Same JSON as `encodeFactProtobuf`; `blind_indices` must be keyed tags.
+/// Encode a scheme-1 fact: field 5 sorted and deduplicated, field 14 `index_scheme = 1`,
+/// outer version always 4 (any `version` in the JSON is ignored). Same JSON as
+/// `encodeFactProtobuf`; throws unless every `blind_indices` entry is 64 lowercase hex.
 #[wasm_bindgen(js_name = "encodeFactProtobufKeyed")]
 pub fn wasm_encode_fact_protobuf_keyed(json: &str) -> Result<Vec<u8>, JsError> {
-    Ok(protobuf::encode_fact_protobuf_keyed(&fact_payload_from_json(json)?))
+    protobuf::encode_fact_protobuf_keyed(&fact_payload_from_json(json)?).map_err(to_js_error)
 }
 
 fn fact_payload_from_json(json: &str) -> Result<protobuf::FactPayload, JsError> {
@@ -71,14 +72,10 @@ pub fn wasm_encode_tombstone_protobuf(fact_id: &str, owner: &str, version: Optio
     )
 }
 
-/// Encode a scheme-1 tombstone: like `encodeTombstoneProtobuf` plus field 14 `index_scheme = 1`.
+/// Encode a scheme-1 tombstone: outer version 4 plus field 14 `index_scheme = 1`.
 #[wasm_bindgen(js_name = "encodeTombstoneProtobufKeyed")]
-pub fn wasm_encode_tombstone_protobuf_keyed(fact_id: &str, owner: &str, version: Option<u32>) -> Vec<u8> {
-    protobuf::encode_tombstone_protobuf_keyed(
-        fact_id,
-        owner,
-        version.unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),
-    )
+pub fn wasm_encode_tombstone_protobuf_keyed(fact_id: &str, owner: &str) -> Vec<u8> {
+    protobuf::encode_tombstone_protobuf_keyed(fact_id, owner)
 }
 
 /// Serde-friendly FactPayload for JSON deserialization.

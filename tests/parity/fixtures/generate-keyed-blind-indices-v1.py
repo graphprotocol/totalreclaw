@@ -75,8 +75,20 @@ def lower_nfc(text: str) -> str:
     return unicodedata.normalize("NFC", text.lower())
 
 
+# Rust's `char::is_alphanumeric` is Unicode Alphabetic or category N*. Python has no
+# `Alphabetic` property: str.isalnum() misses the combining marks that are
+# Other_Alphabetic. These are the ones the vectors exercise (Devanagari vowel signs,
+# Arabic fatha, Hebrew vowel points and shin dot, Thai vowel above); the Rust
+# tables, pinned by rust-toolchain.toml, are the reference for everything else.
+OTHER_ALPHABETIC_USED = {0x093F, 0x0902, 0x0940, 0x064E, 0x05B4, 0x05B8, 0x05B9, 0x05C1, 0x0E31, 0x0E35}
+
+
+def is_word_char(c: str) -> bool:
+    return c.isalnum() or ord(c) in OTHER_ALPHABETIC_USED
+
+
 def tokenize(text: str) -> list[str]:
-    cleaned = "".join(c if (c.isalnum() or c.isspace()) else " " for c in lower_nfc(text))
+    cleaned = "".join(c if (is_word_char(c) or c.isspace()) else " " for c in lower_nfc(text))
     return [t for t in cleaned.split() if len(t.encode()) >= 2]
 
 
@@ -104,10 +116,16 @@ STEM_CASES = [
     ("byte_filter", "a é", ["é"], ["é"]),
     ("empty", "", [], []),
     ("final_sigma", "ΟΔΥΣΣΕΥΣ", ["οδυσσευς"], ["οδυσσευς"]),
+    ("hindi_vowel_signs_kept", "\u0939\u093f\u0902\u0926\u0940", ["\u0939\u093f\u0902\u0926\u0940"], ["\u0939\u093f\u0902\u0926\u0940"]),
+    ("hindi_virama_splits", "\u0939\u093f\u0928\u094d\u0926\u0940", ["\u0939\u093f\u0928", "\u0926\u0940"], ["\u0939\u093f\u0928", "\u0926\u0940"]),
+    ("thai_tone_mark_splits", "\u0e17\u0e35\u0e48\u0e19\u0e35\u0e48", ["\u0e17\u0e35", "\u0e19\u0e35"], ["\u0e17\u0e35", "\u0e19\u0e35"]),
+    ("arabic_vowel_mark_kept", "\u0643\u064e\u062a\u064e\u0628\u064e", ["\u0643\u064e\u062a\u064e\u0628\u064e"], ["\u0643\u064e\u062a\u064e\u0628\u064e"]),
+    ("hebrew_points_kept", "\u05e9\u05b8\u05c1\u05dc\u05b9\u05dd \u05e9\u05b4\u05c1", ["\u05e9\u05b8\u05c1\u05dc\u05b9\u05dd", "\u05e9\u05b4\u05c1"], ["\u05e9\u05b8\u05c1\u05dc\u05b9\u05dd", "\u05e9\u05b4\u05c1"]),
+    ("numeric_symbols", "\u00bd \u2167", ["\u00bd", "\u2177"], ["\u00bd", "\u2177"]),
     ("dedup", "Running quickly, running!", ["running", "quickly", "running"], ["run", "quickli"]),
 ]
 
-ENTITY_NAMES = ["PostgreSQL", "  postgre   sql ", "Café", "Café"]
+ENTITY_NAMES = ["PostgreSQL", "  postgre   sql ", "Café", "Café", "\u039f\u0394\u03a5\u03a3\u03a3\u0395\u03a5\u03a3", "\u0130stanbul"]
 
 
 def stem_vectors():
@@ -240,7 +258,7 @@ def wire_vectors():
     return {
         "fact": {"input": fact, "expected_hex": wire_fact(fact).hex()},
         "tombstone": {
-            "fact_id": fact["id"], "owner": fact["owner"], "version": 4, "timestamp": ts,
+            "fact_id": fact["id"], "owner": fact["owner"], "timestamp": ts,
             "expected_hex": (head + ts_field + tail).hex(),
             "prefix_hex": head.hex(), "suffix_hex": tail.hex(),
         },

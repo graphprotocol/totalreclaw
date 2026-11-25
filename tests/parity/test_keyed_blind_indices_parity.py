@@ -33,7 +33,7 @@ def test_stem_tags():
 def test_entities_marker_separation():
     ix = core.BlindIndexer(ENC)
     for v in FX["entity_vectors"]:
-        assert ix.entity_tag(v["normalized"]) == v["tag"]
+        assert ix.entity_tag(v["name"]) == v["tag"]  # the RAW name goes in
     assert ix.entity_tag("Café") == ix.entity_tag("Café")
     assert ix.digest_marker_tag() == FX["marker"]["tag"]
     sep = FX["separation"]
@@ -62,9 +62,32 @@ def test_wire_bytes():
     assert core.encode_fact_protobuf_keyed(json.dumps(fact["input"])).hex() == fact["expected_hex"]
     assert core.encode_fact_protobuf(json.dumps(fact["input"])).hex() != fact["expected_hex"]
     t = FX["wire"]["tombstone"]
-    out = core.encode_tombstone_protobuf_keyed(t["fact_id"], t["owner"], t["version"]).hex()
+    out = core.encode_tombstone_protobuf_keyed(t["fact_id"], t["owner"]).hex()
     assert out.startswith(t["prefix_hex"]) and out.endswith(t["suffix_hex"])
     assert out[len(t["prefix_hex"]):].startswith("12") and out.endswith("7001")
+
+
+def test_keyed_encoder_version_and_validation():
+    import pytest
+
+    fact = FX["wire"]["fact"]
+    v0 = dict(fact["input"], version=0)
+    assert core.encode_fact_protobuf_keyed(json.dumps(v0)).hex() == fact["expected_hex"]
+    for bad in ("prefers", "A" * 64, "a" * 63):
+        with pytest.raises(Exception):
+            core.encode_fact_protobuf_keyed(json.dumps(dict(fact["input"], blind_indices=[bad])))
+
+
+def test_keyed_query_trapdoors():
+    lsh = FX["lsh"]
+    hasher = core.LshHasher(SEED, lsh["dims"], lsh["n_tables"], lsh["n_bits"])
+    ix = core.BlindIndexer(ENC)
+    text, names = "prefers dark mode", ["PostgreSQL", "Caf\u00e9"]
+    trap = core.generate_search_trapdoors_keyed(text, names, lsh["embedding"], ix, hasher)
+    expect = sorted(set(ix.stem_tags(text)) | {ix.entity_tag(n) for n in names} | set(hasher.hash_keyed(lsh["embedding"])))
+    assert trap == expect
+    legacy = set(core.generate_search_trapdoors(text, lsh["embedding"], hasher))
+    assert not set(trap) & legacy
 
 
 def test_no_keyed_tag_equals_a_legacy_sha256_value():
@@ -73,7 +96,7 @@ def test_no_keyed_tag_equals_a_legacy_sha256_value():
     assert hashlib.sha256(b"type:digest").hexdigest() == legacy["marker"]
     ix = core.BlindIndexer(ENC)
     produced = [t for v in FX["stem_vectors"] for t in ix.stem_tags(v["text"])]
-    produced += [ix.entity_tag(v["normalized"]) for v in FX["entity_vectors"]]
+    produced += [ix.entity_tag(v["name"]) for v in FX["entity_vectors"]]
     produced.append(ix.digest_marker_tag())
     lsh = FX["lsh"]
     produced += core.LshHasher(SEED, lsh["dims"], lsh["n_tables"], lsh["n_bits"]).hash_keyed(lsh["embedding"])

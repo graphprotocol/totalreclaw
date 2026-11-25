@@ -374,14 +374,15 @@ pub fn prepare_fact_v1(
 
 /// Prepare a Memory Taxonomy v1 tombstone with `index_scheme = 1` (field 14).
 pub fn prepare_tombstone_v1_keyed(fact_id: &str, owner: &str) -> Vec<u8> {
-    protobuf::encode_tombstone_protobuf_keyed(fact_id, owner, protobuf::PROTOBUF_VERSION_V4)
+    protobuf::encode_tombstone_protobuf_keyed(fact_id, owner)
 }
 
 /// Prepare a Memory Taxonomy v1 fact with KEYED blind indices (index scheme 1).
 ///
 /// Like [`prepare_fact_v1`], except:
-/// - `blind_indices` = stem tags + keyed LSH tags + `extra_tags` (entity and
-///   marker tags the caller built with [`BlindIndexer`]), sorted and deduplicated;
+/// - `blind_indices` = stem tags + keyed LSH tags + one tag per entity name
+///   (+ the digest marker tag when `digest_marker`), all derived here, sorted
+///   and deduplicated;
 /// - `content_fp` is the v2 fingerprint (`fpKeyV2`);
 /// - the protobuf carries field 14 `index_scheme = 1`.
 ///
@@ -390,7 +391,8 @@ pub fn prepare_tombstone_v1_keyed(fact_id: &str, owner: &str) -> Vec<u8> {
 pub fn prepare_fact_v1_keyed(
     envelope_json: &str,
     text_for_blind_indices: &str,
-    extra_tags: &[String],
+    entity_names: &[String],
+    digest_marker: bool,
     encryption_key: &[u8; 32],
     dedup_key: &[u8; 32],
     lsh_hasher: &LshHasher,
@@ -413,7 +415,10 @@ pub fn prepare_fact_v1_keyed(
     let mut tags = indexer.stem_tags(text_for_blind_indices);
     let embedding_f64: Vec<f64> = embedding.iter().map(|&f| f as f64).collect();
     tags.extend(lsh_hasher.hash_keyed(&embedding_f64)?);
-    tags.extend(extra_tags.iter().cloned());
+    tags.extend(entity_names.iter().map(|name| indexer.entity_tag(name)));
+    if digest_marker {
+        tags.push(indexer.digest_marker_tag());
+    }
     let blind_indices = blind::sort_dedup_tags(tags);
 
     let content_fp = fingerprint::generate_content_fingerprint_v2(text_for_blind_indices, dedup_key)?;
@@ -433,7 +438,7 @@ pub fn prepare_fact_v1_keyed(
         encrypted_embedding: Some(encrypted_embedding.clone()),
         version: protobuf::PROTOBUF_VERSION_V4,
     };
-    let protobuf_bytes = protobuf::encode_fact_protobuf_keyed(&payload);
+    let protobuf_bytes = protobuf::encode_fact_protobuf_keyed(&payload)?;
 
     Ok(PreparedFact {
         fact_id,
