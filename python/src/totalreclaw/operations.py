@@ -646,6 +646,12 @@ async def _store_group_adaptive(store_fn, group: list) -> tuple[list[str], list[
             return ids1 + ids2, errs1 + errs2
         # Single-fact floor (can't split further) or a non-size error —
         # surface it so the fact is counted failed rather than silently dropped.
+        if isinstance(e, NothingSentError):
+            return [], [f"Batch not sent ({len(group)} facts): {msg}"]
+        if isinstance(e, UserOpAmbiguousError):
+            # #646/#650: the op was sent and its fate is open. Not "failed":
+            # callers must not retry it blindly.
+            return [], [f"Batch unconfirmed ({len(group)} facts, may be stored): {msg}"]
         return [], [f"Batch store failed ({len(group)} facts): {msg}"]
 
 

@@ -64,6 +64,12 @@ from .operations import (
 from .retype_setscope import execute_retype, execute_set_scope
 from .write_gate import ledger_for, view_cache_for
 from .userop import DATA_EDGE_ADDRESS as _PROD_DATA_EDGE_ADDRESS_DEFAULT
+from .userop import (
+    NothingSentError,
+    UserOpAmbiguousError,
+    resolve_op_fate,
+    settle_pending_writes,
+)
 
 if TYPE_CHECKING:
     from .agent.pending_store import PendingStoreQueue
@@ -459,11 +465,43 @@ class BatchStoreError(RuntimeError):
     :attr:`BatchIds.batch_results`: one entry per input fact, its id when it
     was stored and ``None`` when it was not. It is a ``RuntimeError``, so
     existing ``except RuntimeError`` handlers keep working.
+
+    #646/#650: two more outcomes, both about facts whose ``batch_results``
+    entry is ``None``:
+
+    * ``unsent``: input positions whose group ended BEFORE anything reached the
+      bundler (an earlier write of the account is still unresolved, the account
+      was busy, the deadline ran out). Nothing was debited; sending them again
+      later is safe.
+    * ``maybe_ops``: one dict per group whose op WAS sent but whose fate is
+      unknown (``hashes``, ``nonce``, ``sent_block``, ``fact_ids``,
+      ``indices`` = input positions). The facts MAY be stored: record them in
+      the write ledger and resolve the op with :meth:`TotalReclaw.resolve_maybe_op`
+      before any re-send.
     """
 
-    def __init__(self, message: str, batch_results: list[Optional[str]]):
+    def __init__(
+        self,
+        message: str,
+        batch_results: list[Optional[str]],
+        *,
+        unsent: Optional[list[int]] = None,
+        maybe_ops: Optional[list[dict]] = None,
+    ):
         super().__init__(message)
         self.batch_results: list[Optional[str]] = list(batch_results)
+        self.unsent: list[int] = list(unsent or [])
+        self.maybe_ops: list[dict] = [dict(m) for m in (maybe_ops or [])]
+
+
+def batch_outcome_flags(outcome: object) -> tuple[list[int], list[dict]]:
+    """``(unsent_positions, maybe_ops)`` of a ``remember_batch`` outcome (a
+    :class:`BatchStoreError`, or an error raised ``from`` one). Empty for any
+    other outcome."""
+    for obj in (outcome, getattr(outcome, "__cause__", None)):
+        if isinstance(obj, BatchStoreError):
+            return list(obj.unsent), [dict(m) for m in obj.maybe_ops]
+    return [], []
 
 
 def per_fact_results(outcome: object, n: int) -> list[Optional[str]]:
@@ -1170,6 +1208,64 @@ class TotalReclaw:
         self._registered = True
         return user_id
 
+    def _release_lost_writes(self, fact_ids: list[str]) -> None:
+        """``on_lost`` default (#646/#650): an accepted write was later proven
+        replaced, dropped or reverted. Take its facts out of the recent-write
+        ledger so the write gate lets them be stored again."""
+        led = ledger_for(self)
+        for fact_id in fact_ids:
+            led.forget(fact_id)
+
+    async def settle_pending_writes(
+        self, *, profile: str = "background", deadline_s: Optional[float] = None
+    ) -> None:
+        """Resolve this account's earlier accepted writes BY HASH, apply their
+        ``on_lost`` callbacks, and send nothing.
+
+        Call it before a duplicate (write gate) decision: a ledger entry for an
+        op that turned out dead must not make the gate skip a fact that was never
+        stored. Cheap when nothing is pending. Raises
+        :class:`~totalreclaw.userop.NothingSentError` (an earlier write is still
+        unresolved after its window, or the account is busy)."""
+        await self._ensure_address()
+        chain_id = await self._ensure_chain_id()
+        await settle_pending_writes(
+            self._wallet_address,
+            relay_url=self._relay.relay_url,
+            auth_key_hex=self._relay.auth_key_hex or "",
+            wallet_address=self._wallet_address,
+            chain_id=chain_id,
+            client_id=self._relay.client_id,
+            session_id=self._relay.session_id,
+            profile=profile,
+            deadline_s=deadline_s,
+        )
+
+    async def resolve_maybe_op(self, maybe_op: dict) -> str:
+        """Fate of a "maybe stored" op (a ``maybe_ops`` entry of a
+        :class:`BatchStoreError`, or the fields of a :class:`UserOpAmbiguousError`).
+
+        Returns ``"stored"`` (executed, success), ``"reverted"``, ``"dead"``
+        (the nonce went to another op), ``"gone"`` (dropped, nonce unused),
+        ``"pending"`` or ``"unknown"``. Read-only."""
+        await self._ensure_address()
+        chain_id = await self._ensure_chain_id()
+        fate = await resolve_op_fate(
+            self._wallet_address,
+            relay_url=self._relay.relay_url,
+            auth_key_hex=self._relay.auth_key_hex or "",
+            wallet_address=self._wallet_address,
+            hashes=list(maybe_op.get("hashes") or []),
+            nonce=int(maybe_op.get("nonce") or 0),
+            sent_block=int(maybe_op.get("sent_block") or 0),
+            chain_id=chain_id,
+            client_id=self._relay.client_id,
+            session_id=self._relay.session_id,
+        )
+        if fate.kind == "executed":
+            return "stored" if fate.success else "reverted"
+        return fate.kind
+
     async def remember(
         self,
         text: str,
@@ -1250,6 +1346,8 @@ class TotalReclaw:
         await self._ensure_registered()
         chain_id = await self._ensure_chain_id()
         lsh = self._get_lsh_hasher() if embedding else None
+        if on_lost is None:
+            on_lost = self._release_lost_writes
         return await store_fact(
             text=text,
             wallet=self._wallet_context(chain_id),
@@ -1389,6 +1487,12 @@ class TotalReclaw:
         position = {id(f): i for i, f in reversed(list(enumerate(facts)))}
         stored_at: dict[int, str] = {}
         quota_refusals: list[RelayWriteQuotaExceeded] = []
+        # #646/#650: groups that ended before any send, and groups whose op was
+        # sent but whose fate is unknown ("maybe stored").
+        unsent: list[int] = []
+        maybe_ops: list[dict] = []
+        if on_lost is None:
+            on_lost = self._release_lost_writes
 
         async def _store_group(group: list[dict]) -> list[str]:
             try:
@@ -1405,6 +1509,16 @@ class TotalReclaw:
                 )
             except RelayWriteQuotaExceeded as e:
                 quota_refusals.append(e)
+                raise
+            except NothingSentError:
+                unsent.extend(position[id(f)] for f in group if id(f) in position)
+                raise
+            except UserOpAmbiguousError as e:
+                maybe_ops.append({
+                    "hashes": list(e.hashes), "nonce": e.nonce,
+                    "sent_block": e.sent_block, "fact_ids": list(e.fact_ids),
+                    "indices": [position[id(f)] for f in group if id(f) in position],
+                })
                 raise
             for fact, fact_id in zip(group, group_ids):
                 if id(fact) in position:
@@ -1428,6 +1542,8 @@ class TotalReclaw:
                 f"remember_batch: {len(errors)} store group(s) failed: "
                 + " | ".join(errors),
                 results,
+                unsent=sorted(set(unsent)),
+                maybe_ops=maybe_ops,
             )
         return BatchIds(ids, results)
 

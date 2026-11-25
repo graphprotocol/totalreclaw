@@ -18,7 +18,14 @@ public). The body is the base64 XChaCha20-Poly1305 ciphertext, under the
 vault encryption key, of::
 
     {"v": 1, "entries": [{"queued_at": "<iso8601>", "reason": "write_quota",
-                          "attempts": 0, "fact": {<remember_batch fact dict>}}]}
+                          "attempts": 0, "fact": {<remember_batch fact dict>},
+                          "maybe_op": {<optional, see below>}}]}
+
+``maybe_op`` (#646/#650) marks a fact whose UserOp was SENT but whose fate was
+unknown when the call ended ("maybe stored"): ``{"hashes": [...], "nonce": n,
+"sent_block": b, "fact_id": "<id>", "since": "<iso8601>"}``. The drain resolves
+the op by hash before it writes the fact again, and puts the entry back with no
+attempt counted while the op is still pending. Older versions ignore the key.
 
 Same pattern as the forget ledger (``forget_guard.ForgetLedger``): fact text
 is never written to disk in plaintext. The fact dict is stored without its
@@ -175,7 +182,13 @@ class PendingStoreQueue:
     def count(self) -> int:
         return len(self._load())
 
-    def add(self, facts: Iterable[dict], *, reason: str) -> int:
+    def add(
+        self,
+        facts: Iterable[dict],
+        *,
+        reason: str,
+        maybe_ops: Optional[Iterable[Optional[dict]]] = None,
+    ) -> int:
         """Append *facts* (``remember_batch`` dicts). Returns how many were
         written; ``0`` on a disk failure. Over :attr:`MAX_ENTRIES`, the
         oldest entries are dropped (logged).
@@ -183,15 +196,23 @@ class PendingStoreQueue:
         A fact without ``extracted_at`` is stamped with the current time, so
         when it is stored later its ``created_at`` is when it was said, not
         when the queue drained (#749): the vault then groups it with its
-        conversation."""
+        conversation.
+
+        ``maybe_ops`` (aligned with *facts*, ``None`` for a fact that was
+        never sent) attaches the ``maybe_op`` described in the module doc."""
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         extracted_at = time.strftime(_TIMESTAMP_FORMAT, time.gmtime())
         new = []
-        for fact in facts:
+        maybe_list = list(maybe_ops) if maybe_ops is not None else []
+        for i, fact in enumerate(facts):
             q = _queueable(fact)
             if q is not None:
                 q.setdefault("extracted_at", extracted_at)
-                new.append({"queued_at": now, "reason": reason, "attempts": 0, "fact": q})
+                entry = {"queued_at": now, "reason": reason, "attempts": 0, "fact": q}
+                maybe = maybe_list[i] if i < len(maybe_list) else None
+                if isinstance(maybe, dict) and maybe.get("hashes"):
+                    entry["maybe_op"] = {**maybe, "since": maybe.get("since") or now}
+                new.append(entry)
         if not new:
             return 0
         with self._lock:

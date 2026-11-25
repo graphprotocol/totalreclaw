@@ -18,6 +18,7 @@ import contextlib
 import contextvars
 import logging
 import re
+import time
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -61,6 +62,27 @@ def per_fact_results(*args, **kwargs):
     from ..client import per_fact_results as _impl
 
     return _impl(*args, **kwargs)
+
+
+def _batch_outcome_flags(outcome) -> tuple[list[int], list[dict]]:
+    """Lazy proxy for ``totalreclaw.client.batch_outcome_flags`` (#646/#650):
+    ``(unsent_positions, maybe_ops)`` of a failed ``remember_batch``."""
+    from ..client import batch_outcome_flags as _impl
+
+    return _impl(outcome)
+
+
+def _write_outcome_kind(exc: BaseException) -> str:
+    """``"unsent"`` (nothing reached the bundler), ``"maybe"`` (an op was sent
+    and its fate is open) or ``""`` for any other error. Imports ``userop``
+    only when an error needs classifying (#726 keeps it off the import path)."""
+    from ..userop import NothingSentError, UserOpAmbiguousError
+
+    if isinstance(exc, NothingSentError):
+        return "unsent"
+    if isinstance(exc, UserOpAmbiguousError):
+        return "maybe"
+    return ""
 
 
 from ..relay import (
@@ -1011,6 +1033,10 @@ def _auto_extract_inner(
     active_session_id = _FACT_SESSION_STAMP.get() or state.session_id
 
     # Facts the user explicitly forgot (#605).
+    # #646/#650: resolve the account's earlier accepted writes before the write
+    # gate decides anything. When one is still unresolved the gate still runs,
+    # and the write below ends as a typed "not sent" error that queues the chunk.
+    _settle_before_gate(client)
     forget_ledger = _forget_ledger(client)
 
     for fact in facts:
@@ -1158,8 +1184,11 @@ def _auto_extract_inner(
             # report only the facts that were not stored.
             results = per_fact_results(e, len(chunk))
             _process_batch_results(client, chunk, results, stored_texts, log_missing=False)
-            for (fact, _, _), fact_id in zip(chunk, results):
-                if not fact_id:
+            # #646/#650: a fact whose group never reached the bundler, or whose
+            # op was sent but not yet confirmed, is queued (not dropped).
+            handled = _queue_unconfirmed_chunk(client, chunk, results, e)
+            for i, ((fact, _, _), fact_id) in enumerate(zip(chunk, results)):
+                if not fact_id and i not in handled:
                     logger.warning(
                         "Fact not stored (batch failure): %s", fact.text[:80]
                     )
@@ -1285,6 +1314,94 @@ def _announce_write_quota(
         logger.debug("write quota notice not queued: %s", e)
 
 
+def _queue_unconfirmed_chunk(client, chunk: list, results: list, exc: BaseException) -> set[int]:
+    """Queue the facts of a failed auto-extraction chunk whose outcome is not a
+    plain failure (#646/#650). Returns the chunk positions that were handled.
+
+    * group ended before any send (``unsent``): nothing was debited, so the fact
+      is queued as ``not_sent`` and retried later with no attempt counted;
+    * op sent, fate open (``maybe_ops``): the fact MAY be stored. It is recorded
+      in the write ledger (so the write gate will not store it again) and queued
+      as ``maybe_stored`` with the op's hashes; the drain resolves the op first.
+    """
+    unsent, maybe_ops = _batch_outcome_flags(exc)
+    if not unsent and not maybe_ops:
+        return set()
+    queue = _pending_store(client)
+    maybe_by_pos: dict[int, dict] = {}
+    for m in maybe_ops:
+        for pos, fact_id in zip(m.get("indices") or [], m.get("fact_ids") or []):
+            maybe_by_pos[pos] = {
+                "hashes": list(m.get("hashes") or []), "nonce": m.get("nonce"),
+                "sent_block": m.get("sent_block"), "fact_id": fact_id,
+            }
+    unsent_set = set(unsent)
+    handled: set[int] = set()
+    sent_facts, sent_maybe, maybe_facts, maybe_meta = [], [], [], []
+    for i, ((fact, embedding, fact_dict), fact_id) in enumerate(zip(chunk, results)):
+        if fact_id:
+            continue
+        if i in maybe_by_pos:
+            info = maybe_by_pos[i]
+            record_write(client, info["fact_id"], fact.text, embedding)
+            maybe_facts.append(fact_dict)
+            maybe_meta.append(info)
+            handled.add(i)
+        elif i in unsent_set:
+            sent_facts.append(fact_dict)
+            handled.add(i)
+    queued = 0
+    if queue is not None:
+        try:
+            if sent_facts:
+                queued += queue.add(sent_facts, reason="not_sent")
+            if maybe_facts:
+                queued += queue.add(maybe_facts, reason="maybe_stored", maybe_ops=maybe_meta)
+        except Exception as e:
+            logger.warning("pending store: could not queue unconfirmed facts: %s", e)
+    total = len(sent_facts) + len(maybe_facts)
+    logger.warning(
+        "TotalReclaw: %d fact(s) not confirmed this time (%d not sent, %d sent but "
+        "unconfirmed); %d queued for a later retry, %d lost",
+        total, len(sent_facts), len(maybe_facts), queued, max(0, total - queued),
+    )
+    return handled
+
+
+def _queue_crystal(client, crystal, fields: dict, exc: BaseException, kind: str) -> bool:
+    """Keep a Crystal whose write was not confirmed (#646/#650), like #749 does
+    for a quota refusal. ``kind`` is ``"unsent"`` or ``"maybe"``. Returns True
+    when it was queued."""
+    queue = _pending_store(client)
+    if queue is None:
+        return False
+    fact = {"text": crystal.narrative, **fields}
+    try:
+        if kind == "maybe":
+            fact_ids = list(getattr(exc, "fact_ids", []) or [])
+            fact_id = fact_ids[0] if fact_ids else ""
+            if fact_id:
+                record_write(client, fact_id, crystal.narrative, None)
+            info = {
+                "hashes": list(getattr(exc, "hashes", []) or []),
+                "nonce": getattr(exc, "nonce", None),
+                "sent_block": getattr(exc, "sent_block", None),
+                "fact_id": fact_id,
+            }
+            ok = queue.add([fact], reason="maybe_stored", maybe_ops=[info]) > 0
+        else:
+            ok = queue.add([fact], reason="not_sent") > 0
+    except Exception as e:
+        logger.warning("pending store: could not queue the session Crystal: %s", e)
+        return False
+    if ok:
+        logger.warning(
+            "TotalReclaw: the session Crystal was not confirmed (%s); queued for a later retry",
+            "sent, outcome unknown" if kind == "maybe" else "not sent",
+        )
+    return ok
+
+
 def _handle_write_quota(
     state: "AgentState", client, err: RelayWriteQuotaExceeded, refused: list[dict],
     *, what: str = "auto-extracted facts",
@@ -1360,7 +1477,122 @@ def _decode_legacy_queued_importance(fact: dict) -> None:
         fact["importance"] = max(1, min(10, int(round(imp * 10))))
 
 
+#: A "maybe stored" entry whose op stays unresolved this long loses its
+#: ``maybe_op`` and is retried like any other entry (attempts count again).
+_MAYBE_OP_MAX_AGE_S = 24 * 3600
+
+
+def _parse_iso(ts: object) -> Optional[float]:
+    import calendar
+    import time as _time
+
+    if not isinstance(ts, str):
+        return None
+    try:
+        return float(calendar.timegm(_time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")))
+    except ValueError:
+        return None
+
+
+def _settle_before_gate(client) -> bool:
+    """Resolve the account's earlier accepted writes before a duplicate
+    decision (#646/#650): the write ledger must not hold facts of an op that
+    turned out dead. Returns False when the account is not ready for a write
+    (``NothingSentError``: an earlier write is still unresolved / busy)."""
+    settle = getattr(client, "settle_pending_writes", None)
+    if settle is None:
+        return True
+    try:
+        res = settle()
+        if hasattr(res, "__await__"):
+            run_sync(res)
+    except InterpreterShutdownError:
+        raise
+    except Exception as e:
+        if is_interpreter_shutdown_error(e):
+            raise InterpreterShutdownError(str(e)) from e
+        if _write_outcome_kind(e) == "unsent":
+            logger.info("pending store: account not ready for a write yet (%s)", e)
+            return False
+        logger.debug("pending store: settle failed (%s)", e)
+    return True
+
+
+def _resolve_maybe_entries(client, queue: PendingStoreQueue, entries: list[dict]) -> tuple[list[dict], int]:
+    """Resolve the ``maybe_op`` of queued entries BY HASH before anything is
+    written again (#646/#650). Returns ``(entries_to_store, resolved_stored)``.
+
+    * op executed with success: the fact IS stored; the entry is dropped;
+    * executed-and-reverted, dead, gone: it was not stored; the entry loses its
+      ``maybe_op``, the ledger lets the fact through, and it is stored normally;
+    * pending / unknown: put back with NO attempt counted (kept up to 24 h,
+      then the ``maybe_op`` is dropped and attempts count as usual).
+    """
+    resolve = getattr(client, "resolve_maybe_op", None)
+    out: list[dict] = []
+    keep: list[dict] = []
+    stored = 0
+    verdicts: dict[tuple, str] = {}
+    import time as _time
+
+    for entry in entries:
+        maybe = entry.get("maybe_op")
+        if not isinstance(maybe, dict) or not maybe.get("hashes") or resolve is None:
+            out.append(entry)
+            continue
+        key = tuple(maybe["hashes"])
+        if key not in verdicts:
+            try:
+                verdicts[key] = run_sync(resolve(maybe))
+            except InterpreterShutdownError:
+                raise
+            except Exception as e:
+                if is_interpreter_shutdown_error(e):
+                    raise InterpreterShutdownError(str(e)) from e
+                logger.debug("pending store: could not resolve a maybe-stored op: %s", e)
+                verdicts[key] = "unknown"
+        verdict = verdicts[key]
+        fact = entry.get("fact") or {}
+        fact_id = maybe.get("fact_id") or ""
+        if verdict == "stored":
+            record_write(client, fact_id, fact.get("text") or "", None)
+            stored += 1
+            logger.info("pending store: a maybe-stored fact was confirmed on-chain; dropping its entry")
+        elif verdict in ("reverted", "dead", "gone"):
+            if fact_id:
+                ledger_for(client).forget(fact_id)
+            entry.pop("maybe_op", None)
+            logger.info("pending store: a maybe-stored op is %s; storing the fact again", verdict)
+            out.append(entry)
+        else:
+            since = _parse_iso(maybe.get("since"))
+            if since is not None and _time.time() - since > _MAYBE_OP_MAX_AGE_S:
+                if fact_id:
+                    ledger_for(client).forget(fact_id)
+                entry.pop("maybe_op", None)
+                out.append(entry)
+            else:
+                keep.append(entry)
+    if keep:
+        queue.put_back(keep)
+        logger.info("pending store: %d maybe-stored fact(s) still unresolved; kept with no attempt counted", len(keep))
+    return out, stored
+
+
 def _drain_entries(state: "AgentState", client, queue: PendingStoreQueue, entries: list[dict]) -> int:
+    # #646/#650: settle the account's earlier writes first, so a ledger entry
+    # for a dead op cannot hide a fact that was never stored, and resolve any
+    # "maybe stored" entry by hash before it can be written a second time.
+    if not _settle_before_gate(client):
+        queue.put_back(entries)           # not the facts' fault: no attempt counted
+        return 0
+    entries, resolved_stored = _resolve_maybe_entries(client, queue, entries)
+    if not entries:
+        return resolved_stored
+    return resolved_stored + _drain_ready_entries(state, client, queue, entries)
+
+
+def _drain_ready_entries(state: "AgentState", client, queue: PendingStoreQueue, entries: list[dict]) -> int:
     recent: list[dict] = []
     fetch = getattr(client, "fetch_recent_facts", None)
     if fetch is not None:
@@ -1453,6 +1685,52 @@ def _drain_entries(state: "AgentState", client, queue: PendingStoreQueue, entrie
             stored += 1
         else:
             not_stored.append(entry)
+    # #646/#650: a group that never reached the bundler goes back as it was; a
+    # group whose op was sent but not confirmed goes back as "maybe stored".
+    # Neither counts an attempt (nothing is wrong with the fact).
+    if failure is not None and not shutdown and not_stored:
+        unsent_pos, maybe_ops = _batch_outcome_flags(failure)
+        if not unsent_pos and not maybe_ops:
+            kind = _write_outcome_kind(failure)
+            if kind == "unsent":
+                unsent_pos = list(range(len(to_store)))
+            elif kind == "maybe":
+                maybe_ops = [{
+                    "hashes": list(getattr(failure, "hashes", []) or []),
+                    "nonce": getattr(failure, "nonce", None),
+                    "sent_block": getattr(failure, "sent_block", None),
+                    "fact_ids": list(getattr(failure, "fact_ids", []) or []),
+                    "indices": list(range(len(to_store))),
+                }]
+        maybe_by_pos: dict[int, dict] = {}
+        for m in maybe_ops:
+            for pos, fid in zip(m.get("indices") or [], m.get("fact_ids") or []):
+                maybe_by_pos[pos] = {
+                    "hashes": list(m.get("hashes") or []), "nonce": m.get("nonce"),
+                    "sent_block": m.get("sent_block"), "fact_id": fid,
+                }
+        unsent_set = set(unsent_pos)
+        put_back: list[dict] = []
+        rest: list[dict] = []
+        for pos, (fact, entry, fact_id) in enumerate(zip(to_store, to_store_entries, results)):
+            if fact_id:
+                continue
+            if pos in maybe_by_pos:
+                info = maybe_by_pos[pos]
+                record_write(client, info["fact_id"], fact["text"], fact.get("embedding"))
+                entry["maybe_op"] = {**info, "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+                put_back.append(entry)
+            elif pos in unsent_set:
+                put_back.append(entry)
+            else:
+                rest.append(entry)
+        if put_back:
+            queue.put_back(put_back)
+            logger.info(
+                "pending store: %d fact(s) kept with no attempt counted (not sent, or sent and unconfirmed)",
+                len(put_back),
+            )
+        not_stored = rest
     if shutdown:
         # The shutdown is not these facts' fault: they go back as they were,
         # with no attempt counted.
@@ -1673,7 +1951,11 @@ def session_debrief(
             except Exception as e:
                 if is_interpreter_shutdown_error(e):
                     raise InterpreterShutdownError(str(e)) from e
-                logger.warning("Failed to store Crystal: %s", e)
+                kind = _write_outcome_kind(e)
+                if kind and _queue_crystal(client, crystal, fields, e, kind):
+                    pass  # #646/#650: kept for the drain (see _queue_crystal)
+                else:
+                    logger.warning("Failed to store Crystal: %s", e)
     except InterpreterShutdownError:
         logger.warning(
             "TotalReclaw: session Crystal deferred — interpreter shutdown race; "

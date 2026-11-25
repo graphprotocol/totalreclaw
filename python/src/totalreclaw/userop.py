@@ -1335,6 +1335,29 @@ async def _resend_lost(lost: list, base: dict) -> None:
             logger.error("re-send of lost write %s failed (facts %s): %s", rec.hashes[-1], rec.fact_ids, str(e)[:200])
 
 
+async def resolve_op_fate(
+    sender: str,
+    relay_url: str,
+    auth_key_hex: str,
+    wallet_address: str,
+    hashes: list[str],
+    nonce: int,
+    sent_block: int,
+    chain_id: int = 84532,
+    client_id: str = "python-client",
+    session_id: Optional[str] = None,
+) -> Fate:
+    """Fate of op attempts a caller was told about by a
+    :class:`UserOpAmbiguousError` (read-only; sends nothing, takes no lock).
+    The drain uses it to decide whether "maybe stored" facts were stored."""
+    ctx = _make_ctx(
+        sender, relay_url.rstrip("/"), auth_key_hex, wallet_address,
+        chain_id, client_id, session_id,
+    )
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        return await resolve_fate(http, ctx, list(hashes), nonce, sent_block)
+
+
 def _make_ctx(
     sender: str,
     relay_url: str,
