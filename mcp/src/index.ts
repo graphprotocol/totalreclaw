@@ -95,6 +95,7 @@ import {
 import type { UnusableCredentials } from './dispatch.js';
 import { bundleVaultToBuffers, redactedBundleSummary, type DerivedBundleV1 } from './subgraph/bundle.js';
 import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, lookupFactById, fetchFactForForget } from './subgraph/search.js';
+import { RelayReadBlocked, readBlockToolResult, withReadPauseNotice } from './subgraph/read-block.js';
 import { liveDecayScore } from './subgraph/decay.js';
 import { RecentWrites, recordSubmittedPayloads, TOMBSTONE_BLOB_HEX } from './subgraph/recent-writes.js';
 import { createRewriteLookup, createForgetLookup } from './subgraph/fact-lookup.js';
@@ -1541,7 +1542,10 @@ async function handleRecallSubgraph(
           candidates.push(fc);
         }
       }
-    } catch {
+    } catch (broadenedErr) {
+      // A read denial is never "no results", even when the trapdoor search
+      // answered just before the pause began.
+      if (broadenedErr instanceof RelayReadBlocked) throw broadenedErr;
       // Non-fatal — trapdoor results still work
     }
 
@@ -1686,6 +1690,13 @@ async function handleRecallSubgraph(
       })),
     );
   } catch (error) {
+    if (error instanceof RelayReadBlocked) {
+      timer.emit({ candidates: candidateCount, k, outcome: 'read_blocked' });
+      return readBlockToolResult(error, state.smartAccountAddress, {
+        latency_ms: Date.now() - startTime,
+        mode: 'subgraph',
+      });
+    }
     timer.emit({ candidates: candidateCount, k, outcome: 'error' });
     const message = error instanceof Error ? error.message : 'Unknown error';
     return {
@@ -2068,7 +2079,7 @@ async function statusHandler(args: unknown): Promise<ToolResponse> {
     // Best-effort cache — don't fail the status call.
   }
 
-  return statusResult;
+  return withReadPauseNotice(statusResult, subgraphState?.smartAccountAddress);
 }
 
 async function upgradeHandler(args: unknown): Promise<ToolResponse> {
