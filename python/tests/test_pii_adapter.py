@@ -663,8 +663,51 @@ class TestConfirmTokenBinding:
         assert s.redeem(t, "payment_card", CARD_TEXT, None) == "conversation_mismatch"
         assert s.redeem(t, "payment_card", CARD_TEXT, "chat-a") is None
 
+    def test_token_issued_without_id_redeemable_with_or_without_one(self) -> None:
+        for redeem_conv in (None, "chat-a"):
+            s = pii.ConfirmationStore(clock=_Clock())
+            t = s.issue("payment_card", CARD_TEXT)
+            s.note_turn_completed()
+            assert s.redeem(t, "payment_card", CARD_TEXT, redeem_conv) is None
+
+    def test_untracked_conversation_falls_back_to_global_counter(self, caplog) -> None:
+        # (a) tool sees "A"; ingest_turn only ever sees "B" (or None).
+        caplog.set_level(logging.DEBUG)
+        for ingest_id in ("B", None):
+            s = pii.ConfirmationStore(clock=_Clock())
+            t = s.issue("payment_card", CARD_TEXT, "A")
+            assert s.redeem(t, "payment_card", CARD_TEXT, "A") == "same_turn"
+            s.note_turn_completed(ingest_id)
+            assert s.redeem(t, "payment_card", CARD_TEXT, "A") is None
+        assert "used the global counter" in caplog.text
+        assert "4111" not in caplog.text
+
+    def test_tracked_conversation_uses_its_own_counter(self, caplog) -> None:
+        # (b) both sides see "A": per-conversation counter enforced.
+        caplog.set_level(logging.DEBUG)
+        s = pii.ConfirmationStore(clock=_Clock())
+        s.note_turn_completed("A")  # A is now tracked
+        t = s.issue("payment_card", CARD_TEXT, "A")
+        s.note_turn_completed("B")
+        assert s.redeem(t, "payment_card", CARD_TEXT, "A") == "same_turn"
+        s.note_turn_completed("A")
+        assert s.redeem(t, "payment_card", CARD_TEXT, "A") is None
+        assert "used the conversation counter" in caplog.text
+
+    def test_token_from_a_rejected_with_b_even_if_both_tracked(self) -> None:
+        # (c)
+        s = pii.ConfirmationStore(clock=_Clock())
+        s.note_turn_completed("A")
+        s.note_turn_completed("B")
+        t = s.issue("payment_card", CARD_TEXT, "A")
+        s.note_turn_completed("A")
+        s.note_turn_completed("B")
+        assert s.redeem(t, "payment_card", CARD_TEXT, "B") == "conversation_mismatch"
+        assert s.redeem(t, "payment_card", CARD_TEXT, "A") is None
+
     def test_other_conversations_turn_does_not_release_token(self) -> None:
         s = pii.ConfirmationStore(clock=_Clock())
+        s.note_turn_completed("chat-a")  # chat A is tracked
         t = s.issue("payment_card", CARD_TEXT, "chat-a")
         s.note_turn_completed("chat-b")  # chat B finishes a turn
         assert s.redeem(t, "payment_card", CARD_TEXT, "chat-a") == "same_turn"
@@ -681,6 +724,7 @@ class TestConfirmTokenBinding:
             with patch("totalreclaw.embedding.get_embedding", return_value=None):
                 return json.loads(await remember(args, state, **kw))
 
+        store.note_turn_completed("chat-a")  # chat A is tracked
         first = await call({"text": CARD_TEXT}, session_id="chat-a")
         store.note_turn_completed("chat-b")
         args = {"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": first["confirm_token"]}
