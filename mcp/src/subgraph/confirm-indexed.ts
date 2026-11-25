@@ -13,7 +13,7 @@
  * key, or any decrypted blob.
  */
 
-import { getClientId } from '../client-id.js';
+import { buildSubgraphHeaders } from './headers.js';
 
 /**
  * `wasmConfirmIndexed*` exports ship in `@totalreclaw/core@2.3.x`. Cast to
@@ -51,6 +51,8 @@ export interface ConfirmIndexedOptions {
   /** Required: subgraph URL. Caller passes either `${relayUrl}/v1/subgraph` or `TOTALRECLAW_SUBGRAPH_URL`. */
   subgraphUrl: string;
   authKeyHex?: string;
+  /** Smart Account address; sent as X-Wallet-Address so the relay routes the read by tier (#513). */
+  walletAddress: string;
   /** Test injection. */
   poster?: (
     url: string,
@@ -86,11 +88,10 @@ export async function confirmIndexed(
     };
   }
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-TotalReclaw-Client': getClientId(),
-  };
-  if (options.authKeyHex) headers['Authorization'] = `Bearer ${options.authKeyHex}`;
+  const headers = buildSubgraphHeaders({
+    walletAddress: options.walletAddress,
+    authKeyHex: options.authKeyHex,
+  });
 
   const body = JSON.stringify({ query, variables: { id: factId } });
 
