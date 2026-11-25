@@ -92,4 +92,4 @@ All four facts are encrypted and stored in your TotalReclaw vault.
 
 - **Claude memories are already curated.** Unlike a full conversation export, these are atomic facts that import cleanly with no noise.
 - **Date prefixes are preserved.** If Claude includes dates, they are stored as timestamps for chronological context.
-- **Works from any platform.** Whether you use TotalReclaw via OpenClaw, Claude Desktop (MCP), or NanoClaw, the `totalreclaw_import_from` tool is available.
+- **Works from any platform.** Whether you use TotalReclaw via OpenClaw or Claude Desktop (MCP), the `totalreclaw_import_from` tool is available.

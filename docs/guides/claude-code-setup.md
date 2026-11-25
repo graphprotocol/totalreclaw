@@ -232,7 +232,6 @@ Your recovery phrase works across every TotalReclaw client. Same phrase = same m
 
 - **OpenClaw** — see [openclaw-setup.md](./openclaw-setup.md)
 - **Hermes (Python)** — see [hermes-setup.md](./hermes-setup.md)
-- **NanoClaw** — see [nanoclaw-getting-started.md](./nanoclaw-getting-started.md)
 - **IronClaw (NEAR AI)** — see [ironclaw-setup.md](./ironclaw-setup.md)
 - **ZeroClaw (Rust)** — see the ZeroClaw README in the main repo
 

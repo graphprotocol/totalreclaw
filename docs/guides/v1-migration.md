@@ -1,6 +1,6 @@
 # Upgrading to TotalReclaw v1
 
-**Target audience:** existing TotalReclaw users on any client (OpenClaw, MCP, NanoClaw, Hermes, ZeroClaw).
+**Target audience:** existing TotalReclaw users on any client (OpenClaw, MCP, Hermes, ZeroClaw).
 **Version landing in:** core 2.0.0, plugin 3.0.0, mcp-server 3.0.0, nanoclaw 3.0.0, python 2.0.0, ZeroClaw (`totalreclaw-memory`) 2.0.0.
 **TL;DR:** v1 is a bigger + cleaner memory model. Your wallet, recovery phrase, memories, and privacy model do not change. Upgrade the package and you are done.
 
@@ -67,7 +67,7 @@ All clients do the v0 → v1 mapping automatically when reading existing memorie
 
 ### 3. New MCP tools
 
-Four new tools (on `@totalreclaw/mcp-server@3.0.0` + inherited by NanoClaw + IronClaw):
+Four new tools (on `@totalreclaw/mcp-server@3.0.0` + inherited by IronClaw):
 
 - `totalreclaw_pin` — lock a memory against auto-supersession.
 - `totalreclaw_unpin` — release a pin so a memory can be superseded again.
@@ -131,8 +131,7 @@ openclaw skills update totalreclaw
 # Claude Desktop / Cursor / Windsurf (MCP)
 # The npx invocation pulls the latest automatically
 
-# NanoClaw
-# Your deployment pins @totalreclaw/skill-nanoclaw — bump to ^3.0.0
+# NanoClaw is not supported.
 
 # Python / Hermes
 pip install -U totalreclaw

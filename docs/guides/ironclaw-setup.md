@@ -199,7 +199,6 @@ Your recovery phrase works across all TotalReclaw-compatible agents:
 - **IronClaw** (this guide)
 - **OpenClaw** (`openclaw skills install totalreclaw`)
 - **Claude Desktop / Cursor / Windsurf** (`npx @totalreclaw/mcp-server setup`)
-- **NanoClaw** (set `TOTALRECLAW_RECOVERY_PHRASE` in deployment config)
 
 Same phrase, same memories. Switch agents without losing anything.
 

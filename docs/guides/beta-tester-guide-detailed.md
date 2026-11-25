@@ -33,15 +33,15 @@ Once setup is done and tools are bound, come back here for the knobs.
 
 ## 1. What's auto-running and on which client
 
-| Behavior | OpenClaw | Hermes | NanoClaw | MCP (Claude Code, etc.) |
-|---|---|---|---|---|
-| Auto-recall on every message | yes (`before_agent_start`) | yes | yes (`additionalContext`) | no — explicit `totalreclaw_recall` |
-| Auto-extract every N turns | yes (`agent_end`) | yes | yes | no — explicit `totalreclaw_remember` |
-| Pre-compaction flush | yes | yes | yes | no |
-| Session debrief | yes | yes | yes | no (use `totalreclaw_debrief` tool) |
-| First-run welcome | yes | yes | yes | no (MCP is stateless JSON-RPC) |
-| Browser account-setup flow | yes | yes | reuse OpenClaw / Hermes phrase | no — phrase from another client |
-| Auto-reload on plugin install | yes (`gateway.reload.mode = hybrid`) | no — manual restart | container respawn | host-restart only |
+| Behavior | OpenClaw | Hermes | MCP (Claude Code, etc.) |
+|---|---|---|---|
+| Auto-recall on every message | yes (`before_agent_start`) | yes | no — explicit `totalreclaw_recall` |
+| Auto-extract every N turns | yes (`agent_end`) | yes | no — explicit `totalreclaw_remember` |
+| Pre-compaction flush | yes | yes | no |
+| Session debrief | yes | yes | no (use `totalreclaw_debrief` tool) |
+| First-run welcome | yes | yes | no (MCP is stateless JSON-RPC) |
+| Browser account-setup flow | yes | yes | no — phrase from another client |
+| Auto-reload on plugin install | yes (`gateway.reload.mode = hybrid`) | no — manual restart | host-restart only |
 
 If you're on MCP, all the auto behavior is replaced by tool calls the host LLM makes from context. The same memories land in the same vault.
 
@@ -212,13 +212,13 @@ Canonical reference: [`docs/guides/env-vars-reference.md`](./env-vars-reference.
 
 | Variable | Description | Default |
 |---|---|---|
-| `TOTALRECLAW_RECOVERY_PHRASE` | 12-word BIP-39 phrase. Required for MCP / NanoClaw. OpenClaw + Hermes prefer the browser account-setup flow (writes `~/.totalreclaw/credentials.json`). | — |
+| `TOTALRECLAW_RECOVERY_PHRASE` | 12-word BIP-39 phrase. Required for MCP. OpenClaw + Hermes prefer the browser account-setup flow (writes `~/.totalreclaw/credentials.json`). | — |
 | `TOTALRECLAW_SERVER_URL` | Relay URL. Only set for self-hosted. | `https://api.totalreclaw.xyz` |
 | `TOTALRECLAW_SELF_HOSTED` | `true` to disable on-chain pipeline (PostgreSQL self-host). | `false` |
 | `TOTALRECLAW_CREDENTIALS_PATH` | Override credentials file location. | `~/.totalreclaw/credentials.json` |
 | `TOTALRECLAW_CACHE_PATH` | Override encrypted cache file location. | `~/.totalreclaw/cache.enc` |
 
-### Extraction tuning (OpenClaw plugin + Hermes + NanoClaw — MCP has no extraction hooks)
+### Extraction tuning (OpenClaw plugin + Hermes — MCP has no extraction hooks)
 
 | Variable | Description | Default |
 |---|---|---|
@@ -344,9 +344,9 @@ Internal: see `~/.claude/skills/qa-totalreclaw.md` (TotalReclaw team only). Runs
 
 ### `TOTALRECLAW_RECOVERY_PHRASE not set`
 
-**Cause:** the env var is missing or empty in the runtime that needs it (typically MCP / NanoClaw).
+**Cause:** the env var is missing or empty in the runtime that needs it (typically MCP).
 
-**Fix:** OpenClaw + Hermes prefer credentials at `~/.totalreclaw/credentials.json` from the browser account-setup flow — re-run setup. MCP / NanoClaw need the env var in your host config.
+**Fix:** OpenClaw + Hermes prefer credentials at `~/.totalreclaw/credentials.json` from the browser account-setup flow — re-run setup. MCP needs the env var in your host config.
 
 ### Memories aren't appearing in new conversations
 
@@ -413,4 +413,4 @@ For implementation depth:
 
 ---
 
-*This guide tracks plugin 3.3.13 / Hermes 2.4.6 / mcp-server 3.4.0 / nanoclaw 3.0.0 (current stable line).*
+*This guide tracks plugin 3.3.13 / Hermes 2.4.6 / mcp-server 3.4.0 (current stable line).*

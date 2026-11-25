@@ -17,7 +17,6 @@ Not every client can talk to a self-hosted server. Managed-mode clients speak th
 |---|---|---|
 | **MCP server** (`@totalreclaw/mcp-server`) | ✅ Supported | `TOTALRECLAW_SELF_HOSTED=true` switches it to HTTP mode (via `@totalreclaw/client`) |
 | **Claude Desktop / Cursor / any MCP host** | ✅ Supported | Through the MCP server above |
-| **NanoClaw** (`@totalreclaw/skill-nanoclaw`) | ✅ Supported | Spawns the MCP server; env vars pass through |
 | **TypeScript client library** (`@totalreclaw/client`) | ✅ Supported | Calls `/v1/store`, `/v1/search`, `/v1/facts/{id}`, `/v1/sync` directly |
 | **OpenClaw plugin** (`@totalreclaw/totalreclaw`) | ⚠️ Flag exists, not recently validated | `TOTALRECLAW_SELF_HOSTED=true` disables subgraph mode; the HTTP path hasn't been E2E-validated recently (client is parked) |
 | **Hermes plugin** (`totalreclaw` on PyPI) | ❌ **Not supported** | The Python client speaks the managed-relay protocol only — it has no HTTP storage path. Tracked in [#364](https://github.com/graphprotocol/totalreclaw/issues/364) |
