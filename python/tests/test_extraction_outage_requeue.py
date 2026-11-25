@@ -246,3 +246,70 @@ def test_outage_streak_travels_with_its_slot():
     assert env.state._extraction_outage_streak == 1
     env.state.clear_messages()
     assert env.state._extraction_outage_streak == 0
+
+
+# ---- Task 4: session-start drain re-queues on an outage, bounded -----------
+
+def _batch(attempts=0, sid="sess-orig"):
+    return {"messages": [{"role": "user", "content": USER4},
+                         {"role": "assistant", "content": ASSIST4}],
+            "session_id": sid, "attempts": attempts}
+
+
+def _drain(env, batches):
+    from totalreclaw.hermes import hooks
+
+    async def passthrough(fs, *a, **k):
+        return fs
+
+    with patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=env.fake_llm), \
+         patch("totalreclaw.agent.lifecycle.detect_and_resolve_contradictions", new=passthrough), \
+         patch("totalreclaw.agent.lifecycle.apply_pin_guard", new=passthrough), \
+         patch("totalreclaw.agent.lifecycle.heuristic_fallback_facts", return_value=[]), \
+         patch("totalreclaw.embedding.is_model_available_locally", return_value=False), \
+         patch("totalreclaw.embedding.get_embedding", return_value=None), \
+         patch.object(hooks, "_get_hermes_llm_config", return_value=object()):
+        return hooks._drain_into_state(env.state, batches)
+
+
+def test_drain_outage_requeues_with_next_attempt(pending_path):
+    env = _OutageEnv()
+    env.outage = True
+    assert _drain(env, [_batch(attempts=2)]) == 0
+    (b,) = _drained(pending_path)
+    assert b["attempts"] == 3 and b["session_id"] == "sess-orig"
+
+
+def test_drain_gives_up_at_max_attempts(pending_path, caplog):
+    env = _OutageEnv()
+    env.outage = True
+    with caplog.at_level(logging.WARNING):
+        assert _drain(env, [_batch(attempts=4)]) == 0
+    assert not pending_path.exists()
+    assert "gave up" in caplog.text
+
+
+def test_drain_short_circuits_and_ages_remaining_batches(pending_path, caplog):
+    env = _OutageEnv()
+    env.outage = True
+    with caplog.at_level(logging.WARNING):
+        assert _drain(env, [_batch(0), _batch(0), _batch(4)]) == 0
+    assert len(env.llm_calls) == 1
+    assert [b["attempts"] for b in _drained(pending_path)] == [1, 1]
+    assert "gave up" in caplog.text
+
+
+def test_drain_paused_requeue_keeps_attempts(pending_path):
+    env = _OutageEnv()
+    env.paused = True
+    assert _drain(env, [_batch(attempts=2)]) == 0
+    (b,) = _drained(pending_path)
+    assert b["attempts"] == 2
+
+
+def test_drain_success_resets_streak(pending_path):
+    env = _OutageEnv()
+    env.llm_facts = [_fact("User lives in Porto and works at Tidewater.")]
+    assert _drain(env, [_batch(attempts=3)]) == 2
+    assert env.state._extraction_outage_streak == 0
+    assert not pending_path.exists()
