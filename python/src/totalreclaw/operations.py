@@ -5,6 +5,7 @@ Combines crypto, protobuf, relay, LSH, reranker, and ERC-4337 UserOp
 construction into high-level operations.
 """
 from __future__ import annotations
+import math
 import asyncio
 import base64
 import logging
@@ -259,6 +260,8 @@ def normalize_importance(value) -> int:
     The result is clamped to 1-10. Non-numeric input falls back to 5.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 5
+    if isinstance(value, float) and not math.isfinite(value):
         return 5
     if isinstance(value, float) and 0 < value < 1:
         scaled = int(round(value * 10))

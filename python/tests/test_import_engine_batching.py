@@ -250,9 +250,9 @@ def test_gnosis_batch_uses_import_source_tag(store_mock) -> None:
     assert call.kwargs.get("source") == "import"
 
 
-def test_gnosis_batch_normalises_importance_to_unit_range(store_mock) -> None:
-    """The 1-10 importance scale must be normalised to 0.0-1.0 before
-    submission, matching the existing _store_fact contract."""
+def test_gnosis_batch_submits_importance_as_int_1_to_10(store_mock) -> None:
+    """Importance is submitted as an int on the 1-10 scale (an int is read as
+    1-10 downstream, so an import score of 10 is never mistaken for 1.0, #704)."""
     client = _make_pro_client()
     engine = ImportEngine(client=client, llm_extract=None)
 
@@ -262,8 +262,8 @@ def test_gnosis_batch_normalises_importance_to_unit_range(store_mock) -> None:
     ]))
 
     submitted = store_mock.await_args_list[0].kwargs.get("facts")
-    assert submitted[0]["importance"] == pytest.approx(1.0)
-    assert submitted[1]["importance"] == pytest.approx(0.5)
+    assert submitted[0]["importance"] == 10 and isinstance(submitted[0]["importance"], int)
+    assert submitted[1]["importance"] == 5 and isinstance(submitted[1]["importance"], int)
 
 
 # ---------------------------------------------------------------------------

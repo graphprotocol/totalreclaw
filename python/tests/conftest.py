@@ -51,7 +51,13 @@ def _no_real_credentials(monkeypatch, tmp_path_factory):
     ``~/.totalreclaw/credentials.json`` and, with the staging relay default,
     a test that then writes (e.g. ``remember``) would put data on a real
     staging account. Point ``HOME`` at an empty per-session temp dir (the default
-    credentials path derives from it) and drop any inherited override. Tests that need credentials
+    credentials path derives from it) and drop any inherited override,
+    the external credential-provider env vars, and XDG_CONFIG_HOME / HERMES_HOME.
+
+    Known gap: constants bound at import time via ``Path.home()``
+    (``onboarding.CANONICAL_CREDENTIALS_PATH``, ``update_notice._STATE_DIR``,
+    ...) are NOT retargeted by the HOME override; tests that exercise them
+    monkeypatch the attribute themselves. Tests that need credentials
     set their own paths locally (monkeypatch overrides this per test).
     """
     home = tmp_path_factory.getbasetemp() / "tr-fake-home"
@@ -61,6 +67,14 @@ def _no_real_credentials(monkeypatch, tmp_path_factory):
     # Do NOT set TOTALRECLAW_CREDENTIALS_PATH here: many tests re-point HOME
     # at their own tmp dir and rely on the default ``~/.totalreclaw`` path.
     monkeypatch.delenv("TOTALRECLAW_CREDENTIALS_PATH", raising=False)
+    for var in (
+        "TOTALRECLAW_CREDENTIALS_PROVIDER",
+        "TOTALRECLAW_EXTERNAL_CREDENTIALS_JSON",
+        "TOTALRECLAW_EXTERNAL_CREDENTIALS_PATH",
+        "XDG_CONFIG_HOME",
+        "HERMES_HOME",
+    ):
+        monkeypatch.delenv(var, raising=False)
     monkeypatch.delenv("TOTALRECLAW_RECOVERY_PHRASE", raising=False)
 
 
