@@ -282,29 +282,12 @@ fn test_cosine_similarity_near_duplicate_threshold() {
 
 #[test]
 fn test_importance_normalization_spec() {
-    // Spec: decayScore = importance / 10
-    // importance=6 -> decayScore=0.6 (minimum threshold)
-    // importance=10 -> decayScore=1.0 (max)
-    // importance=1 -> decayScore=0.1 (min)
-
-    let test_cases = vec![
-        (1.0, 0.1),
-        (5.0, 0.5),
-        (6.0, 0.6),
-        (8.0, 0.8),
-        (10.0, 1.0),
-    ];
-
-    for (importance, expected_decay) in test_cases {
-        let decay = (importance / 10.0_f64).clamp(0.0, 1.0);
-        assert!(
-            (decay - expected_decay).abs() < 1e-10,
-            "importance={} should produce decayScore={}, got {}",
-            importance,
-            expected_decay,
-            decay
-        );
-    }
+    // Spec (#789): decayScore = 1.0 for every live fact, independent of
+    // importance (0 = tombstone). Importance lives in the encrypted blob.
+    let decay = totalreclaw_core::store::live_decay_score();
+    assert_eq!(decay, 1.0);
+    // Must stay at or above the subgraph's active threshold (mapping.ts).
+    assert!(decay >= totalreclaw_core::store::SUBGRAPH_INACTIVE_THRESHOLD);
 }
 
 #[test]

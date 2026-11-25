@@ -28,6 +28,7 @@ import { LEGACY_TYPE_TO_V1 } from '../v1-types.js';
 import type { SubgraphSearchFact } from '../subgraph/search.js';
 import { TOMBSTONE_BLOB_HEX, type RecentWriteInput } from '../subgraph/recent-writes.js';
 import { encodeFactProtobuf } from '../subgraph/store.js';
+import { liveDecayScore } from '../subgraph/decay.js';
 import { carriedFields, extractV1Fields } from './retype.js';
 import { rethrowIfQuota, shortErrorMessage, logWriteError } from './write-errors.js';
 
@@ -780,7 +781,7 @@ export async function executePinOperation(
     owner: deps.owner,
     encryptedBlob: newBlobHex,
     blindIndices: regenerated.blindIndices,
-    decayScore: 1.0, // Pins are top-priority; unpins revert to active at full decay
+    decayScore: liveDecayScore(), // live fact = 1.0 (pins and unpins alike)
     source: targetStatus === 'pinned' ? 'mcp_pin' : 'mcp_unpin',
     contentFp: '',
     agentId: deps.sourceAgent,

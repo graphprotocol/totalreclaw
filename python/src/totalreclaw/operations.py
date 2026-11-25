@@ -247,50 +247,23 @@ class ForgetResult(dict):
         return bool(self.get("success", False))
 
 
-#: Subgraph active threshold: a fact whose on-chain ``decayScore`` is below this
-#: is marked inactive and disappears from every client (``subgraph/src/mapping.ts``
-#: ``INACTIVE_THRESHOLD``). Live-fact writes are floored here (#789, interim).
-#: NEVER apply to tombstones: decay 0 is how forget/supersede delete a fact.
-ACTIVE_DECAY_THRESHOLD = 0.3
+#: On-chain ``decayScore`` of every LIVE fact (#789). ``decayScore`` is a
+#: liveness flag, not importance: 0 = tombstone, 1.0 = live. It carries no
+#: importance; importance lives in the encrypted blob. Must stay >= the
+#: subgraph's active threshold (``subgraph/src/mapping.ts`` INACTIVE_THRESHOLD,
+#: ``isActive = decayScore >= 0.3``). NEVER use for tombstones (0 deletes).
+LIVE_DECAY_SCORE = 1.0
 
 
-def live_decay_floor(importance) -> float:
-    """Floor a LIVE single-fact decayScore at :data:`ACTIVE_DECAY_THRESHOLD` (#789).
+def live_decay_score() -> float:
+    """The single live-fact ``decayScore`` (always 1.0).
 
-    Raw scale kept (no rescale): values >= 1 (int 1-10 writes) are unchanged,
-    so those payloads stay byte-identical; only < 0.3 values (legacy floats such
-    as 0.2, the Crystal's ``importance / 10.0``) are raised. Non-numeric /
-    non-finite input falls back to 5. Never use for tombstones (decay 0 deletes).
+    Delegates to ``totalreclaw_core.live_decay_score`` when the installed core
+    has it; otherwise the local constant (same pattern as ``confirm_indexed``).
+    Tests/parity/test_decay_score_parity.py keeps the two in lockstep.
     """
-    if (
-        isinstance(importance, bool)
-        or not isinstance(importance, (int, float))
-        or not math.isfinite(importance)
-    ):
-        importance = 5
-    return max(importance, ACTIVE_DECAY_THRESHOLD)
-
-
-def live_batch_decay_score(importance_raw) -> float:
-    """On-chain decayScore for a LIVE fact written by the batch path (#789).
-
-    Scale note: TS ``liveDecayScore`` divides every value by 10 (importance 1 ->
-    0.3 after the floor); this path takes values <= 1 as already 0-1 (int 1 ->
-    1.0). The divergence is pre-existing. No upper clamp on purpose. The
-    canonical rule lands in the core helper per the #789 plan.
-
-    Same scale rule as before (``<= 1`` is taken as-is, otherwise ``/ 10``),
-    floored at :data:`ACTIVE_DECAY_THRESHOLD` so the fact stays visible.
-    Non-numeric / non-finite input falls back to 5 (0.5).
-    """
-    if (
-        isinstance(importance_raw, bool)
-        or not isinstance(importance_raw, (int, float))
-        or not math.isfinite(importance_raw)
-    ):
-        importance_raw = 5
-    value = importance_raw if importance_raw <= 1 else importance_raw / 10.0
-    return max(value, ACTIVE_DECAY_THRESHOLD)
+    fn = getattr(_core, "live_decay_score", None)
+    return float(fn()) if callable(fn) else LIVE_DECAY_SCORE
 
 
 def normalize_importance(value) -> int:
@@ -438,9 +411,7 @@ async def store_fact(
         owner=owner,
         encrypted_blob=encrypted_hex,
         blind_indices=all_indices,
-        # decayScore < 0.3 marks a fact inactive in the subgraph (mapping.ts
-        # INACTIVE_THRESHOLD): not rescaled, but floored (#789).
-        decay_score=live_decay_floor(importance),
+        decay_score=live_decay_score(),  # constant 1.0, no importance (#789)
         source=source,
         content_fp=content_fp,
         agent_id=agent_id,
@@ -857,7 +828,7 @@ async def store_fact_batch(
             owner=owner,
             encrypted_blob=encrypted_hex,
             blind_indices=all_indices,
-            decay_score=live_batch_decay_score(importance_raw),  # floored, #789
+            decay_score=live_decay_score(),  # constant 1.0, no importance (#789)
             source=source,
             content_fp=content_fp,
             agent_id=agent_id,
@@ -1181,7 +1152,9 @@ async def search_facts(
                     logger.debug("re-embed failed for candidate text %r: %s", text[:40], e)
                     emb = None  # degrade: candidate ranks on BM25 only
 
-            decay = float(fact.get("decayScore", "0.5"))
+            # Importance comes from the decrypted blob (int 1-10), never from
+            # the on-chain decayScore, which is a liveness flag only (#789).
+            blob_importance = doc.get("importance", 5)
 
             ts = fact.get("timestamp", "")
             created_at = 0.0
@@ -1216,7 +1189,7 @@ async def search_facts(
                     id=fact_id,
                     text=text,
                     embedding=emb,
-                    importance=decay,
+                    importance=blob_importance,
                     created_at=created_at,
                     category=doc.get("category", "fact"),
                     source=candidate_source,
@@ -1917,7 +1890,7 @@ async def _change_claim_status(
         blind_indices=new_blind_indices,
         # Pins are top priority (decay=1.0). Unpins revert to 1.0 too —
         # Active claims are always full-decay at write time.
-        decay_score=1.0,
+        decay_score=live_decay_score(),  # live fact = 1.0 (#789)
         source=source_tag,
         content_fp="",
         agent_id="python-client",
@@ -2179,7 +2152,7 @@ async def export_facts(
                     "id": fact["id"],
                     "text": text,
                     "timestamp": formatted_ts,
-                    "importance": float(fact.get("decayScore", "0.5")),
+                    "importance": doc.get("importance", 5),  # blob int 1-10, not decayScore (#789)
                     "type": doc.get("category", "fact"),
                 }
                 # #425 — export carries provenance: source +

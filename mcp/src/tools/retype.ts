@@ -14,6 +14,7 @@ import { resolveMemoryId } from './helpers.js';
 import type { SubgraphSearchFact } from '../subgraph/search.js';
 import { TOMBSTONE_BLOB_HEX, type RecentWriteInput } from '../subgraph/recent-writes.js';
 import { encodeFactProtobuf } from '../subgraph/store.js';
+import { liveDecayScore } from '../subgraph/decay.js';
 import {
   MEMORY_CLAIM_V1_SCHEMA_VERSION,
   VALID_MEMORY_TYPES_V1,
@@ -432,7 +433,7 @@ export async function executeMetadataOp<T>(
     owner: deps.owner,
     encryptedBlob: newBlobHex,
     blindIndices: trapdoors.blindIndices,
-    decayScore: 0.85, // Retype/scope updates land as active with healthy decay
+    decayScore: liveDecayScore(), // live fact = 1.0 (#789; was 0.85)
     source: `mcp_${opName}`,
     contentFp: '',
     agentId: deps.sourceAgent,

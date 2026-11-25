@@ -60,6 +60,15 @@ pub(crate) fn py_prepare_fact(
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
+/// On-chain decayScore for every LIVE fact (always 1.0; #789).
+///
+/// 0 = tombstone, 1.0 = live; carries no importance. Never use for tombstones.
+#[pyfunction]
+#[pyo3(name = "live_decay_score")]
+pub(crate) fn py_live_decay_score() -> f64 {
+    store::live_decay_score()
+}
+
 /// Prepare a fact with a pre-normalized decay score (already 0.0-1.0).
 ///
 /// Same as `prepare_fact()` but takes a raw decay score.

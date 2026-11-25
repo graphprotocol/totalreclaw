@@ -53,6 +53,14 @@ pub fn wasm_prepare_fact(
     serde_wasm_bindgen::to_value(&prepared).map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// On-chain `decayScore` for every LIVE fact (always `1.0`; #789).
+///
+/// `0` = tombstone, `1.0` = live; carries no importance. Never use for tombstones.
+#[wasm_bindgen(js_name = "liveDecayScore")]
+pub fn wasm_live_decay_score() -> f64 {
+    store::live_decay_score()
+}
+
 /// Prepare a fact with a pre-normalized decay score (already 0.0-1.0).
 ///
 /// Same as `prepareFact()` but takes a raw decay score.

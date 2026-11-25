@@ -79,6 +79,7 @@ from .lsh import LSHHasher
 from .protobuf import FactPayload, encode_fact_protobuf, encode_tombstone_protobuf
 from .relay import RelayClient, parse_subgraph_data
 from .userop import build_and_send_userop_batch
+from .operations import live_decay_score
 
 logger = logging.getLogger(__name__)
 
@@ -497,7 +498,7 @@ async def _rewrite_with_mutation(
         owner=owner,
         encrypted_blob=new_encrypted_hex,
         blind_indices=new_blind_indices,
-        decay_score=1.0,
+        decay_score=live_decay_score(),  # live fact = 1.0 (#789)
         source=source_tag,
         content_fp="",
         agent_id="python-client",

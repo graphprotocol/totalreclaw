@@ -126,6 +126,7 @@ import {
   type DecryptedCandidate,
 } from './extraction/consolidation.js';
 import { isSubgraphMode, getSubgraphConfig, encodeFactProtobuf, submitFactOnChain, submitFactBatchOnChain, deriveSmartAccountAddress, PROTOBUF_VERSION_V4, type FactPayload } from './subgraph/subgraph-store.js';
+import { liveDecayScore } from './subgraph/decay-score.js';
 import { confirmIndexed } from './subgraph/confirm-indexed.js';
 import {
   DIGEST_TRAPDOOR,
@@ -1094,7 +1095,7 @@ async function searchForNearDuplicates(
             text: doc.text,
             embedding,
             importance: doc.importance,
-            decayScore: 5,
+            decayScore: liveDecayScore(), // liveness flag only; real importance is doc.importance (#789)
             createdAt: result.timestamp ? parseInt(result.timestamp, 10) * 1000 : Date.now(),
             version: 1,
           });
@@ -1241,7 +1242,7 @@ function scheduleDigestRecompile(
         timestamp: compiledAt,
         encrypted_blob: encryptedBlob,
         blind_indices: [DIGEST_TRAPDOOR],
-        decay_score: 10,
+        decay_score: 10, // self-hosted REST: server column is 0-10, unchanged (#789 covers on-chain writes only)
         source: 'openclaw-plugin-digest',
         content_fp: contentFp,
         agent_id: 'openclaw-plugin-digest',
@@ -1259,7 +1260,7 @@ function scheduleDigestRecompile(
       owner,
       encryptedBlob,
       blindIndices: [DIGEST_TRAPDOOR],
-      decayScore: 10,
+      decayScore: liveDecayScore(), // live fact = 1.0 (#789; was a raw 10)
       source: 'openclaw-plugin-digest',
       contentFp,
       agentId: 'openclaw-plugin-digest',
@@ -1740,7 +1741,8 @@ async function storeExtractedFacts(
               );
             }
           }
-          effectiveImportance = Math.max(fact.importance, dupResult.match.decayScore);
+          // Inherit the old fact's real (blob) importance; decayScore carries none (#789).
+          effectiveImportance = Math.max(fact.importance, dupResult.match.importance);
           superseded++;
         }
       }
@@ -1885,7 +1887,7 @@ async function storeExtractedFacts(
           owner: subgraphOwner || userId!,
           encryptedBlob: encryptedBlob,
           blindIndices: allIndices,
-          decayScore: effectiveImportance,
+          decayScore: liveDecayScore(), // live fact = 1.0, importance is in the blob (#789)
           source: factSource,
           contentFp: contentFp,
           agentId: 'openclaw-plugin-auto',
@@ -1900,7 +1902,7 @@ async function storeExtractedFacts(
           timestamp: new Date().toISOString(),
           encrypted_blob: encryptedBlob,
           blind_indices: allIndices,
-          decay_score: effectiveImportance,
+          decay_score: effectiveImportance, // self-hosted REST: server column is 0-10, unchanged (#789 covers on-chain writes only)
           source: factSource,
           content_fp: contentFp,
           agent_id: 'openclaw-plugin-auto',

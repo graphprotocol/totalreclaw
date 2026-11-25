@@ -64,9 +64,8 @@ async def test_store_fact_blob_importance_and_active_decay_score(given, stored):
         await store_fact(text="Test fact", wallet=wallet, relay=relay, importance=given)
 
     assert seen["importance"] == stored
-    # decayScore < 0.3 marks a fact inactive in the subgraph: it must stay
-    # at or above that for every explicit importance (decayScore is unchanged).
-    assert seen["decay"] >= 0.3
+    # decayScore is the live constant for every importance (#789).
+    assert seen["decay"] == 1.0
 
 
 def _configured_state():
@@ -124,14 +123,9 @@ async def test_import_progress_note_not_stored_at_10(default, expected):
 
 # ---------------------------------------------------------------------------
 # Producer conventions (#704 follow-up): internal producers pass an int 1-10,
-# and the stored blob importance + batch decayScore match what main stored for
-# the old ``score / 10.0`` float form (for 6-10; 1-5 differ only in decay of 1).
+# and the stored blob importance matches what main stored for the old
+# ``score / 10.0`` float form (decayScore is a constant since #789).
 # ---------------------------------------------------------------------------
-
-
-def _batch_decay(raw):
-    # the exact expression store_fact_batch uses for decayScore
-    return raw if raw <= 1 else raw / 10.0
 
 
 @pytest.mark.parametrize("score", [6, 7, 8, 9, 10])
@@ -139,7 +133,6 @@ def test_int_producer_matches_old_float_producer(score):
     old = score / 10.0
     old_blob = max(1, min(10, int(round(old * 10)) if old <= 1 else int(old)))
     assert normalize_importance(score) == old_blob == score
-    assert _batch_decay(score) == pytest.approx(_batch_decay(old))
 
 
 def test_llm_score_10_is_not_stored_as_1():

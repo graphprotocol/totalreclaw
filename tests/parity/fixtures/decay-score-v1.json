@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "description": "On-chain decayScore (protobuf field 6) rule, graphprotocol/totalreclaw#789: 0 = tombstone, 1.0 = live; carries no importance. Importance lives only in the encrypted blob.",
+  "live": 1.0,
+  "tombstone": 0.0,
+  "subgraph_threshold": 0.3,
+  "importances_ignored": [1, 2, 3, 5, 8, 10, 0, -5, 15, 2.5, "NaN", "Infinity"]
+}

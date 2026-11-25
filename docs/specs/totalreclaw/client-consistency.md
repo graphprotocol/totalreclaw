@@ -11,7 +11,7 @@
 | Extraction interval | 3 turns (default) | Server-driven via `billing.features.extraction_interval` | Env override: `TOTALRECLAW_EXTRACT_INTERVAL` |
 | Max facts per extraction | 15 (default) | Server-driven via `billing.features.max_facts_per_extraction` | |
 | Importance threshold | >= 6 (1-10 scale) | Prompt-level + parser-level | DELETE actions bypass threshold |
-| Importance storage | `importance / 10` (0.0-1.0) | All clients normalize | Stored as `decayScore` on-chain |
+| Importance storage | Inside the encrypted blob (1-10) | All clients | Never on-chain. The plaintext on-chain `decayScore` (protobuf field 6) is a liveness flag: `0` = tombstone, `1.0` = live; it carries no importance. Every live write (new fact, pin, unpin, retype, set_scope) uses the single core function `live_decay_score()` (WASM `liveDecayScore()`, PyO3 `live_decay_score()`). Tombstones write exactly `0`. Readers take importance from the decrypted blob, never from `decayScore`. The subgraph marks `decayScore < 0.3` inactive, so the live value must stay >= 0.3. Parity fixture: `tests/parity/fixtures/decay-score-v1.json` (#789). |
 | Message window (turn mode) | All unprocessed since last extraction | Bounded by extraction interval | Do NOT hardcode a number of messages |
 | Message window (full mode) | All messages, truncated to ~12,000 chars | ~3,000 tokens budget | |
 | Extraction prompt | See `skill/plugin/extractor.ts:40-74` | Canonical source of truth | Must be identical across all clients |

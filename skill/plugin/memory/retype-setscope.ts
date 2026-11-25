@@ -48,6 +48,7 @@ import type {
   MemoryVolatility,
 } from '../extraction/extractor.js';
 import { PROTOBUF_VERSION_V4 } from '../subgraph/subgraph-store.js';
+import { liveDecayScore } from '../subgraph/decay-score.js';
 import type { SubgraphSearchFact } from '../subgraph/subgraph-search.js';
 import { confirmIndexed, type ConfirmIndexedOptions } from '../subgraph/confirm-indexed.js';
 
@@ -351,7 +352,7 @@ async function rewriteWithMutation(
     owner: deps.owner,
     encryptedBlob: newBlobHex,
     blindIndices: regenerated.blindIndices,
-    decayScore: 1.0,
+    decayScore: liveDecayScore(), // live fact = 1.0 (#789)
     source: 'openclaw-plugin-retype',
     contentFp: '',
     agentId: deps.sourceAgent,

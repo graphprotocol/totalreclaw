@@ -164,6 +164,7 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Store pipeline
     m.add_function(wrap_pyfunction!(py_prepare_fact, m)?)?;
     m.add_function(wrap_pyfunction!(py_prepare_fact_with_decay_score, m)?)?;
+    m.add_function(wrap_pyfunction!(py_live_decay_score, m)?)?;
     m.add_function(wrap_pyfunction!(py_prepare_tombstone, m)?)?;
 
     // UserOp (ERC-4337) — feature-gated: managed
