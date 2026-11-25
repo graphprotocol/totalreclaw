@@ -32,6 +32,7 @@ import asyncio
 import logging
 import math
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -702,6 +703,8 @@ class RelayClient:
         # read-error-surfacing.md).
         self._read_block: Optional[ReadBlockState] = None
         self._read_block_episode_counter: int = 0
+        # Guards the read-modify-write in ``_set_read_block`` only.
+        self._read_block_lock = threading.Lock()
 
     async def _get_http(self) -> httpx.AsyncClient:
         """Return an ``httpx.AsyncClient`` bound to the current event loop.
@@ -808,13 +811,13 @@ class RelayClient:
     # the right place for state that must be visible from every call site
     # that shares one relay connection.
     #
-    # Plain attribute writes, no lock — NOT because this is single-threaded
+    # No lock on ``_read_block`` itself — NOT because this is single-threaded
     # (it isn't: Hermes sync hooks run on the ``loop_runner`` background
     # thread's event loop while async tools run on the host's own loop, so
     # ``self._read_block`` genuinely is read/written from more than one
-    # thread). No lock is needed because every write is a single Python
-    # attribute assignment (atomic under the GIL) of a fully-formed,
-    # immutable-in-practice ``ReadBlockState``, and every race is benign:
+    # thread). Every write to it is a single Python attribute assignment
+    # (atomic under the GIL) of a fully-formed, immutable-in-practice
+    # ``ReadBlockState``, and every race on it is benign:
     #   * A 2xx response on one thread clearing a block (``_clear_read_block``)
     #     that a denial on another thread just set: worst case is one extra
     #     HTTP call gets through during the overlap instead of being
@@ -824,8 +827,14 @@ class RelayClient:
     #     case is one redundant HTTP call, and whichever response lands last
     #     wins (either both clear it, or both reuse/extend the same episode
     #     via ``_set_read_block``'s ``prev is not None`` branch).
-    # No partial/torn read is possible because nothing here does read-modify-
-    # write across two attribute accesses.
+    # ``_set_read_block`` IS a read-modify-write (it reads ``prev``, then
+    # either reuses its episode or increments ``_read_block_episode_counter``
+    # and assigns a new record). That sequence runs under
+    # ``_read_block_lock`` so two concurrent first denials cannot both mint
+    # an episode (which would log the once-per-episode WARNING twice or
+    # reuse an id). Readers (``read_block`` / ``read_block_episode`` /
+    # ``read_block_record``) stay lock-free: they read the one attribute
+    # once, so they never see a torn record.
     # ------------------------------------------------------------------
     def read_block(self) -> Optional[ReadBlockState]:
         """The active read-pause episode, or ``None`` once its deadline has
@@ -864,7 +873,21 @@ class RelayClient:
         blk = self._read_block
         return blk.episode if blk is not None else None
 
+    def read_block_record(self) -> Optional[ReadBlockState]:
+        """The read-pause episode record, kept past its re-probe deadline.
+
+        Same record :meth:`read_block_episode` reports the id of: ``None``
+        only when there was never a block or a success cleared it. Use it
+        when the denial details (kind, until, upgrade URL) are needed for an
+        account that is still denied during the re-probe gap.
+        """
+        return self._read_block
+
     def _set_read_block(self, err: RelayReadBlocked) -> None:
+        with self._read_block_lock:
+            self._set_read_block_locked(err)
+
+    def _set_read_block_locked(self, err: RelayReadBlocked) -> None:
         prev = self._read_block
         now_utc = datetime.now(timezone.utc)
         pause_s = _pause_seconds(err)

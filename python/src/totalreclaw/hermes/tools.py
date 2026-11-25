@@ -46,6 +46,14 @@ def _real_read_block(client) -> Optional[ReadBlockState]:
     return blk if isinstance(blk, ReadBlockState) else None
 
 
+def _real_read_block_record(client) -> Optional[ReadBlockState]:
+    """``client.read_block_record`` (the episode record, kept past the re-probe
+    deadline) if it's a real ``ReadBlockState``, else ``None``. Same mock
+    guard as :func:`_real_read_block`."""
+    blk = getattr(client, "read_block_record", None) if client is not None else None
+    return blk if isinstance(blk, ReadBlockState) else None
+
+
 def _read_block_response(state: "PluginState", client, err: RelayReadBlocked) -> str:
     """Shared ``except RelayReadBlocked`` handler for the tools below (#662).
 
@@ -964,8 +972,10 @@ async def status(args: dict, state: "PluginState", **kwargs) -> str:
             except Exception:
                 sa = None
         # #662 — surface the client-wide relay read pause. Makes no
-        # subgraph call (``client.read_block`` is a local, time-based read).
-        read_blk = _real_read_block(client)
+        # subgraph call (``client.read_block_record`` is a local read). Uses the
+        # episode record, not the live window, so an account that is still
+        # denied reports ``paused: true`` during the re-probe gap too.
+        read_blk = _real_read_block_record(client)
         return json.dumps({
             "tier": billing.tier,
             "free_writes_used": billing.free_writes_used,
