@@ -53,8 +53,11 @@ pub fn encode_fact_protobuf(fact: &FactPayload) -> Vec<u8> {
 
 /// Encode a scheme-1 fact: field 5 sorted ascending and deduplicated, and
 /// field 14 `index_scheme = 1`. Always writes outer version 4 (`fact.version`
-/// is ignored). Rejects any tag that is not 64 lowercase hex characters, so a
-/// caller cannot stamp scheme 1 on a hand-hashed tag such as a plain word.
+/// is ignored). Rejects any tag that is not 64 lowercase hex characters.
+/// This is a shape check only, not a keyedness guarantee: a legacy unkeyed
+/// `sha256(word)` is also 64 lowercase hex and passes it. Keyed tags must come
+/// from `BlindIndexer` / `prepare_fact_v1_keyed`; the wire-boundary test
+/// (no output equals a legacy sha256) is the control for callers.
 pub fn encode_fact_protobuf_keyed(fact: &FactPayload) -> crate::Result<Vec<u8>> {
     for tag in &fact.blind_indices {
         if tag.len() != 64 || !tag.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
