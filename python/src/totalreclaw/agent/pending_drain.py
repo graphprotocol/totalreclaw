@@ -27,12 +27,17 @@ owner address. Each line carries::
     {"owner": "<eoa-or-sa-hex>",
      "queued_at": "<iso8601>",
      "session_id": "<original-session-id-or-empty>",
+     "attempts": <int, optional>,
      "messages": [{"role": "...", "content": "..."}, ...]}
 
 ``session_id`` records the source session's id (issue #494) so the
 next-session drain can stamp re-extracted facts with the ORIGINAL
 session, not the draining one. Absent on records written before #494 —
 drain treats a missing/empty value as "no override" (legacy behavior).
+
+``attempts`` (issue #604) counts failed extraction cycles caused by an LLM
+upstream outage. It is written only when > 0; a missing, malformed, bool or
+negative value reads back as 0, so older records stay valid.
 
 Owner-keying lets a multi-account host (rare today; possible with future
 profile-switching) drain only its own batches. The file lives in
@@ -88,6 +93,7 @@ def enqueue_messages(
     messages: list[dict],
     session_id: Optional[str] = None,
     path: Optional[Path] = None,
+    attempts: int = 0,
 ) -> bool:
     """Append a batch of unprocessed messages to the pending queue.
 
@@ -100,6 +106,9 @@ def enqueue_messages(
     Returns ``True`` on success, ``False`` if the disk write fails. A
     ``False`` return is logged at WARNING; callers may use it to decide
     whether to surface a more aggressive user-visible warning.
+
+    ``attempts`` is the number of failed extraction cycles so far (LLM
+    outage retries, issue #604). Written only when > 0.
 
     Empty ``messages`` is a no-op (returns ``True``).
     """
@@ -115,6 +124,8 @@ def enqueue_messages(
             "session_id": session_id or "",
             "messages": messages,
         }
+        if isinstance(attempts, int) and not isinstance(attempts, bool) and attempts > 0:
+            record["attempts"] = attempts
         with pending.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
         try:
@@ -147,7 +158,7 @@ def drain_pending(
     when empty.
 
     When ``with_meta`` is True, each element is instead a dict
-    ``{"messages": [...], "session_id": <str-or-None>}`` so the drain path
+    ``{"messages": [...], "session_id": <str-or-None>, "attempts": <int>}`` so the drain path
     can stamp re-extracted facts with the batch's original session id
     (issue #494). ``session_id`` is ``None`` for legacy pre-#494 records
     that lack the field. The default (``with_meta=False``) preserves the
@@ -191,7 +202,12 @@ def drain_pending(
         if rec_owner in accept:
             if with_meta:
                 rec_sid = record.get("session_id") or None
-                drained.append({"messages": rec_msgs, "session_id": rec_sid})
+                rec_att = record.get("attempts")
+                if not isinstance(rec_att, int) or isinstance(rec_att, bool) or rec_att < 0:
+                    rec_att = 0
+                drained.append(
+                    {"messages": rec_msgs, "session_id": rec_sid, "attempts": rec_att}
+                )
             else:
                 drained.append(rec_msgs)
         else:
