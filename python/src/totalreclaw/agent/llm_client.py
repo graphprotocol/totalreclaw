@@ -1753,6 +1753,16 @@ async def _call_openai(
         # what flips zai/GLM from empty-content responses to structured
         # output. See F2 in the rc.23 QA report.
         body["response_format"] = {"type": "json_object"}
+        # OpenAI (and OpenRouter routing to it) reject json_object mode
+        # with a 400 unless the word "json" appears in the messages. The
+        # shared extraction / compaction prompts never say it, so guarantee
+        # it here (internal#590). No-op when a message already mentions it.
+        if not any(
+            "json" in str(m.get("content", "")).lower() for m in body["messages"]
+        ):
+            body["messages"][0]["content"] = (
+                f"{system_prompt}\n\nRespond with a JSON object."
+            )
     if _is_zai_base_url(config.base_url):
         # EFFICIENCY: z.ai's GLM-4.5-series-and-up models (including the
         # cheap extraction workhorse ``glm-4.5-flash``) default to
