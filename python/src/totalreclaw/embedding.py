@@ -142,6 +142,12 @@ def is_model_available_locally() -> bool:
     return (_session is not None and _tokenizer is not None) or _hf_cache_has_model()
 
 
+def is_model_loaded() -> bool:
+    """True only when the ONNX session and tokenizer are already initialised,
+    so ``get_embedding`` is a warm forward pass (no download, no network)."""
+    return _session is not None and _tokenizer is not None
+
+
 def get_embedding(text: str) -> list[float]:
     """Generate a 640-dim L2-normalized embedding."""
     session, tokenizer = _ensure_loaded()

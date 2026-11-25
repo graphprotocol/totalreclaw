@@ -13,6 +13,7 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import threading
 import time
 from typing import Optional, TYPE_CHECKING
 
@@ -88,28 +89,67 @@ def _format_recall_context(results) -> str:
 
 
 # Max seconds the pre-turn hook may spend embedding the query before it
-# falls back to lexical-only recall (#639). Generous enough for a warm ONNX
-# forward pass, small enough not to eat the prefetch budget.
+# falls back to lexical-only recall (#639). The model must already be loaded,
+# so this only ever covers a warm forward pass.
 QUERY_EMBED_TIMEOUT_S = 2.0
 
-_embed_pool = concurrent.futures.ThreadPoolExecutor(
-    max_workers=1, thread_name_prefix="tr-recall-embed"
-)
+_embed_lock = threading.Lock()
+_embed_inflight: Optional[concurrent.futures.Future] = None
+_warmup_started = False
+
+
+def _run_daemon(fn, *args) -> concurrent.futures.Future:
+    """Run ``fn`` on a daemon thread (a wedged load can't delay shutdown)."""
+    fut: concurrent.futures.Future = concurrent.futures.Future()
+
+    def _target():
+        try:
+            fut.set_result(fn(*args))
+        except BaseException as e:  # noqa: BLE001 - surfaced via the future
+            fut.set_exception(e)
+
+    threading.Thread(target=_target, name="tr-recall-embed", daemon=True).start()
+    return fut
+
+
+def _maybe_warm_up(emb) -> None:
+    """Best-effort, non-blocking one-time model load off the turn path.
+
+    Only when the model is already in the local cache; never raises.
+    """
+    global _warmup_started
+    try:
+        with _embed_lock:
+            if _warmup_started:
+                return
+            _warmup_started = True
+        if emb.is_model_available_locally():
+            _run_daemon(emb._ensure_loaded)
+    except Exception as e:
+        logger.debug("auto-recall embedder warm-up skipped: %s", e)
 
 
 def _embed_query_or_none(query: str, timeout: float = QUERY_EMBED_TIMEOUT_S) -> Optional[list]:
     """Query embedding for auto-recall, or None to fall back to lexical recall.
 
-    Same embedder the ``totalreclaw_recall`` tool uses. Never starts the
-    one-time model download inside the pre-turn hook, and never blocks longer
-    than *timeout*. Any failure returns None.
+    Same embedder the ``totalreclaw_recall`` tool uses. Only embeds when the
+    model is already LOADED (no download / network in the hook); otherwise it
+    kicks off a background warm-up and returns None. Never blocks longer than
+    *timeout*, and after a timeout skips embedding until the stuck call ends.
+    Any failure returns None.
     """
+    global _embed_inflight
     try:
         from totalreclaw import embedding as _emb
 
-        if not _emb.is_model_available_locally():
+        if not _emb.is_model_loaded():
+            _maybe_warm_up(_emb)
             return None
-        fut = _embed_pool.submit(_emb.get_embedding, query)
+        with _embed_lock:
+            if _embed_inflight is not None and not _embed_inflight.done():
+                return None  # previous embed still running: don't pay again
+            fut = _run_daemon(_emb.get_embedding, query)
+            _embed_inflight = fut
         return fut.result(timeout=timeout)
     except Exception as e:  # incl. concurrent.futures.TimeoutError
         logger.debug("auto-recall query embedding skipped: %s", e)
@@ -155,7 +195,7 @@ def auto_recall(
                 top_k=top_k,
                 max_candidates=state.get_max_candidate_pool(),
                 include_embeddings=query_embedding is not None,
-                **({"query_embedding": query_embedding} if query_embedding else {}),
+                query_embedding=query_embedding,
             )
         )
 
@@ -203,7 +243,7 @@ async def auto_recall_async(
             top_k=top_k,
             max_candidates=state.get_max_candidate_pool(),
             include_embeddings=query_embedding is not None,
-            **({"query_embedding": query_embedding} if query_embedding else {}),
+            query_embedding=query_embedding,
         )
         if results:
             return _format_recall_context(results)

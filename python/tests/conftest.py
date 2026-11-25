@@ -165,3 +165,15 @@ def _no_real_pin_check_llm_call(monkeypatch):
         return None
 
     monkeypatch.setattr(pin_check, "chat_completion", _no_answer)
+
+
+@pytest.fixture(autouse=True)
+def _pin_embedder_unavailable(monkeypatch):
+    """No unit test may load the real ONNX model by accident (auto-recall
+    gates on these). Tests that want an embedder patch them back on."""
+    monkeypatch.setattr("totalreclaw.embedding.is_model_loaded", lambda: False)
+    monkeypatch.setattr("totalreclaw.embedding.is_model_available_locally", lambda: False)
+    from totalreclaw.agent import recall as _recall
+
+    monkeypatch.setattr(_recall, "_embed_inflight", None)
+    monkeypatch.setattr(_recall, "_warmup_started", False)
