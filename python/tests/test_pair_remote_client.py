@@ -305,7 +305,7 @@ async def test_unknown_or_malformed_wallet_sends_plain_ack(answer):
     async def resolver(phrase: str):
         return answer
 
-    relay, _ = await _run_with_resolver(f"tok-w-bad", resolver)
+    relay, _ = await _run_with_resolver("tok-w-bad", resolver)
     assert relay.ack_received == {"type": "ack"}
 
 

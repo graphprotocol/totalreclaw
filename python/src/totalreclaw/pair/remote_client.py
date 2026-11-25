@@ -50,6 +50,16 @@ from .crypto import decrypt_pairing_payload, generate_gateway_keypair, GatewayKe
 logger = logging.getLogger(__name__)
 
 
+def _consume_task_exception(task: "asyncio.Future") -> None:
+    """Mark a background task's exception as retrieved.
+
+    The wallet resolver may fail before we cancel it; without this, asyncio
+    logs "Task exception was never retrieved" when the task is collected.
+    """
+    if not task.cancelled():
+        task.exception()
+
+
 # Default relay endpoint. Production by default — both stable AND RC
 # Python clients install + pair against ``api.totalreclaw.xyz`` unless the
 # user opts into staging via env. This mirrors the documented contract in
@@ -628,6 +638,7 @@ async def await_phrase_upload(
             wallet_deadline = loop.time() + wallet_timeout_s
             try:
                 wallet_task = asyncio.ensure_future(resolve_wallet_address(phrase))
+                wallet_task.add_done_callback(_consume_task_exception)
             except Exception:
                 wallet_task = None
 
