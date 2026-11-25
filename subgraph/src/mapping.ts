@@ -1,20 +1,44 @@
 /**
- * Subgraph mapping for EventfulDataEdge.
+ * Subgraph mapping for EventfulDataEdgeV2.
  *
- * Handles Log(bytes) events emitted by the EventfulDataEdge contract.
- * Each event contains an XChaCha20-Poly1305 encrypted Protobuf-serialized TotalReclawFact (v3).
- * The mapping extracts metadata fields and stores them as Fact records
- * with inverted BlindIndex entities for efficient hash_in queries.
+ * Handles `Log(address indexed sender, bytes data)` events. Each event carries
+ * an XChaCha20-Poly1305 encrypted Protobuf-serialized TotalReclawFact; the
+ * mapping extracts metadata into a Fact record plus inverted BlindIndex
+ * entities for `hash_in` search.
  *
- * IMPORTANT: The subgraph stores encrypted data. It never sees plaintext.
- * The blind_indices are SHA-256 hashes — the subgraph can match them but
- * cannot reverse them to learn the original content.
+ * AUDIT 1.1 — write authorization. The old `EventfulDataEdge` emitted only
+ * `Log(bytes)`, so the subgraph had to trust the payload's self-declared
+ * `owner` and keyed facts by a client-chosen id in a GLOBAL namespace. Anyone
+ * could therefore overwrite, tombstone or reassign any user's facts, or
+ * front-run a create to squat an id. V2 records `msg.sender` — the user's
+ * Smart Account, which the EVM sets and no caller can forge — and the entity
+ * is keyed by `sender:id`, a PER-OWNER namespace:
+ *
+ *   - Ownership is derived from `sender`, never from the payload.
+ *   - A write from address X can only ever address keys beginning `X:`, so it
+ *     structurally cannot touch another account's facts (no overwrite, no
+ *     reassignment) and cannot squat an id another account will use (their
+ *     create lands under a different key). There is no cross-owner collision
+ *     left to adjudicate.
+ *
+ * Idempotent key (tombstone round-trip). Clients receive `fact.id` (the
+ * composite `sender:id`) from recall and pass it straight back as the payload
+ * id when they forget/pin/retype. So a create sends a bare id while a
+ * tombstone sends the already-prefixed one. The key is computed idempotently:
+ * if the payload id already begins with the caller's own `sender:` prefix it
+ * is used as-is, otherwise it is prefixed. Both resolve to the same entity,
+ * with no client change. The prefix check is against `msg.sender`, so a
+ * crafted `victim:uuid` from an attacker just lands in the attacker's own
+ * namespace (`attacker:victim:uuid`).
+ *
+ * The subgraph stores only ciphertext and SHA-256 blind-index hashes; it never
+ * sees plaintext.
  */
 
-import { Bytes, BigDecimal, BigInt, log } from "@graphprotocol/graph-ts";
-import { Log } from "../generated/EventfulDataEdge/EventfulDataEdge";
+import { Address, BigDecimal, BigInt, log } from "@graphprotocol/graph-ts";
+import { Log } from "../generated/EventfulDataEdgeV2/EventfulDataEdgeV2";
 import { Fact, BlindIndex, GlobalState } from "../generated/schema";
-import { decodeFact, DecodedFact } from "./protobuf";
+import { decodeFact } from "./protobuf";
 
 const GLOBAL_STATE_ID = "global";
 const INACTIVE_THRESHOLD = BigDecimal.fromString("0.3");
@@ -82,36 +106,64 @@ function getOrCreateGlobalState(): GlobalState {
   return state;
 }
 
+/**
+ * Per-owner composite entity id. Idempotent: a bare payload id (`uuid`, from a
+ * create) is prefixed with `sender:`; an id that already carries the caller's
+ * own prefix (`sender:uuid`, round-tripped from recall on a forget/pin) is
+ * returned unchanged. The check is against the caller's own address, so a
+ * foreign prefix does not satisfy it. The `:` delimiter is unambiguous: a fact
+ * id is a uuid (hex + hyphens) and `sender` is `0x…` hex, neither contains `:`.
+ */
+function compositeId(senderHex: string, payloadId: string): string {
+  let prefix = senderHex + ":";
+  if (payloadId.startsWith(prefix)) {
+    return payloadId;
+  }
+  return prefix + payloadId;
+}
+
 export function handleLog(event: Log): void {
   let data = event.params.data;
   if (data.length == 0) {
-    log.warning("Empty Log event in tx {}", [event.transaction.hash.toHexString()]);
+    log.warning("V2: empty Log event in tx {}", [event.transaction.hash.toHexString()]);
     return;
   }
 
+  let sender: Address = event.params.sender;
+  let senderHex = sender.toHexString();
+
   let decoded = decodeFact(data);
 
-  // Use Protobuf ID or fall back to tx hash + log index
-  let factId = decoded.id;
-  if (factId == "") {
-    factId = event.transaction.hash.toHexString() + "-" + event.logIndex.toString();
+  // Resolve the client-chosen fact id; fall back to a per-event unique id.
+  let payloadId = decoded.id;
+  if (payloadId == "") {
+    payloadId = event.transaction.hash.toHexString() + "-" + event.logIndex.toString();
   }
+
+  let factId = compositeId(senderHex, payloadId);
 
   let fact = Fact.load(factId);
   let isNew = fact == null;
+
+  // Defense in depth. The composite key already embeds the caller, so an entity
+  // under this key can only have been created by this sender; a mismatch would
+  // mean an invariant was violated upstream. Reject rather than overwrite.
+  if (fact != null && fact.owner != sender) {
+    log.warning("V2: refusing write to {} — sender {} != owner {} (tx {})", [
+      factId,
+      senderHex,
+      fact.owner.toHexString(),
+      event.transaction.hash.toHexString(),
+    ]);
+    return;
+  }
+
   if (fact == null) {
     fact = new Fact(factId);
   }
 
-  // Owner: from Protobuf or tx.from
-  let owner: Bytes;
-  if (decoded.owner != "") {
-    owner = Bytes.fromHexString(decoded.owner);
-  } else {
-    owner = event.transaction.from;
-  }
-  fact!.owner = owner;
-
+  // Ownership comes from the on-chain caller, never from the payload.
+  fact!.owner = sender;
   fact!.encryptedBlob = decoded.encryptedBlob;
   fact!.encryptedEmbedding = decoded.encryptedEmbedding;
   fact!.decayScore = decoded.decayScore;
@@ -122,8 +174,8 @@ export function handleLog(event: Log): void {
   fact!.timestamp = event.block.timestamp;
   fact!.txHash = event.transaction.hash;
 
-  // Client-generated per-fact timestamp (from protobuf field 2).
-  // Falls back to block timestamp if field 2 is missing or malformed.
+  // Client-generated per-fact timestamp (protobuf field 2); fall back to block
+  // timestamp if missing or malformed.
   let parsedCreatedAt = parseISO8601ToUnix(decoded.timestamp);
   if (parsedCreatedAt.gt(BigInt.zero())) {
     fact!.createdAt = parsedCreatedAt;
@@ -143,7 +195,7 @@ export function handleLog(event: Log): void {
 
   fact!.save();
 
-  // Create inverted BlindIndex entities
+  // Inverted BlindIndex entities for hash_in search, keyed off the composite id.
   let indices = decoded.blindIndices;
   for (let i = 0; i < indices.length; i++) {
     let hash = indices[i];
@@ -151,13 +203,13 @@ export function handleLog(event: Log): void {
     let blindIndex = new BlindIndex(indexId);
     blindIndex.hash = hash;
     blindIndex.fact = factId;
-    blindIndex.owner = owner;
+    blindIndex.owner = sender;
     blindIndex.save();
   }
 
   log.info("Indexed fact {} with {} blind indices for owner {}", [
     factId,
     indices.length.toString(),
-    owner.toHexString()
+    senderHex,
   ]);
 }
