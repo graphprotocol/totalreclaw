@@ -282,7 +282,9 @@ async def remember(
         importance_val = float(raw_importance)
     except (TypeError, ValueError):
         importance_val = 8.0
-    importance_val = max(1.0, min(10.0, importance_val))
+    # The tool's documented scale is 1-10. Hand an INT to the client so the
+    # 1-10 value 1 is never mistaken for the legacy 0-1 scale (#704).
+    importance_val = max(1, min(10, int(round(importance_val))))
 
     # Validate + normalize the v1 type (legacy v0 tokens coerced).
     fact_type_raw = args.get("type", "claim")

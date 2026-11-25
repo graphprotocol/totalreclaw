@@ -1507,12 +1507,12 @@ class ImportEngine:
         """Build the per-fact payload shape shared by ``client.remember`` and
         ``client.remember_batch``.
 
-        Normalises importance from the 1-10 input scale to the 0.0-1.0 scale
-        the client expects, and best-effort attaches an embedding.
+        Clamps importance to an int on the 1-10 scale (an int is read as
+        1-10 by the client, #704), and best-effort attaches an embedding.
         """
         text = fact["text"]
         importance = fact.get("importance", 5)
-        importance_normalized = max(0.0, min(1.0, importance / 10.0))
+        importance_normalized = max(1, min(10, int(round(importance))))
 
         embedding = None
         try:

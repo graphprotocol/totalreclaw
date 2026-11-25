@@ -5,6 +5,7 @@ Combines crypto, protobuf, relay, LSH, reranker, and ERC-4337 UserOp
 construction into high-level operations.
 """
 from __future__ import annotations
+import math
 import asyncio
 import base64
 import logging
@@ -246,6 +247,29 @@ class ForgetResult(dict):
         return bool(self.get("success", False))
 
 
+def normalize_importance(value) -> int:
+    """Normalise an importance value to the canonical 1-10 integer.
+
+    Scale is decided by TYPE, never by guessing on the value of an int:
+
+    * ``int`` (not bool): already on the 1-10 scale. ``1`` stays 1.
+    * ``float`` strictly between 0 and 1: the legacy 0-1 scale, scaled x10
+      (0.7 -> 7).
+    * any other ``float``: 1-10 scale, rounded (1.0 -> 1, 8.0 -> 8).
+
+    The result is clamped to 1-10. Non-numeric input falls back to 5.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 5
+    if isinstance(value, float) and not math.isfinite(value):
+        return 5
+    if isinstance(value, float) and 0 < value < 1:
+        scaled = int(round(value * 10))
+    else:
+        scaled = int(round(value))
+    return max(1, min(10, scaled))
+
+
 async def store_fact(
     text: str,
     wallet: WalletContext,
@@ -313,10 +337,9 @@ async def store_fact(
     fact_id = str(uuid.uuid4())
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-    # Accept either a 0-1 float (scaled to 1-10) or an already-1-10 value,
-    # then clamp into the 1-10 band.
-    importance_scaled = int(round(importance * 10)) if importance <= 1 else int(importance)
-    importance_int = max(1, min(10, importance_scaled))
+    # int -> 1-10 scale; float in (0, 1) -> legacy 0-1 scale (see
+    # normalize_importance). Clamped to 1-10.
+    importance_int = normalize_importance(importance)
 
     # v1 canonical claim (unconditional). source_agent is carried as
     # ``provenance`` — the v1 `source` field on the claim itself.
@@ -369,6 +392,8 @@ async def store_fact(
         owner=owner,
         encrypted_blob=encrypted_hex,
         blind_indices=all_indices,
+        # decayScore < 0.3 marks a fact inactive in the subgraph (mapping.ts
+        # INACTIVE_THRESHOLD), so it must not be rescaled here.
         decay_score=importance,
         source=source,
         content_fp=content_fp,
@@ -716,15 +741,7 @@ async def store_fact_batch(
         importance_raw = raw.get("importance", 0.5)
         # Accept either a 1-10 int or a 0-1 float — identical to
         # ``store_fact``'s coercion logic.
-        importance_int = max(
-            1,
-            min(
-                10,
-                int(round(importance_raw * 10))
-                if importance_raw <= 1
-                else int(importance_raw),
-            ),
-        )
+        importance_int = normalize_importance(importance_raw)
 
         fact_id = str(uuid.uuid4())
         fact_ids.append(fact_id)

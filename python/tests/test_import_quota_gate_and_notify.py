@@ -351,14 +351,20 @@ async def test_import_status_latches_announced_on_query(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_persist_import_memory_noop_when_unconfigured(monkeypatch):
+async def test_persist_import_memory_noop_when_unconfigured(monkeypatch, tmp_path):
     """#401: graceful no-op when TotalReclaw is not configured."""
     from totalreclaw.hermes import tools
     from totalreclaw.agent.state import AgentState
 
+    # Hermetic (#704): AgentState() auto-configures from the credentials
+    # file, so point it at a path that cannot exist.
+    monkeypatch.setenv("TOTALRECLAW_CREDENTIALS_PATH", str(tmp_path / "none.json"))
+    monkeypatch.delenv("TOTALRECLAW_RECOVERY_PHRASE", raising=False)
+
     state = AgentState()  # not configured
+    assert not state.is_configured()
     # Must not raise, and must not attempt a write.
-    await tools._persist_import_memory(state, text="anything", importance=0.7)
+    await tools._persist_import_memory(state, text="anything", importance=7)
 
 
 @pytest.mark.asyncio
@@ -385,11 +391,11 @@ async def test_persist_import_memory_writes_via_remember_when_configured(monkeyp
     monkeypatch.setattr(tools, "remember", _fake_remember)
 
     await tools._persist_import_memory(
-        state, text="Active background import: id=abc", importance=0.7,
+        state, text="Active background import: id=abc", importance=7,
     )
     assert seen["args"]["text"] == "Active background import: id=abc"
     assert seen["args"]["force"] is True
-    assert seen["args"]["importance"] == 0.7
+    assert seen["args"]["importance"] == 7
 
 
 @pytest.mark.asyncio
@@ -406,4 +412,4 @@ async def test_persist_import_memory_swallows_remember_failure(monkeypatch):
 
     monkeypatch.setattr(tools, "remember", _boom)
     # Must not raise.
-    await tools._persist_import_memory(state, text="x", importance=0.7)
+    await tools._persist_import_memory(state, text="x", importance=7)

@@ -914,7 +914,7 @@ def _auto_extract_inner(
             fact_dict: dict = {
                 "text": fact.text,
                 "embedding": embedding,
-                "importance": fact.importance / 10.0,  # Normalize 1-10 to 0.0-1.0
+                "importance": int(fact.importance),  # 1-10 int (an int is read as 1-10, #704)
                 "fact_type": fact.type,
                 "entities": fact.entities,
                 "confidence": fact.confidence,
@@ -1183,6 +1183,16 @@ def drain_pending_stores(
         return 0
 
 
+def _decode_legacy_queued_importance(fact: dict) -> None:
+    """Queued entries written before #704 carry ``importance`` as a 0.1-1.0
+    float (LLM score / 10). Entries written now carry the int 1-10. An int is
+    read as 1-10, so a legacy float is converted to its int here; otherwise
+    an old 1.0 (meaning 10) would be stored as 1."""
+    imp = fact.get("importance")
+    if isinstance(imp, float) and 0 < imp <= 1:
+        fact["importance"] = max(1, min(10, int(round(imp * 10))))
+
+
 def _drain_entries(state: "AgentState", client, queue: PendingStoreQueue, entries: list[dict]) -> int:
     recent: list[dict] = []
     fetch = getattr(client, "fetch_recent_facts", None)
@@ -1197,6 +1207,7 @@ def _drain_entries(state: "AgentState", client, queue: PendingStoreQueue, entrie
     to_store_entries: list[dict] = []
     for entry in entries:
         fact = dict(entry["fact"])
+        _decode_legacy_queued_importance(fact)
         if _is_session_crystal(fact):
             # Stored the way session_debrief stores it: forget scrub per
             # sentence, no write gate, no embedding (#749).

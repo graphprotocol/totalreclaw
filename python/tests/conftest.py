@@ -44,6 +44,41 @@ def _stub_wallet_privates(client) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_credentials(monkeypatch, tmp_path_factory):
+    """#704: no test may auto-configure from a developer's real vault.
+
+    ``AgentState()`` / ``get_credential_provider()`` read
+    ``~/.totalreclaw/credentials.json`` and, with the staging relay default,
+    a test that then writes (e.g. ``remember``) would put data on a real
+    staging account. Point ``HOME`` at an empty per-session temp dir (the default
+    credentials path derives from it) and drop any inherited override,
+    the external credential-provider env vars, and XDG_CONFIG_HOME / HERMES_HOME.
+
+    Known gap: constants bound at import time via ``Path.home()``
+    (``onboarding.CANONICAL_CREDENTIALS_PATH``, ``update_notice._STATE_DIR``,
+    ...) are NOT retargeted by the HOME override; tests that exercise them
+    monkeypatch the attribute themselves. Tests that need credentials
+    set their own paths locally (monkeypatch overrides this per test).
+    """
+    home = tmp_path_factory.getbasetemp() / "tr-fake-home"
+    home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    # Do NOT set TOTALRECLAW_CREDENTIALS_PATH here: many tests re-point HOME
+    # at their own tmp dir and rely on the default ``~/.totalreclaw`` path.
+    monkeypatch.delenv("TOTALRECLAW_CREDENTIALS_PATH", raising=False)
+    for var in (
+        "TOTALRECLAW_CREDENTIALS_PROVIDER",
+        "TOTALRECLAW_EXTERNAL_CREDENTIALS_JSON",
+        "TOTALRECLAW_EXTERNAL_CREDENTIALS_PATH",
+        "XDG_CONFIG_HOME",
+        "HERMES_HOME",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("TOTALRECLAW_RECOVERY_PHRASE", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_keychain(monkeypatch):
     """cred-2 (#262) phrase-safety invariant: no test may touch the real OS
     keychain. ``credentials_wrap`` honours ``TOTALRECLAW_NO_KEYCHAIN=1`` as a

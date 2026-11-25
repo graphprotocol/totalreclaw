@@ -241,7 +241,7 @@ def _get_or_create_import_engine(state: "PluginState", source: str, file_path: O
     return engine
 
 
-async def _persist_import_memory(state: "PluginState", text: str, importance: float = 0.7) -> None:
+async def _persist_import_memory(state: "PluginState", text: str, importance: int = 7) -> None:
     """Best-effort persist an import-tracking note to the TotalReclaw vault.
 
     #401: long-running imports outlive the conversation window. After Hermes
@@ -250,6 +250,8 @@ async def _persist_import_memory(state: "PluginState", text: str, importance: fl
     standard remember path) means ``totalreclaw_recall("active import")`` or
     the ``pre_llm_call`` auto-recall surfaces it again — the import context
     flows through the same memory system the user already uses.
+
+    ``importance`` is on the tool's 1-10 scale.
 
     Graceful no-op when TotalReclaw is not configured or the write fails:
     this is an observability aid, never load-bearing for the import itself.
@@ -859,7 +861,7 @@ async def _run_import_batches(
                 f"started={start_dt.isoformat()}. Check status with "
                 f"totalreclaw_import_status."
             ),
-            importance=0.7,
+            importance=7,
         )
         while offset < total_items:
             # #457b (b): any non-running status is a stop signal (aborted /
@@ -945,7 +947,7 @@ async def _run_import_batches(
                 f"({batch_done} batches) in {duration_min:.0f} minutes. "
                 f"Source: {source}."
             ),
-            importance=0.8,
+            importance=8,
         )
     except Exception as e:
         s = read_import_state(import_id)
