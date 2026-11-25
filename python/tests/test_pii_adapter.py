@@ -513,7 +513,7 @@ class TestAutomaticPathsStoreOnlyAllow:
         assert client.remember_batch.call_count == 0
         assert state.get_unprocessed_messages() == []
 
-    def test_session_debrief_skips_crystal_with_sensitive_content(self) -> None:
+    def test_session_debrief_skips_crystal_with_sensitive_content(self, caplog) -> None:
         from totalreclaw.agent.lifecycle import session_debrief
 
         client = _batch_client()
@@ -526,9 +526,16 @@ class TestAutomaticPathsStoreOnlyAllow:
             return crystal
 
         with patch("totalreclaw.agent.lifecycle.generate_crystal", new=fake_generate):
-            ids = session_debrief(state, stored_fact_texts=[])
+            with caplog.at_level("INFO", logger="totalreclaw.agent.lifecycle"):
+                ids = session_debrief(state, stored_fact_texts=[])
         assert ids == []
         client.remember.assert_not_called()
+        # #731: the skip line carries decision + category, never the text.
+        skip = [r.getMessage() for r in caplog.records if "Session Crystal skipped" in r.getMessage()]
+        assert len(skip) == 1
+        assert "decision=" in skip[0] and "category=" in skip[0]
+        assert "category=None" not in skip[0]
+        assert "Paid with" not in skip[0] and CARD not in skip[0]
 
     def test_session_debrief_stores_clean_crystal(self) -> None:
         from totalreclaw.agent.lifecycle import session_debrief

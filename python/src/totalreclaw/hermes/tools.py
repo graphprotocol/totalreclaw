@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Optional
@@ -706,6 +707,43 @@ def _exports_dir() -> Path:
     return _resolve_state_dir() / "exports"
 
 
+#: Export dumps are the whole decrypted vault; they are pruned after this long.
+EXPORT_RETENTION_SECONDS = 24 * 60 * 60
+
+_EXPORT_FILE_PREFIX = "totalreclaw-export-"
+
+
+def _prune_old_exports(directory: Path, max_age_seconds: float = EXPORT_RETENTION_SECONDS) -> int:
+    """Delete stale ``totalreclaw-export-*`` dumps from ``directory`` (internal#645).
+
+    Only regular files (never symlinks) directly inside ``directory`` whose
+    name matches the export pattern are considered, so nothing outside the
+    exports dir, and nothing else inside it, is ever touched. Best-effort:
+    failures are logged and never break the export. Returns the number removed.
+    """
+    removed = 0
+    cutoff = time.time() - max_age_seconds
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        name = entry.name
+        if not name.startswith(_EXPORT_FILE_PREFIX) or not (
+            name.endswith(".json") or name.endswith(".json.tmp")
+        ):
+            continue
+        try:
+            if entry.is_symlink() or not entry.is_file():
+                continue
+            if entry.stat().st_mtime < cutoff:
+                entry.unlink()
+                removed += 1
+        except OSError as e:
+            logger.warning("could not prune old export %s: %s", name, e)
+    return removed
+
+
 def _export_filename() -> str:
     """Sortable, filesystem-safe UTC stamp — ``totalreclaw-export-<UTC>.json``."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -793,6 +831,11 @@ def _write_export_file(path: Path, payload: dict) -> None:
     ``pair/session_store.py``.
     """
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+    _prune_old_exports(path.parent)
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
