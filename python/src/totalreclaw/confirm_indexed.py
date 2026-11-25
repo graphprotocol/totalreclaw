@@ -21,7 +21,7 @@ from typing import Optional, Literal
 
 import totalreclaw_core as _core
 
-from .relay import RelayClient, RelayReadBlocked
+from .relay import RelayClient, RelayReadBlocked, parse_subgraph_data
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,12 @@ def _parse_response(payload_json: str) -> bool:
         return bool(fn(payload_json))
     import json as _json
     value = _json.loads(payload_json)
-    fact = value.get("data", {}).get("fact") if isinstance(value.get("data"), dict) else value.get("fact")
+    # Core-missing shim only. Keeps its bare-``fact`` shape; an error body
+    # raises (as the core parser does) instead of reading as not-indexed.
+    if isinstance(value, dict) and "fact" not in value:
+        fact = parse_subgraph_data(value).get("fact")
+    else:
+        fact = value.get("fact")
     return bool(fact and fact.get("isActive"))
 
 

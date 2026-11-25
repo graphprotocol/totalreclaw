@@ -52,6 +52,7 @@ from totalreclaw.client import per_fact_results
 
 # Single source of truth for the relay URL (repo forbids duplicate URL literals).
 from totalreclaw.relay import _HARDCODED_DEFAULT_URL as _CANONICAL_PROD_URL
+from totalreclaw.relay import parse_subgraph_data
 
 logger = logging.getLogger(__name__)
 
@@ -449,7 +450,7 @@ async def fetch_and_decrypt_vault(client: Any) -> list[DecryptedFact]:
             _FETCH_QUERY,
             {"owner": owner, "first": FETCH_PAGE_SIZE, "skip": skip},
         )
-        facts = data.get("data", {}).get("facts", []) if isinstance(data, dict) else []
+        facts = parse_subgraph_data(data).get("facts", [])
         if not facts:
             break
 

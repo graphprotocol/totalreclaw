@@ -13,7 +13,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ from .crypto import (
 from .embedding import get_embedding, get_embedding_dims
 from .lsh import LSHHasher
 from .protobuf import FactPayload, encode_fact_protobuf, encode_tombstone_protobuf
-from .relay import RelayClient, RelayReadBlocked
+from .relay import RelayClient, RelayReadBlocked, SubgraphQueryError, log_rate_limited, parse_subgraph_data
 from .reranker import RerankerCandidate, RerankerResult, default_pin_boost, rerank
 from .tuning_loop import maybe_write_feedback_for_pin
 from .userop import build_and_send_userop, build_and_send_userop_batch, MAX_BATCH_SIZE
@@ -840,6 +840,26 @@ async def store_fact_batch(
     return fact_ids
 
 
+def _recall_rows(body: Any, key: str) -> tuple[list, Optional[SubgraphQueryError]]:
+    """Recall-path read of ``data[key]``: an error body yields ``([], err)``.
+
+    Recall keeps its lenient behaviour (zero candidates is also a legitimate
+    result) but returns the swallowed error so callers can fold it into
+    ``last_error`` and keep the total-outage guard armed (internal#559). The
+    WARNING is rate-limited to once per 60 s.
+    """
+    try:
+        return parse_subgraph_data(body).get(key) or [], None
+    except SubgraphQueryError as e:
+        log_rate_limited(
+            "recall-error-body",
+            "Subgraph returned an error body on the recall path (%s): %s",
+            type(e).__name__,
+            e,
+        )
+        return [], e
+
+
 async def search_facts(
     query: str,
     keys: DerivedKeys,
@@ -960,7 +980,10 @@ async def search_facts(
         try:
             if isinstance(data, Exception):
                 raise data
-            entries = data.get("data", {}).get("blindIndexes", [])
+            entries, row_err = _recall_rows(data, "blindIndexes")
+            if row_err is not None:
+                last_error = row_err
+                continue
             for entry in entries:
                 _note_hit(entry.get("fact"))
 
@@ -977,7 +1000,10 @@ async def search_facts(
                             "lastId": last_id,
                         },
                     )
-                    page_entries = page_data.get("data", {}).get("blindIndexes", [])
+                    page_entries, row_err = _recall_rows(page_data, "blindIndexes")
+                    if row_err is not None:
+                        last_error = row_err
+                        break
                     if not page_entries:
                         break
                     for entry in page_entries:
@@ -1001,7 +1027,10 @@ async def search_facts(
     try:
         if isinstance(broadened, Exception):
             raise broadened
-        for fact in broadened.get("data", {}).get("facts", []):
+        broadened_rows, row_err = _recall_rows(broadened, "facts")
+        if row_err is not None:
+            raise row_err
+        for fact in broadened_rows:
             if fact and fact.get("isActive", True):
                 payloads.setdefault(fact["id"], fact)
                 broadened_ids.append(fact["id"])
@@ -1034,7 +1063,11 @@ async def search_facts(
             logger.warning("Fact payload fetch failed (owner=%s): %s", owner, data)
             last_error = data
             continue
-        for fact in data.get("data", {}).get("facts", []):
+        rows, row_err = _recall_rows(data, "facts")
+        if row_err is not None:
+            last_error = row_err
+            continue
+        for fact in rows:
             if fact and fact.get("isActive", True):
                 payloads.setdefault(fact["id"], fact)
 
@@ -1295,22 +1328,14 @@ async def _fetch_fact_by_id(
     caller; other callers keep the lenient shape.
     """
     data = await relay.query_subgraph(FACT_BY_ID_QUERY, {"id": fact_id})
-    if strict:
-        if isinstance(data, dict) and data.get("errors"):
-            # Categorical message only — never echo the body, which may carry
-            # indexer diagnostics (pin-guard log hygiene, PRD-04 DEP-5).
-            raise RuntimeError(
-                "fact-by-id subgraph query returned errors "
-                f"({len(data['errors'])} item(s))"
-            )
-        inner = data.get("data") if isinstance(data, dict) else None
-        if not isinstance(inner, dict) or "fact" not in inner:
-            raise RuntimeError(
-                "fact-by-id subgraph response has no data.fact "
-                f"(body type {type(data).__name__})"
-            )
-        return inner["fact"]
-    return data.get("data", {}).get("fact")
+    # Categorical message only; never echo the body, which may carry indexer
+    # diagnostics (pin-guard log hygiene, PRD-04 DEP-5; internal#559).
+    inner = parse_subgraph_data(data)
+    if strict and "fact" not in inner:
+        raise RuntimeError(
+            "fact-by-id subgraph response has no data.fact"
+        )
+    return inner.get("fact")
 
 
 def _has_raw_pin_sentinel(decrypted: str) -> bool:
@@ -2070,7 +2095,9 @@ async def export_facts(
             EXPORT_QUERY,
             {"owner": owner, "first": page_size, "skip": skip},
         )
-        facts = data.get("data", {}).get("facts", [])
+        # An error body mid-pagination must fail the export, not end it
+        # early as a silently truncated "complete" result (internal#559).
+        facts = parse_subgraph_data(data).get("facts", [])
         if not facts:
             break
 
@@ -2169,7 +2196,7 @@ async def find_existing_content_fps(
         data = await relay.query_subgraph(query, {"owner": owner, "fps": fps})
         return {
             f["contentFp"]
-            for f in data.get("data", {}).get("facts", [])
+            for f in parse_subgraph_data(data).get("facts", [])
             if f.get("contentFp")
         }
     except RelayReadBlocked as e:
@@ -2179,7 +2206,7 @@ async def find_existing_content_fps(
         logger.debug("Pre-write dedup query skipped (reads paused): %s", e)
         return set()
     except Exception as e:
-        logger.warning("Pre-write dedup query failed (fail-open): %s", e)
+        log_rate_limited("prewrite-dedup", "Pre-write dedup query failed (fail-open): %s", e)
         return set()
 
 
@@ -2257,7 +2284,7 @@ async def fetch_recent_facts(
         BROADENED_SEARCH_QUERY,
         {"owner": owner, "first": limit + RECENT_FETCH_HEADROOM},
     )
-    rows = (data.get("data") or {}).get("facts") or []
+    rows = parse_subgraph_data(data).get("facts") or []
     results: list[dict] = []
     for fact in rows:
         if not fact or not fact.get("isActive", True):

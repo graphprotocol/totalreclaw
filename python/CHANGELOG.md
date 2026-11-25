@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The Session Crystal skip log now names the PII decision and category (internal#731).** The line reads `Session Crystal skipped: sensitive content (decision=... category=...)`; the text is never logged.
 
+- **A subgraph error body no longer reads as an empty result (internal#559).** The indexer reports errors as HTTP 200 with `{"errors": [...]}` and no `data`. Export, retype / set_scope, the pin/unpin fact lookup, the recent-facts section, Crystal re-key vault fetch now raise `SubgraphQueryError` (categorical message; the first error message goes to DEBUG logs only), so an error mid-export fails the export instead of returning a truncated one, and retype no longer says "Fact not found". Recall keeps returning empty results on an error body but logs a WARNING.
+
 - **Quota copy takes its numbers from the relay.** The session-start quota nudge, the upgrade tool description and SKILL.md no longer hardcode the Free or Pro cap: they use `free_writes_limit` and the new `upgrade_writes_limit` from `/v1/billing/status`, which the relay sources from Stripe. The nudge is skipped when the relay sends no limit, instead of assuming 250.
 
 - **The write-quota retry queue no longer re-queues facts that were stored when Hermes shuts down mid-batch (#777).** A drain whose batch was cut short by interpreter shutdown put every fact back in the queue, including those that had landed. After the restart the next drain sent them again. A plain fact was dropped there only if the subgraph had indexed it by then. A queued session Crystal skips the write gate (#749), so it was stored a second time.
