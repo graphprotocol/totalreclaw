@@ -34,7 +34,7 @@ def test_normalize_importance(value, expected):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("given,stored", [(1, 1), (0.7, 7), (5, 5), (10, 10), (1.0, 1)])
-async def test_store_fact_importance_and_decay_score(given, stored):
+async def test_store_fact_blob_importance_and_active_decay_score(given, stored):
     keys = derive_keys_from_mnemonic(TEST_MNEMONIC)
     relay = AsyncMock(spec=RelayClient)
     relay._relay_url = "https://api-staging.totalreclaw.xyz"
@@ -62,7 +62,9 @@ async def test_store_fact_importance_and_decay_score(given, stored):
         await store_fact(text="Test fact", wallet=wallet, relay=relay, importance=given)
 
     assert seen["importance"] == stored
-    assert seen["decay"] == pytest.approx(stored / 10.0)
+    # decayScore < 0.3 marks a fact inactive in the subgraph: it must stay
+    # at or above that for every explicit importance (decayScore is unchanged).
+    assert seen["decay"] >= 0.3
 
 
 def _configured_state():

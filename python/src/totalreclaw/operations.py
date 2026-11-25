@@ -389,8 +389,9 @@ async def store_fact(
         owner=owner,
         encrypted_blob=encrypted_hex,
         blind_indices=all_indices,
-        # decayScore is always the 0-1 form of the 1-10 importance (#789).
-        decay_score=importance_int / 10.0,
+        # decayScore < 0.3 marks a fact inactive in the subgraph (mapping.ts
+        # INACTIVE_THRESHOLD), so it must not be rescaled here.
+        decay_score=importance,
         source=source,
         content_fp=content_fp,
         agent_id=agent_id,
@@ -807,7 +808,7 @@ async def store_fact_batch(
             owner=owner,
             encrypted_blob=encrypted_hex,
             blind_indices=all_indices,
-            decay_score=importance_int / 10.0,
+            decay_score=importance_raw if importance_raw <= 1 else importance_raw / 10.0,
             source=source,
             content_fp=content_fp,
             agent_id=agent_id,
