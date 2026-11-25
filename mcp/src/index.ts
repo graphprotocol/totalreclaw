@@ -1812,6 +1812,7 @@ async function handleForgetSubgraph(
         const r = await confirmIndexed(factId, {
           subgraphUrl,
           authKeyHex: Buffer.from(state.authKey).toString('hex'),
+          walletAddress: state.smartAccountAddress,
           expect: 'inactive',
         });
         indexed = r.indexed;
@@ -1907,6 +1908,7 @@ function buildPinDepsFromState(state: SubgraphState): PinOpDeps {
       const confirmation = await confirmIndexed(factId, {
         subgraphUrl,
         authKeyHex: Buffer.from(state.authKey).toString('hex'),
+        walletAddress: state.smartAccountAddress,
         expect,
       });
       return confirmation.indexed;

@@ -33,7 +33,7 @@
  */
 
 import { getSubgraphConfig } from './store.js';
-import { getClientId } from '../client-id.js';
+import { buildSubgraphHeaders } from './headers.js';
 
 export interface SubgraphSearchFact {
   id: string;
@@ -60,14 +60,11 @@ async function gqlQuery<T>(
   endpoint: string,
   query: string,
   variables: Record<string, unknown>,
+  walletAddress: string,
   authKeyHex?: string,
 ): Promise<T | null> {
   try {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'X-TotalReclaw-Client': getClientId(),
-    };
-    if (authKeyHex) headers['Authorization'] = `Bearer ${authKeyHex}`;
+    const headers = buildSubgraphHeaders({ walletAddress, authKeyHex });
     const response = await fetch(endpoint, {
       method: 'POST',
       headers,
@@ -212,6 +209,7 @@ async function fetchFactPayloads(
       subgraphUrl,
       FACTS_BY_IDS_QUERY,
       { ids: batch, owner, first: batch.length },
+      owner,
       authKeyHex,
     ),
   );
@@ -277,6 +275,7 @@ export async function searchSubgraph(
         subgraphUrl,
         SEARCH_QUERY,
         { trapdoors: chunk, owner, first: pageSize },
+        owner,
         authKeyHex,
       );
       return { chunk, entries: searchJson?.blindIndexes ?? [] };
@@ -306,6 +305,7 @@ export async function searchSubgraph(
         subgraphUrl,
         PAGINATE_QUERY,
         { trapdoors: chunk, owner, first: pageSize, lastId },
+        owner,
         authKeyHex,
       );
 
@@ -365,6 +365,7 @@ export async function searchSubgraphBroadened(
     subgraphUrl,
     query,
     { owner, first: Math.min(maxCandidates, 1000) },
+    owner,
     authKeyHex,
   );
 
@@ -403,6 +404,7 @@ export async function getSubgraphFactCount(
     subgraphUrl,
     query,
     {},
+    owner,
     authKeyHex,
   );
 
@@ -452,6 +454,7 @@ export async function getOwnerFactCount(
       subgraphUrl,
       query,
       variables,
+      owner,
       authKeyHex,
     );
 
@@ -510,6 +513,7 @@ export async function lookupFactById(
     subgraphUrl,
     query,
     { id: factId },
+    owner,
     authKeyHex,
   );
 
@@ -558,11 +562,7 @@ export async function fetchFactForForget(
       fact(id: $id) { id owner isActive encryptedBlob }
     }
   `;
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-TotalReclaw-Client': getClientId(),
-  };
-  if (authKeyHex) headers['Authorization'] = `Bearer ${authKeyHex}`;
+  const headers = buildSubgraphHeaders({ walletAddress: owner, authKeyHex });
   const response = await fetch(subgraphUrl, {
     method: 'POST',
     headers,
