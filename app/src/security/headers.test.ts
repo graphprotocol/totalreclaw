@@ -55,4 +55,13 @@ describe("public/_headers CSP", () => {
     expect(d.get("object-src")).toEqual(["'none'"]);
     expect(d.get("base-uri")).toEqual(["'none'"]);
   });
+
+  it("sets form-action 'none' (it has no fallback to default-src)", () => {
+    expect(csp().get("form-action")).toEqual(["'none'"]);
+  });
+
+  it("isolates the browsing context with COOP same-origin", () => {
+    const raw = readFileSync(headersPath, "utf8");
+    expect(raw).toMatch(/^\s*Cross-Origin-Opener-Policy:\s*same-origin\s*$/im);
+  });
 });

@@ -19,7 +19,9 @@
  * Run with: npx tsx pair-page.test.ts
  */
 
-import { renderPairPage } from './pair-page.js';
+import { createHash } from 'node:crypto';
+import vm from 'node:vm';
+import { renderPairPage, PAIR_PAGE_CSP, PAIR_PAGE_SCRIPT, PAIR_PAGE_STYLE } from './pair-page.js';
 
 let passed = 0;
 let failed = 0;
@@ -58,10 +60,14 @@ function assert(cond: boolean, name: string): void {
     apiBase: '/custom/pair/api',
     nowMs: 1_000_000,
   });
-  assert(html.includes('const SID = "test-sid-xyz"'), 'inject: SID constant present');
-  assert(html.includes('const MODE = "import"'), 'inject: MODE constant present');
-  assert(html.includes('const API_BASE = "/custom/pair/api"'), 'inject: API_BASE constant present');
-  assert(html.includes('const EXPIRES_AT_MS = 2000000'), 'inject: EXPIRES_AT_MS as number');
+  // Per-request values travel as escaped data-* attributes on <body>; the
+  // script itself is a constant.
+  assert(html.includes('data-sid="test-sid-xyz"'), 'inject: sid data attribute present');
+  assert(html.includes('data-mode="import"'), 'inject: mode data attribute present');
+  assert(html.includes('data-api-base="/custom/pair/api"'), 'inject: apiBase data attribute present');
+  assert(html.includes('data-expires-at-ms="2000000"'), 'inject: expiry data attribute as integer');
+  assert(html.includes('data-server-now-ms="1000000"'), 'inject: server-now data attribute as integer');
+  assert(html.includes('const SID = String(DATA.sid'), 'inject: script reads SID from data attributes');
 }
 
 // ---------------------------------------------------------------------------
@@ -186,20 +192,10 @@ function assert(cond: boolean, name: string): void {
   // The RAW string must NOT appear (else a `</script>` would close the script block
   // and the subsequent HTML would execute as markup).
   assert(!html.includes(evilSid), 'inject-safe: raw evil sid does not appear');
-  // But the JSON.stringify form should appear (with `\u003c/script>` escape or similar)
-  assert(html.includes('const SID = '), 'inject-safe: SID constant still embedded');
-  // Specifically, the `</script>` payload must be escaped. JSON.stringify
-  // by default does NOT escape `/` so we rely on either sequencing OR
-  // Unicode escape. Check either form.
-  const escapedSlash = html.includes('\\u003c/script>') || html.includes('<\\/script>');
-  // If neither is present, at least confirm the evil sid doesn't terminate a script block.
-  if (!escapedSlash) {
-    // Make sure the SID line doesn't end with `"};`
-    const sidLine = /const SID = [^\n]+/.exec(html);
-    assert(!!sidLine && !/<\/script>/.test(sidLine[0]), 'inject-safe: SID line contains no </script>');
-  } else {
-    assert(true, 'inject-safe: </script> escaped');
-  }
+  // The value lands only in an escaped data attribute; the script is the constant.
+  assert(html.includes('data-sid="safe&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;"'), 'inject-safe: sid escaped in data attribute');
+  const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  assert(scripts.length === 1 && scripts[0] === PAIR_PAGE_SCRIPT, 'inject-safe: served script is the constant script');
 }
 
 // ---------------------------------------------------------------------------
@@ -208,8 +204,8 @@ function assert(cond: boolean, name: string): void {
 {
   const genHtml = renderPairPage({ sid: 's', mode: 'generate', expiresAtMs: 0, apiBase: '/', nowMs: 0 });
   const impHtml = renderPairPage({ sid: 's', mode: 'import', expiresAtMs: 0, apiBase: '/', nowMs: 0 });
-  assert(genHtml.includes('const MODE = "generate"'), 'mode: generate constant');
-  assert(impHtml.includes('const MODE = "import"'), 'mode: import constant');
+  assert(genHtml.includes('data-mode="generate"'), 'mode: generate attribute');
+  assert(impHtml.includes('data-mode="import"'), 'mode: import attribute');
   // Both versions carry the runtime branching logic (generateMnemonic128,
   // renderImportFlow)
   assert(genHtml.includes('generateMnemonic128'), 'mode: generate code path present');
@@ -223,6 +219,39 @@ function assert(cond: boolean, name: string): void {
   const html = renderPairPage({ sid: 's', mode: 'generate', expiresAtMs: 0, apiBase: '/', nowMs: 0 });
   assert(html.includes('prefers-reduced-motion'), 'a11y: prefers-reduced-motion media query present');
   assert(html.includes('aria-live'), 'a11y: aria-live region on countdown');
+}
+
+// ---------------------------------------------------------------------------
+// 12. Strict CSP: script-src pinned by hash, style-src pinned by hash
+// ---------------------------------------------------------------------------
+{
+  const sha = (t: string) => `'sha256-${createHash('sha256').update(t, 'utf8').digest('base64')}'`;
+  const html = renderPairPage({ sid: 'abcdefghijklmnop1234', mode: 'generate', expiresAtMs: 1, apiBase: '/plugin/totalreclaw/pair', nowMs: 0 });
+  const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  const styles = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]);
+  const parts = PAIR_PAGE_CSP.split('; ');
+  assert(!PAIR_PAGE_CSP.includes('unsafe-inline') && !PAIR_PAGE_CSP.includes('unsafe-eval'), 'csp: no unsafe-inline / unsafe-eval');
+  assert(!PAIR_PAGE_CSP.includes('nonce-'), 'csp: no nonce');
+  assert(scripts.length === 1 && styles.length === 1, 'csp: exactly one script and one style block');
+  assert(scripts[0] === PAIR_PAGE_SCRIPT && styles[0] === PAIR_PAGE_STYLE, 'csp: served blocks are the constants');
+  assert(parts.includes(`script-src ${sha(scripts[0])}`), 'csp: script-src is the hash of the served script');
+  assert(parts.includes(`style-src ${sha(styles[0])}`), 'csp: style-src is the hash of the served style');
+  for (const d of ["default-src 'none'", "connect-src 'self'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'"]) {
+    assert(parts.includes(d), `csp: keeps ${d}`);
+  }
+  assert(!PAIR_PAGE_CSP.includes('img-src'), 'csp: no img-src (the page loads no images)');
+  const markup = html.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<style[\s\S]*?<\/style>/g, '');
+  const tags = markup.match(/<[a-zA-Z][^>]*>/g) ?? [];
+  assert(tags.length > 5, 'csp: markup has tags to check');
+  assert(tags.every((t) => !/\sstyle\s*=/i.test(t) && !/\son[a-z]+\s*=/i.test(t)), 'csp: static markup has no style attributes or inline handlers');
+  // The JS-built screens must not emit style attributes either.
+  let compiles = true;
+  try { new vm.Script(PAIR_PAGE_SCRIPT); } catch { compiles = false; }
+  assert(compiles, 'csp: the served script is syntactically valid JavaScript');
+  assert(!/style="/.test(PAIR_PAGE_SCRIPT), 'csp: script builds no style attributes');
+  assert(!scripts[0].includes('abcdefghijklmnop1234'), 'csp: per-request sid never appears in the script');
+  const other = renderPairPage({ sid: 'zzzzzzzzzzzzzzzzzzzz', mode: 'import', expiresAtMs: 9, apiBase: '/x', nowMs: 3 });
+  assert(other.includes(`<script>${PAIR_PAGE_SCRIPT}</script>`), 'csp: script identical for another request');
 }
 
 console.log(`# ${passed} passed, ${failed} failed`);

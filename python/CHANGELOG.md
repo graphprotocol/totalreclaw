@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The local pair page now sends a strict Content-Security-Policy (script-src pinned by hash, Trusted Types on).** The page that takes the recovery phrase used `script-src 'unsafe-inline'` and `style-src 'unsafe-inline'`, so any future HTML or script injection bug would have run script next to the phrase. The page script is now a constant (per-request values - session id, api base, expiry, mode - travel as HTML-escaped `data-*` attributes on `<body>` and are validated by the script on boot), and the response carries `script-src 'sha256-...'; style-src 'sha256-...'` computed from the exact served text, plus `require-trusted-types-for 'script'; trusted-types 'none'` (the one `innerHTML` use became `replaceChildren()`) and the single inline `style=` attribute moved into the stylesheet. The page also gets `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Resource-Policy: same-origin`, a `Permissions-Policy` and `no-transform` on `Cache-Control`. No visible text, crypto, key exchange or network call changed. Tests: `tests/test_pair_page.py`, `tests/test_pair_http.py`, and `tests/test_pair_page_csp_browser.py` (headless Chromium walk of the full flow with zero CSP violations).
+
 ### Fixed
 
 - **Batch writes no longer store a fact with an on-chain decayScore below 0.3 (#789, interim).** The subgraph marks any fact under 0.3 inactive, so a batch-written fact with importance 2 (or a legacy 0.2 float) was invisible to every client. `store_fact_batch` (remember_batch, auto-extraction, import, recrystallize) now floors live facts at 0.3 (`ACTIVE_DECAY_THRESHOLD`); tombstones still write 0, and the single-fact `store_fact` (`remember`, Session Crystals scored 1-2) is floored the same way with values >= 1 byte-identical. The canonical-scale decision is separate. Staging check pending: write an importance-1 and an importance-2 fact and confirm `isActive: true`. Tests: `tests/test_decay_floor_789.py`.

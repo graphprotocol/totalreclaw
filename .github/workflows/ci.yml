@@ -218,6 +218,11 @@ jobs:
       - name: Scanner-sim (env-harvesting false-positive check)
         run: node skill/scripts/check-scanner.mjs
 
+      # Chromium for pairing/pair-page-csp-browser.test.ts (strict-CSP walk of
+      # the local pair page). The test skips itself when no browser is found.
+      - name: Install Chromium for the pair-page CSP browser test
+        run: cd skill/plugin && npx playwright-core install --with-deps chromium
+
       # Manifest shape regression guard (3.3.0-rc.6): asserts that
       # openclaw.plugin.json does NOT have "kind":"memory" (startup registry fix)
       # AND that index.ts still declares kind:'memory' as const (memory-slot
@@ -371,7 +376,9 @@ jobs:
       - name: Install and test
         run: |
           cd python
-          pip install -e ".[dev]"
+          pip install -e ".[dev]" playwright
+          # Chromium for tests/test_pair_page_csp_browser.py (skips itself if absent).
+          python -m playwright install --with-deps chromium
           python -m pytest tests/ -v --ignore=tests/test_staging_integration.py --ignore=tests/cross_client_e2e.py --ignore=tests/test_cross_client.py -x
       - name: Outer protobuf fields 9/11 absent — Python calldata parity (PRD-04 F8 / DEP-6)
         run: cd python && python -m pytest ../tests/parity/test_outer_protobuf_parity.py -v -p no:cacheprovider

@@ -34,6 +34,7 @@
  */
 
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -191,6 +192,17 @@ async function main(): Promise<void> {
     assert(r.headers.get('content-type')?.includes('text/html') === true, 'finish: content-type html');
     assert(r.headers.get('cache-control')?.includes('no-store') === true, 'finish: cache-control no-store');
     assert(r.headers.get('x-frame-options') === 'DENY', 'finish: X-Frame-Options DENY');
+    // Strict CSP: script-src pinned by hash, no unsafe-inline.
+    const csp = r.headers.get('content-security-policy') ?? '';
+    assert(!csp.includes('unsafe-inline'), 'finish: CSP has no unsafe-inline');
+    const scriptBody = /<script[^>]*>([\s\S]*?)<\/script>/.exec(html)?.[1] ?? '';
+    const scriptHash = `'sha256-${createHash('sha256').update(scriptBody, 'utf8').digest('base64')}'`;
+    assert(csp.split('; ').includes(`script-src ${scriptHash}`), 'finish: CSP script-src hash matches the served script');
+    assert(r.headers.get('cross-origin-opener-policy') === 'same-origin', 'finish: COOP same-origin');
+    assert(r.headers.get('cross-origin-resource-policy') === 'same-origin', 'finish: CORP same-origin');
+    assert((r.headers.get('permissions-policy') ?? '').includes('camera=()'), 'finish: Permissions-Policy set');
+    assert(r.headers.get('cache-control')?.includes('no-transform') === true, 'finish: cache-control no-transform');
+    assert(!scriptBody.includes(s.sid), 'finish: sid is not interpolated into the script');
   });
 
   // =======================================================================
