@@ -146,7 +146,7 @@ contract TotalReclawAccountTest is Test {
     function test_pinned_implementation_create2_address() public pure {
         assertEq(
             _predictImplAddress(TOTAL_RECLAW_ACCOUNT_SALT_V1),
-            0xc54cc782e5600Fdf4F58958732425d7D5CdB4312,
+            0xdAD6297485931d9a972714c2Cc23A85aa66CD8cA,
             "TotalReclawAccount predicted implementation address drifted - update the deployment plan's pinned value if intentional"
         );
     }
@@ -480,11 +480,38 @@ contract TotalReclawAccountTest is Test {
         assertEq(_tryInstall(4, "after"), 1, "no grant installs after revoke");
     }
 
-    function test_install_equal_or_lower_nonce_than_installed_fails() public {
+    function test_install_lower_nonce_than_installed_fails() public {
         _installGrant(5);
-        assertEq(_tryInstall(5, "eq"), 1, "equal nonce rejected");
         assertEq(_tryInstall(3, "lo"), 1, "lower nonce rejected");
         assertTrue(account.isSessionKeyActive(signer));
+    }
+
+    function test_install_identical_resend_validates_without_reinstall() public {
+        _installGrant(5);
+        vm.recordLogs();
+        assertEq(_tryInstall(5, "resend"), 0, "identical resend validates");
+        assertEq(vm.getRecordedLogs().length, 0, "no re-install event");
+        (uint256 n,,,) = account.getSessionKeyGrant(signer);
+        assertEq(n, 5);
+    }
+
+    function test_install_equal_nonce_different_grant_fails() public {
+        _installGrant(5);
+        bytes4[] memory one = new bytes4[](1);
+        one[0] = _twoSelectors()[0];
+        TotalReclawAccount.PermissionGrant memory g = _buildGrant(signer, DATA_EDGE, one, 5);
+        bytes32 h = keccak256("diff");
+        bytes memory sig = abi.encode(g, _signWithKey(signerPriv, h));
+        PackedUserOperation memory op = _makePackedOp(_executeCallData(DATA_EDGE, 0, hex"00"), sig);
+        vm.prank(ENTRY_POINT);
+        assertEq(account.validateUserOp(op, h, 0), 1, "equal nonce, different grant rejected");
+    }
+
+    function test_identical_resend_fails_after_burn() public {
+        _installGrant(5);
+        vm.prank(owner);
+        account.revokeSessionKey(signer);
+        assertEq(_tryInstall(5, "after-burn"), 1, "identical resend fails after burn");
     }
 
     function test_install_higher_nonce_than_installed_works() public {

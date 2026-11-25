@@ -67,7 +67,10 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
  *     original hand-rolled assembly implementation rather than swapped
  *     for `ECDSA.tryRecover`, per the spec's explicit "lift verbatim"
  *     instruction for this specific helper).
- *   - Monotonic `_minNonces` replay protection.
+ *   - Monotonic `_minNonces` replay protection, plus: a re-install needs
+ *     a nonce strictly above the installed one (an identical resend of
+ *     the installed grant is accepted without re-installing), and
+ *     `revokeSessionKey` burns the signer permanently.
  *   - `_tryDecodeInstallSig` / `_decodeInstallSig` self-external
  *     try/catch decode pattern (malformed lazy-install blob -> false,
  *     never a revert that would poison the whole validateUserOp call).
@@ -203,8 +206,9 @@ contract TotalReclawAccount is SimpleAccount {
         ///      `nonce == 0` means "not installed".
         mapping(address signer => GrantStorage) grants;
         /// @dev `minNonces[signer]` -- smallest acceptable install nonce.
-        ///      Starts at 1, bumps on revoke to `revokedNonce + 1`.
-        ///      Prevents replay of a revoked grant.
+        ///      Starts at 1. `revokeSessionKey` sets it to
+        ///      `type(uint256).max`, a sentinel meaning the signer is
+        ///      burned: nothing installs for it again.
         mapping(address signer => uint256) minNonces;
     }
 
@@ -260,8 +264,8 @@ contract TotalReclawAccount is SimpleAccount {
     event SessionKeyInstalled(address indexed signer, uint256 nonce);
 
     /// @notice Emitted when the owner (EOA or self-call) revokes a session
-    ///         key. Idempotent -- revoking an unknown or already-revoked
-    ///         signer is a no-op and does NOT re-emit this event.
+    ///         key. Emitted on every call, including for an unknown or
+    ///         already-revoked signer (revoke always takes effect).
     event SessionKeyRevoked(address indexed signer);
 
     // -------------------------------------------------------------------
@@ -344,6 +348,19 @@ contract TotalReclawAccount is SimpleAccount {
         return _validateSessionKeySignature(userOp, userOpHash);
     }
 
+    /// @dev True iff `grant` carries exactly the fields stored for the
+    ///      installed grant (nonce, issuedAt, target, valueMax, selectors).
+    function _isSameGrant(GrantStorage storage stored, PermissionGrant memory grant)
+        private
+        view
+        returns (bool)
+    {
+        return stored.nonce == grant.nonce && stored.issuedAt == grant.issuedAt
+            && stored.target == grant.target && stored.valueMax == grant.valueMax
+            && keccak256(abi.encodePacked(stored.selectors))
+                == keccak256(abi.encodePacked(grant.selectors));
+    }
+
     /// @dev Steady-state (65-byte) and lazy-install (abi-encoded grant +
     ///      65-byte session signature) paths, ported from
     ///      `SessionKeyModule.validateSessionKeyUserOp` with the
@@ -396,9 +413,24 @@ contract TotalReclawAccount is SimpleAccount {
         // it must reject even a grant whose nonce is itself `type(uint256).max`.
         if (grant.nonce < minN || minN == type(uint256).max) return SIG_VALIDATION_FAILED;
         // A re-install must be strictly newer than the installed grant, so
-        // a holder cannot swap in an older owner-signed grant.
-        uint256 installedNonce = $.grants[grant.signer].nonce;
-        if (installedNonce != 0 && grant.nonce <= installedNonce) return SIG_VALIDATION_FAILED;
+        // a holder cannot swap in an older owner-signed grant. The one
+        // exception is a resend of the IDENTICAL stored grant (clients may
+        // keep attaching the install blob until they see the install
+        // confirmed): it is not re-installed (no writes, no event) and the
+        // call is validated against the stored grant. Same nonce with any
+        // different field, or a lower nonce, fails.
+        GrantStorage storage stored = $.grants[grant.signer];
+        uint256 installedNonce = stored.nonce;
+        if (installedNonce != 0) {
+            if (grant.nonce < installedNonce) return SIG_VALIDATION_FAILED;
+            if (grant.nonce == installedNonce) {
+                if (!_isSameGrant(stored, grant)) return SIG_VALIDATION_FAILED;
+                if (!_isCallDataInScope(userOp.callData, stored.target, stored.selectors)) {
+                    return SIG_VALIDATION_FAILED;
+                }
+                return SIG_VALIDATION_SUCCESS;
+            }
+        }
 
         // Recover the master wallet from the EIP-712 grant signature and
         // verify it is THIS account's owner. Unlike the standalone-module
