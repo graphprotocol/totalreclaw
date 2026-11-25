@@ -34,6 +34,10 @@ def _check(got: dict, want: dict, name: str) -> None:
     assert abs(got["match"]["similarity"] - want["match"]["similarity"]) < 1e-6, name
 
 
+def test_contained_threshold_matches_fixture():
+    assert FIXTURE["contained_min_cosine"] == write_gate.CONTAINED_MIN_COSINE
+
+
 @pytest.mark.parametrize("case", FIXTURE["normalize"], ids=[repr(c["input"]) for c in FIXTURE["normalize"]])
 def test_python_fallback_normalize(case):
     assert write_gate._py_normalize(case["input"]) == case["expected"]

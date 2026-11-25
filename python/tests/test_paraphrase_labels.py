@@ -110,3 +110,52 @@ def test_forget_labels_core():
         return json.loads(totalreclaw_core.match_forgotten(text, json.dumps(emb), json.dumps(entries)))
 
     _run_forget(match)
+
+
+# ---------------------------------------------------------------------------
+# Explicit write gate
+# ---------------------------------------------------------------------------
+
+from totalreclaw import write_gate  # noqa: E402
+
+
+def _run_gate(decide):
+    rows, matched = [], []
+    for row in LABELS["gate"]:
+        cand = {"id": "e", "text": row["existing"], "embedding": _at(row["cos"])}
+        pred = decide(row["text"], cand) != "store"
+        rows.append((pred, row["label"]))
+        if pred:
+            matched.append(row["name"])
+    counts = _count(rows)
+    _report("write gate", counts)
+    assert counts == LABELS["expected_counts"]["gate"]
+    assert not [n for n in matched if n in LABELS["must_store"]]
+
+
+def test_gate_labels_python_fallback():
+    _run_gate(lambda text, cand: write_gate._py_decide(text, [1.0, 0.0], [cand], 0.85, "explicit")["action"])
+
+
+def _core_has_contained():
+    if not hasattr(totalreclaw_core, "decide_write"):
+        return False
+    h15 = LABELS["gate"][0]
+    out = totalreclaw_core.decide_write(
+        h15["text"],
+        "[1.0, 0.0]",
+        json.dumps([{"id": "e", "text": h15["existing"], "embedding": _at(0.71)}]),
+        "explicit",
+        None,
+    )
+    m = json.loads(out)["match"]
+    return m is not None and m["kind"] == "contained"
+
+
+@pytest.mark.skipif(not _core_has_contained(), reason="installed totalreclaw_core lacks the contained rule")
+def test_gate_labels_core():
+    def decide(text, cand):
+        out = totalreclaw_core.decide_write(text, "[1.0, 0.0]", json.dumps([cand]), "explicit", None)
+        return json.loads(out)["action"]
+
+    _run_gate(decide)
