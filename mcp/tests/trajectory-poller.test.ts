@@ -433,8 +433,11 @@ describe('trajectory-poller (ported from skill/plugin)', () => {
       await withPoller(home, {}, async (h, calls) => {
         await h.pollOnce();
         assertEq(calls.extraction, 1, 'pollOnce multi-session cap=1: only ONE extraction per poll');
+        // #781: the cap-skipped file keeps its messages and is extracted on the next poll.
         await h.pollOnce();
-        assertEq(calls.extraction, 1, 'pollOnce multi-session cap=1: second poll on unchanged files no-ops');
+        assertEq(calls.extraction, 2, 'pollOnce multi-session cap=1: second poll extracts the cap-skipped file');
+        await h.pollOnce();
+        assertEq(calls.extraction, 2, 'pollOnce multi-session cap=1: third poll on unchanged files no-ops');
       });
     }
 

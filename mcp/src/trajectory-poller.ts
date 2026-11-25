@@ -21,6 +21,17 @@
  *   existing extraction pipeline. Per-file byte-offset is tracked in
  *   ~/.totalreclaw/extract-state.json so we never re-process lines.
  *
+ *   Offset rule (one rule for deferral and outage): the stored offset is
+ *   the start of the first message that has NOT been consumed. It moves
+ *   only when an extraction attempt consumed the window (success, or a
+ *   genuine zero-facts answer) or the window was finally given up on
+ *   (OUTAGE_MAX_RETRIES failed attempts). Below the turn threshold, or
+ *   when the one-extraction-per-poll cap skips a file, nothing is stored:
+ *   the next poll re-reads from the same offset and recounts turns, so
+ *   earlier turns still reach extraction. When extraction throws (the
+ *   extractor re-throws an LLM upstream outage), the offset stays and the
+ *   file is retried after a backoff (2, 4, 8, 16 min) with `retryAt`.
+ *
  *   When the upstream OpenClaw bug is fixed, the agent_end hook starts
  *   firing again — both paths can coexist with offset-based dedup.
  *
@@ -114,10 +125,28 @@ export type ExtractedFactLike = {
 
 /**
  * Persistent per-file offset tracker. The keys are absolute paths to
- * trajectory files; values are last byte-offset processed and the
- * accumulated turn count since the last extraction pass.
+ * trajectory files; values are the byte offset of the first unconsumed
+ * message. `turnsAccum` is kept for state-file compatibility and is
+ * always written as 0 now: turns are recounted from `offset` on every
+ * poll, so an old file with a non-zero value still loads (and the value
+ * is ignored). `outageRetries` / `retryAt` (epoch ms) are set while a
+ * window waits for an LLM outage to clear.
  */
-export type PollerState = Record<string, { offset: number; turnsAccum: number }>;
+export type PollerState = Record<
+  string,
+  { offset: number; turnsAccum: number; outageRetries?: number; retryAt?: number }
+>;
+
+/** Failed extraction attempts on one window before it is given up on. */
+export const OUTAGE_MAX_RETRIES = 5;
+
+/** Wait before outage retry number `retries` (1-based): 2, 4, 8, 16 min, capped at 30. */
+export function outageBackoffMs(retries: number): number {
+  return Math.min(120_000 * 2 ** (retries - 1), 1_800_000);
+}
+
+/** A window longer than the turn-mode cut-off (6 messages) is read in full. */
+const TURN_MODE_MAX_MESSAGES = 6;
 
 export interface TrajectoryPollerHandle {
   /** Stop the poller. Idempotent. */
@@ -149,6 +178,8 @@ export function startTrajectoryPoller(
 ): TrajectoryPollerHandle {
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const stateFile = opts.stateFile ?? STATE_FILE;
+  // Newest end offset already logged as "deferred" per file (log-noise guard only).
+  const lastSeen = new Map<string, number>();
 
   const pollAndExtract = async (): Promise<void> => {
     try {
@@ -167,8 +198,8 @@ export function startTrajectoryPoller(
       // crossing the extract threshold in the same poll → N back-to-back
       // LLM calls trip the rate-limiter (especially on free tiers).
       // With cap=1, extra files defer to the next poll iteration
-      // (60 s later by default). Their turnsAccum is preserved across
-      // polls so they don't lose progress.
+      // (60 s later by default). Their offset is not advanced, so their
+      // messages are re-read and extracted on a later poll.
       let extractionsThisPoll = 0;
       const MAX_EXTRACTIONS_PER_POLL = 1;
 
@@ -197,24 +228,40 @@ export function startTrajectoryPoller(
         }
 
         const lastEntry = state[file] ?? { offset: 0, turnsAccum: 0 };
-        const { messages, newOffset } = parseNewMessages(file, lastEntry.offset);
-        if (newOffset === lastEntry.offset) continue; // nothing new
+        // A window waiting out an LLM outage is not touched until its backoff elapsed.
+        if (lastEntry.retryAt !== undefined && Date.now() < lastEntry.retryAt) continue;
 
-        const turnsAdded = countTurns(messages);
-        const turnsAccum = lastEntry.turnsAccum + turnsAdded;
+        // Everything since the last CONSUMED offset: turns are recounted from
+        // there each poll, so deferred turns are not lost.
+        const { messages, newOffset } = parseNewMessages(file, lastEntry.offset);
+        if (newOffset === lastEntry.offset) continue; // nothing unconsumed
+
+        const turns = countTurns(messages);
         const shouldExtract =
-          turnsAccum >= extractInterval &&
+          turns >= extractInterval &&
           messages.length >= 2 &&
           extractionsThisPoll < MAX_EXTRACTIONS_PER_POLL;
 
-        if (shouldExtract) {
-          extractionsThisPoll++;
+        if (!shouldExtract) {
+          // Deferred (below the turn threshold or per-poll cap): keep the offset.
+          if (newOffset > (lastSeen.get(file) ?? -1)) {
+            lastSeen.set(file, newOffset);
+            deps.logger.info(
+              `extractd: ${path.basename(file)} -> ${turns}/${extractInterval} turns (deferred, ${messages.length} messages kept)`,
+            );
+          }
+          continue;
+        }
 
-          deps.logger.info(
-            `extractd: ${path.basename(file)} -> ${turnsAccum}/${extractInterval} turns; running extraction (${messages.length} messages)`,
-          );
+        extractionsThisPoll++;
+        const priorRetries = lastEntry.outageRetries ?? 0;
+        deps.logger.info(
+          `extractd: ${path.basename(file)} -> ${turns}/${extractInterval} turns; running extraction (${messages.length} messages)`,
+        );
+        try {
           const existing = deps.isDedupEnabled() ? await deps.getDedupCandidates(20, messages) : [];
-          const rawFacts = await deps.runExtraction(messages, 'turn', existing, undefined);
+          const mode = priorRetries > 0 || messages.length > TURN_MODE_MAX_MESSAGES ? 'full' : 'turn';
+          const rawFacts = await deps.runExtraction(messages, mode, existing, undefined);
           deps.logger.info(`extractd: extraction returned ${rawFacts.length} raw facts`);
           const { kept, dropped } = deps.filterByImportance(rawFacts);
           deps.logger.info(`extractd: importance-filter kept=${kept.length} dropped=${dropped}`);
@@ -230,15 +277,35 @@ export function startTrajectoryPoller(
           } else {
             deps.logger.info('extractd: 0 storable facts after filter');
           }
-          state[file] = { offset: newOffset, turnsAccum: 0 };
-        } else {
-          state[file] = { offset: newOffset, turnsAccum };
-          if (turnsAdded > 0) {
-            deps.logger.info(
-              `extractd: ${path.basename(file)} -> +${turnsAdded} turns (total ${turnsAccum}/${extractInterval}, deferred)`,
+        } catch (err) {
+          // The extraction attempt failed (an LLM outage that outlasted the
+          // client's own retries). Do not consume the window: keep the offset
+          // and retry after a backoff, up to OUTAGE_MAX_RETRIES attempts.
+          const errName = err instanceof Error ? err.name : 'Error';
+          const base = path.basename(file);
+          const retries = priorRetries + 1;
+          if (retries >= OUTAGE_MAX_RETRIES) {
+            deps.logger.warn(
+              `extractd: ${base}: extraction failed ${retries} times in a row (${errName}); giving up on ${messages.length} messages`,
             );
+            state[file] = { offset: newOffset, turnsAccum: 0 };
+          } else {
+            const waitMs = outageBackoffMs(retries);
+            deps.logger.warn(
+              `extractd: ${base}: extraction failed (${errName}, attempt ${retries}/${OUTAGE_MAX_RETRIES}); keeping ${messages.length} messages, retry in ${Math.round(waitMs / 1000)}s`,
+            );
+            state[file] = {
+              offset: lastEntry.offset,
+              turnsAccum: 0,
+              outageRetries: retries,
+              retryAt: Date.now() + waitMs,
+            };
           }
+          stateChanged = true;
+          continue;
         }
+        // Consumed (stored, or a genuine zero-facts answer): advance, clear outage fields.
+        state[file] = { offset: newOffset, turnsAccum: 0 };
         stateChanged = true;
       }
 
