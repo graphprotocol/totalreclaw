@@ -118,6 +118,7 @@ After the procedure completes (the user replies *"Done — continue setting up T
      PIP_PYTHON="$HERMES_PYTHON"
    fi
    ```
+   **Hermes can switch to a new managed environment during the install (seen on 0.23.2 through 0.23.4).** Installing a package makes Hermes re-resolve its dependencies into a new venv under `~/.hermes/installs/…/environments/<id>/venv`, and the gateway runs whichever environment is active after the restart. So the environment resolved here may not be the one the gateway ends up using, and a `✓ Installed` from step 2 only proves the environment at that moment. Step 5 therefore re-runs this resolve and the import check after the restart. If you are not sure which environment the gateway uses, do not trust a pre-restart check alone.
 2. **(One message, after (c) verifies: `✓ Installed totalreclaw <version>`.) Install the package into that environment — with its dependencies — and VERIFY the runtime version actually landed there.** Use pip's `--python` option so the install lands in `$HERMES_PYTHON`'s environment even when that venv has no pip. Do **not** use a bare `pip`/`pip3`, `pip --user`, or the system Python: the package then lands where Hermes never looks, or an older copy shadows it (rc6 QA). Do **not** pass `--no-deps`. Do **not** use `uv pip install` on Hermes 0.22+: Hermes' uv refuses packages published in the last few days.
    ```bash
    # Stable (default): PIN="totalreclaw" and no --pre.
@@ -186,7 +187,12 @@ After the procedure completes (the user replies *"Done — continue setting up T
 
    Wait for the user's reply containing "continue" / "set up" / similar resumption language. Do NOT proceed to Account setup until the user confirms. Do NOT issue any restart yourself.
 
-5. **(Background step; message only if another restart is needed or it fails.) Verify the plugin tools bound after restart (#390).** With the plugin enabled (step 3), entry-point discovery is usually fine. On Hermes 0.22+ `hermes tools list` shows `✓ enabled  totalreclaw` once it is. A small fraction of Hermes deployments don't re-scan entry points on a single restart, leaving `totalreclaw_pair` and the rest unregistered — and the agent then can't proceed because *every* Account-setup step routes through plugin-registered tools. Probe + auto-fallback to the manual manifest install:
+5. **(Background step; message only if another restart is needed or it fails.) Verify the plugin tools bound after restart (#390).** First, re-run the step-1 resolve block (the install may have moved Hermes to a new managed environment) and check the import against the environment it now returns. `hermes tools list` reflects the gateway's current environment only after a restart; a one-shot `hermes chat` can look fine because it discovers plugins per process.
+   ```bash
+   ( cd /tmp && "$HERMES_PYTHON" -c "import totalreclaw, totalreclaw_core; print('RUNTIME', totalreclaw.__version__, totalreclaw.__file__)" ) \
+     || NEEDS_REINSTALL=yes   # package missing from the active environment: re-run step 2 against it, then restart again
+   ```
+   Then the tool-binding probe: With the plugin enabled (step 3), entry-point discovery is usually fine. On Hermes 0.22+ `hermes tools list` shows `✓ enabled  totalreclaw` once it is. A small fraction of Hermes deployments don't re-scan entry points on a single restart, leaving `totalreclaw_pair` and the rest unregistered — and the agent then can't proceed because *every* Account-setup step routes through plugin-registered tools. Probe + auto-fallback to the manual manifest install:
    ```bash
    if ! ( hermes tools list 2>/dev/null | grep -q '\btotalreclaw' \
           || "$(dirname "$HERMES_PYTHON")/hermes" tools list 2>/dev/null | grep -q '\btotalreclaw' ); then
