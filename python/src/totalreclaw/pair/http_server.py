@@ -45,7 +45,7 @@ from urllib.parse import urlparse
 from cryptography.exceptions import InvalidTag
 
 from .crypto import decrypt_pairing_payload
-from .pair_page import render_pair_page
+from .pair_page import pair_page_csp, render_pair_page
 from .session_store import (
     MAX_SECONDARY_CODE_ATTEMPTS,
     PairSession,
@@ -203,20 +203,21 @@ def build_pair_http_server(config: PairHttpConfig) -> PairHttpServer:
             self.send_response(code)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body_bytes)))
-            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            self.send_header("Cache-Control", "no-store, no-cache, no-transform, must-revalidate")
             self.send_header("Pragma", "no-cache")
-            # Tight CSP — mirror the TS side. Inline scripts + styles are
-            # required for the self-contained page; no external resources
-            # are loaded.
-            self.send_header(
-                "Content-Security-Policy",
-                "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
-                "img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
-                "frame-ancestors 'none'",
-            )
+            # Strict CSP: script + style pinned by SHA-256 hash (the page script
+            # is a constant), Trusted Types on. No 'unsafe-inline'.
+            self.send_header("Content-Security-Policy", pair_page_csp())
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+            self.send_header(
+                "Permissions-Policy",
+                "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
+                "display-capture=(), clipboard-read=(self), clipboard-write=(self)",
+            )
             self.end_headers()
             self.wfile.write(body_bytes)
 

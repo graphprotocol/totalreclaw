@@ -342,3 +342,45 @@ class TestGetPairPage:
             assert status == 404
         finally:
             server.stop()
+
+
+class TestPairPageSecurityHeaders:
+    """The GET /pair/<sid> response carries the strict, hash-pinned CSP."""
+
+    def test_csp_and_hardening_headers(self, sessions_path: Path):
+        import base64
+        import hashlib
+        import re
+
+        kp = generate_gateway_keypair()
+        session = create_pair_session(
+            sessions_path, mode="import", sk_b64=kp.sk_b64, pk_b64=kp.pk_b64
+        )
+        server = _start_server(sessions_path, FakeCompletionSink())
+        try:
+            status, body, headers = _http_get(server, f"/pair/{session.sid}")
+        finally:
+            server.stop()
+        assert status == 200
+        csp = headers["content-security-policy"]
+        assert "unsafe-inline" not in csp and "unsafe-eval" not in csp
+        assert "require-trusted-types-for 'script'" in csp
+        text = body.decode("utf-8")
+        script = re.findall(r"<script[^>]*>([\s\S]*?)</script>", text)
+        style = re.findall(r"<style[^>]*>([\s\S]*?)</style>", text)
+        assert len(script) == 1 and len(style) == 1
+
+        def h(s: str) -> str:
+            return "'sha256-" + base64.b64encode(hashlib.sha256(s.encode()).digest()).decode() + "'"
+
+        assert f"script-src {h(script[0])}" in csp.split("; ")
+        assert f"style-src {h(style[0])}" in csp.split("; ")
+        assert headers["cross-origin-opener-policy"] == "same-origin"
+        assert headers["cross-origin-resource-policy"] == "same-origin"
+        assert "camera=()" in headers["permissions-policy"]
+        assert "no-transform" in headers["cache-control"]
+        assert headers["x-frame-options"] == "DENY"
+        assert headers["x-content-type-options"] == "nosniff"
+        assert headers["referrer-policy"] == "no-referrer"
+        # The session id appears only in escaped attributes + the visible line.
+        assert session.sid not in script[0]

@@ -1,160 +1,46 @@
 """Unit tests for ``totalreclaw.pair.pair_page`` — the self-contained
 browser page served during the local-mode pair flow.
 
-Two things matter here and neither is exercised elsewhere:
-
-  1. ``_escape_js_string`` is the XSS boundary. Every dynamic value the
-     Python side injects into the inline ``<script>`` (session id, mode,
-     api_base, default mode) flows through it. If it fails to neutralize a
-     ``</script>`` sequence or a unicode line separator, an attacker who can
-     influence any of those values gets script injection on the page that
-     handles the user's recovery phrase.
+  1. The page script is a CONSTANT: per-request values (session id, mode,
+     api_base, expiry) travel only as HTML-escaped ``data-*`` attributes on
+     ``<body>``. An escaping bug therefore yields HTML injection, which the
+     strict CSP (script-src pinned by SHA-256 hash) contains.
 
   2. ``render_pair_page`` must never emit a pre-filled phrase (there is none
      server-side — the phrase is generated/entered in the browser), must
      escape its injected values, and must produce a structurally complete
      page for both ``generate`` and ``import`` modes.
 
-Pure unit tests — no network, no crypto, no browser. Control characters that
-cannot appear as literals in Python source (NUL, U+2028, U+2029) are built
-with ``chr()`` so this file stays plain ASCII.
+Pure unit tests — no network, no crypto, no browser.
 """
 from __future__ import annotations
 
-import json
+import base64
+import hashlib
 import re
 
 import pytest
 
 from totalreclaw.pair.pair_page import (
-    _escape_js_string,
+    pair_page_csp,
+    pair_page_script,
+    pair_page_style,
     render_pair_page,
 )
 
-LINE_SEP = chr(0x2028)
-PARA_SEP = chr(0x2029)
-NUL = chr(0)
+SID = "sessAbc123_-sessAbc"  # 20 chars, matches the page's sid rule
 
 
-# ---------------------------------------------------------------------------
-# _escape_js_string — the XSS-escaping helper
-# ---------------------------------------------------------------------------
+def _sha(text: str) -> str:
+    return "'sha256-" + base64.b64encode(hashlib.sha256(text.encode()).digest()).decode() + "'"
 
 
-class TestEscapeJsStringRoundTrip:
-    """Whatever we escape must still decode back to the original string —
-    escaping that corrupts the value is a correctness bug, not just a
-    security one. The page reads these back as JS string literals, so a
-    valid JSON string that round-trips is the contract."""
-
-    @pytest.mark.parametrize(
-        "value",
-        [
-            "abc123",
-            "session-id-with-dashes",
-            "/pair/deadbeef",
-            "",
-            "unicode: cafe ☕ 日本語",
-            "quotes ' and \"",
-            "back\\slash",
-            "new\nline\tand\ttab",
-        ],
-    )
-    def test_decodes_back_to_input(self, value):
-        escaped = _escape_js_string(value)
-        # The escaped form is a JS/JSON string literal. json.loads accepts
-        # the \uXXXX escapes we substitute, so a correct escaping decodes
-        # back to the original.
-        assert json.loads(escaped) == value
-
-
-class TestEscapeJsStringScriptBreakout:
-    """The critical class: a value must not be able to terminate the
-    surrounding ``<script>`` element that the HTML parser would honor before
-    the JS parser sees it."""
-
-    def test_closing_script_tag_is_neutralized(self):
-        payload = "</script><script>alert(1)</script>"
-        escaped = _escape_js_string(payload)
-        # No raw '<' or '>' may survive — the HTML tokenizer scans for
-        # '</script' case-insensitively regardless of JS string context.
-        assert "<" not in escaped
-        assert ">" not in escaped
-        assert "</script" not in escaped.lower()
-        # Value integrity preserved.
-        assert json.loads(escaped) == payload
-
-    def test_mixed_case_closing_script_tag(self):
-        payload = "</ScRiPt >"
-        escaped = _escape_js_string(payload)
-        assert "<" not in escaped and ">" not in escaped
-
-    def test_angle_brackets_always_escaped(self):
-        escaped = _escape_js_string("a < b && b > c")
-        assert "<" not in escaped
-        assert ">" not in escaped
-        assert "&" not in escaped
-        assert json.loads(escaped) == "a < b && b > c"
-
-    def test_ampersand_escaped(self):
-        # '&' matters because the value can also land in HTML-ish contexts
-        # and because it defends against entity-based smuggling.
-        escaped = _escape_js_string("Tom & Jerry")
-        assert "&" not in escaped
-        assert json.loads(escaped) == "Tom & Jerry"
-
-
-class TestEscapeJsStringUnicodeLineSeparators:
-    """U+2028 / U+2029 are valid whitespace in JSON but ILLEGAL raw inside a
-    JavaScript string literal — a raw one terminates the statement and breaks
-    the script (a classic inline-script injection vector). They must be
-    emitted as ``\\u2028`` / ``\\u2029``."""
-
-    def test_line_separator_u2028_escaped(self):
-        value = "before" + LINE_SEP + "after"
-        escaped = _escape_js_string(value)
-        assert LINE_SEP not in escaped
-        assert "\\u2028" in escaped
-        assert json.loads(escaped) == value
-
-    def test_paragraph_separator_u2029_escaped(self):
-        value = "before" + PARA_SEP + "after"
-        escaped = _escape_js_string(value)
-        assert PARA_SEP not in escaped
-        assert "\\u2029" in escaped
-        assert json.loads(escaped) == value
-
-
-class TestEscapeJsStringEdgeChars:
-    def test_null_byte_preserved_as_escape(self):
-        value = "a" + NUL + "b"
-        escaped = _escape_js_string(value)
-        # json.dumps encodes NUL as a \u0000 escape; a raw NUL must not survive.
-        assert NUL not in escaped
-        assert json.loads(escaped) == value
-
-    def test_backslash_not_left_dangling(self):
-        # A lone trailing backslash must be doubled so it can't escape the
-        # closing quote of the emitted literal.
-        escaped = _escape_js_string("path\\")
-        assert json.loads(escaped) == "path\\"
-
-    def test_result_is_quoted_literal(self):
-        escaped = _escape_js_string("x")
-        assert escaped.startswith('"') and escaped.endswith('"')
-
-
-# ---------------------------------------------------------------------------
-# render_pair_page — page generation invariants
-# ---------------------------------------------------------------------------
-
-
-def _render(mode: str = "generate", sid: str = "sess-abc123") -> str:
+def _render(mode: str = "generate", sid: str = SID) -> str:
     return render_pair_page(
         sid=sid,
         mode=mode,
         expires_at_ms=1_700_000_300_000,
-        api_base="/pair/token-xyz",
+        api_base=f"/pair/{sid}",
         now_ms=1_700_000_000_000,
     )
 
@@ -171,12 +57,7 @@ class TestRenderPairPageInvariants:
             "__SCRIPT__",
             "__PANELS__",
             "__SID_HTML__",
-            "__SID_JS__",
-            "__MODE_JS__",
-            "__API_BASE_JS__",
-            "__EXPIRES_AT_MS__",
             "__BIP39_JS__",
-            "__DEFAULT_MODE_JS__",
         ):
             assert placeholder not in html, f"unreplaced placeholder {placeholder}"
 
@@ -204,14 +85,17 @@ class TestRenderPairPageInvariants:
         # The expiry must be emitted as an integer literal (no decimal point)
         # into the JS ``EXPIRES_AT_MS`` constant.
         html = _render("generate")
-        m = re.search(r"const EXPIRES_AT_MS = (\d+);", html)
-        assert m, "EXPIRES_AT_MS constant not found / not an integer literal"
+        m = re.search(r'data-expires-at-ms="(\d+)"', html)
+        assert m, "expiry attribute not found / not an integer literal"
         assert m.group(1) == "1700000300000"
 
 
 class TestRenderPairPageInjectionSafety:
+    def _scripts(self, html):
+        return re.findall(r"<script[^>]*>([\s\S]*?)</script>", html)
+
     def test_sid_with_script_payload_is_escaped(self):
-        payload = "</script><script>alert('xss')</script>"
+        payload = "\"></script><script>alert('xss')</script>"
         html = render_pair_page(
             sid=payload,
             mode="generate",
@@ -219,10 +103,11 @@ class TestRenderPairPageInjectionSafety:
             api_base="/pair/x",
             now_ms=0,
         )
-        # The raw breakout sequence must not appear anywhere — not in the JS
-        # SID constant, not in the HTML session footer.
         assert "<script>alert" not in html
-        assert "</script><script>" not in html
+        assert payload not in html
+        scripts = self._scripts(html)
+        assert scripts == [pair_page_script()]
+        assert 'data-sid="&quot;&gt;&lt;/script&gt;&lt;script&gt;' in html
 
     def test_sid_html_context_is_html_escaped(self):
         html = render_pair_page(
@@ -232,25 +117,31 @@ class TestRenderPairPageInjectionSafety:
             api_base="/pair/x",
             now_ms=0,
         )
-        # The footer prints the sid in an HTML text context; angle brackets
-        # must be entity-escaped there.
         assert "a<b>" not in html
         assert "&lt;b&gt;" in html
 
     def test_api_base_injection_escaped(self):
         payload = '"; fetch("//evil");//'
         html = render_pair_page(
-            sid="s",
+            sid=SID,
             mode="import",
             expires_at_ms=1_700_000_300_000,
             api_base=payload,
             now_ms=0,
         )
-        # The raw JS-breaking sequence must not appear verbatim; the value is
-        # JSON-encoded into the API_BASE constant, and the escaped literal is
-        # present.
-        assert 'const API_BASE = "; fetch' not in html
-        assert _escape_js_string(payload) in html
+        assert payload not in html
+        assert 'data-api-base="&quot;; fetch(&quot;//evil&quot;);//"' in html
+        assert pair_page_script() in html
+
+    def test_placeholder_in_sid_is_not_rescanned(self):
+        # A sid that looks like a template placeholder must come out verbatim
+        # (single-pass substitution), not be substituted again.
+        sid = "__SID_HTML____BODY_ATTRS__"
+        html = render_pair_page(
+            sid=sid, mode="import", expires_at_ms=1, api_base="/pair/x", now_ms=0
+        )
+        assert html.count(f'data-sid="{sid}"') == 1
+        assert f"Session: {sid}<" in html
 
     def test_no_prefilled_phrase_server_side(self):
         # The server has no phrase to leak. This asserts the page never ships
@@ -259,3 +150,63 @@ class TestRenderPairPageInjectionSafety:
         assert 'class="word-input" value=' not in html
         # The generate grid is readonly + JS-filled, never server-filled.
         assert "phrase-grid-generate" in html
+
+
+class TestStrictCsp:
+    def test_header_has_no_unsafe_inline_or_nonce(self):
+        csp = pair_page_csp()
+        assert "unsafe-inline" not in csp
+        assert "unsafe-eval" not in csp
+        assert "nonce-" not in csp
+
+    @pytest.mark.parametrize("mode", ["generate", "import"])
+    def test_hash_matches_served_script_and_style(self, mode):
+        html = _render(mode)
+        scripts = re.findall(r"<script[^>]*>([\s\S]*?)</script>", html)
+        styles = re.findall(r"<style[^>]*>([\s\S]*?)</style>", html)
+        assert len(scripts) == 1 and len(styles) == 1
+        assert scripts[0] == pair_page_script()
+        assert styles[0] == pair_page_style()
+        directives = {d.split(" ", 1)[0]: d for d in pair_page_csp().split("; ")}
+        assert directives["script-src"] == f"script-src {_sha(scripts[0])}"
+        assert directives["style-src"] == f"style-src {_sha(styles[0])}"
+
+    def test_other_directives_present(self):
+        parts = pair_page_csp().split("; ")
+        for d in (
+            "default-src 'none'",
+            "img-src data:",
+            "connect-src 'self'",
+            "base-uri 'none'",
+            "form-action 'none'",
+            "frame-ancestors 'none'",
+            "require-trusted-types-for 'script'",
+            "trusted-types 'none'",
+        ):
+            assert d in parts
+
+    def test_script_is_independent_of_request_values(self):
+        a = _render("generate", sid="AAAAAAAAAAAAAAAAAAAA")
+        b = _render("generate", sid="BBBBBBBBBBBBBBBBBBBB")
+        sa = re.findall(r"<script[^>]*>([\s\S]*?)</script>", a)
+        sb = re.findall(r"<script[^>]*>([\s\S]*?)</script>", b)
+        assert sa == sb
+        assert "AAAAAAAAAAAAAAAAAAAA" not in sa[0]
+
+    def test_markup_has_no_style_attributes_or_inline_handlers(self):
+        for mode in ("generate", "import"):
+            html = _render(mode)
+            markup = re.sub(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>", "", html)
+            tags = re.findall(r"<[a-zA-Z][^>]*>", markup)
+            assert len(tags) > 40
+            for t in tags:
+                assert not re.search(r"\sstyle\s*=", t, re.I), t
+                assert not re.search(r"\son[a-z]+\s*=", t, re.I), t
+                assert "javascript:" not in t.lower()
+
+    def test_data_attributes_on_body(self):
+        html = _render("import")
+        body = re.search(r"<body ([^>]*)>", html).group(1)
+        assert f'data-sid="{SID}"' in body
+        assert f'data-api-base="/pair/{SID}"' in body
+        assert 'data-mode="import"' in body

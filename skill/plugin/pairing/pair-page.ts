@@ -43,6 +43,7 @@
  *   - All copy surfaces BEFORE the acknowledgment gate.
  */
 
+import { createHash } from 'node:crypto';
 import { wordlist as BIP39_ENGLISH_WORDLIST } from '@scure/bip39/wordlists/english.js';
 
 export interface PairPageTemplateInputs {
@@ -84,56 +85,23 @@ function buildBip39Literal(): string {
 const BIP39_WORDLIST_JS_ARRAY = buildBip39Literal();
 
 /**
- * Escape a string for safe embedding between `<script>` tags.
- *
- * `JSON.stringify` produces a valid JS string literal but does NOT
- * escape `<`, `>`, `&`, or U+2028/U+2029. All four are dangerous when
- * the resulting string lands inside a `<script>` block:
- *   - `</script>` in the payload would close the script element and
- *     let subsequent bytes parse as HTML (XSS).
- *   - `<!--` / `-->` can start an HTML comment that would hide code
- *     from the browser under some parser modes.
- *   - U+2028 / U+2029 are line terminators in JS even though JSON
- *     permits them, which can break tooling.
- *
- * Our inputs (sid, apiBase, mode) are internally-controlled today, but
- * defense-in-depth is cheap and matches OWASP's recommended pattern.
+ * Build the full HTML page. The page script and stylesheet are CONSTANTS
+ * (see PAIR_PAGE_SCRIPT / PAIR_PAGE_STYLE): the mode selector + runtime
+ * parameters travel as HTML-escaped data-* attributes on <body>, so the CSP
+ * can pin the script by SHA-256 hash with no 'unsafe-inline'.
  */
-function escForJsString(s: string): string {
-  return JSON.stringify(s)
-    .replace(/</g, '\\u003c')
-    .replace(/>/g, '\\u003e')
-    .replace(/&/g, '\\u0026')
-    .replace(/\u2028/g, '\\u2028')
-    .replace(/\u2029/g, '\\u2029');
+
+function escapeAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
-/**
- * Build the full HTML page. The mode selector + runtime parameters are
- * baked in as JS constants so the page doesn't need any additional
- * query round-trip on load.
- */
-export function renderPairPage(inputs: PairPageTemplateInputs): string {
-  const { sid, mode, expiresAtMs, apiBase, nowMs } = inputs;
-
-  // All JS-embedded values must pass through escForJsString — it emits
-  // proper JS string literals (including quotes) so we interpolate them
-  // as bare expressions.
-  const SID = escForJsString(sid);
-  const MODE = escForJsString(mode);
-  const API_BASE = escForJsString(apiBase);
-  const EXPIRES_AT = String(expiresAtMs);
-  const NOW = String(nowMs);
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta name="robots" content="noindex, nofollow" />
-<meta name="color-scheme" content="dark" />
-<title>TotalReclaw &mdash; Pair your account</title>
-<style>
+/** The exact bytes served in the page's single <style> block. */
+export const PAIR_PAGE_STYLE: string = `
 /* Brand tokens from public site v5b.html */
 :root {
   --bg: #0B0B1A;
@@ -345,33 +313,33 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01s !important; transition-duration: 0.01s !important; }
 }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="brand">
-    <span class="brand-dot"></span>
-    <span>TotalReclaw</span>
-  </div>
 
-  <div class="card" id="stage">
-    <!-- Stages render dynamically. Initial content is Stage 0: code entry. -->
-    <div id="stage-body">Loading pairing session&hellip;</div>
-    <div class="countdown" id="countdown" aria-live="polite"></div>
-  </div>
+/* Acknowledgement probe rows (were inline style attributes). */
+.probe-row { display: flex; align-items: center; gap: 0.75rem; margin: 0.5rem 0; }
+.probe-label { min-width: 5ch; color: var(--text-dim); }
+`;
 
-  <p class="mt-2 center"><small>End-to-end encrypted. Gateway does not see your key in plaintext.</small></p>
-</div>
-
-<script>
+/** The exact bytes served in the page's single <script> block. */
+export const PAIR_PAGE_SCRIPT: string = `
 "use strict";
 (function() {
-  // ---------- Constants injected by the server ----------
-  const SID = ${SID};
-  const MODE = ${MODE};              // "generate" or "import"
-  const API_BASE = ${API_BASE};      // e.g. "/plugin/totalreclaw/pair"
-  const EXPIRES_AT_MS = ${EXPIRES_AT};
-  const SERVER_NOW_MS = ${NOW};
+  // ---------- Session constants (data-* attributes on <body>) ----------
+  // The script is a constant so the CSP can pin it by hash; per-request
+  // values arrive as HTML-escaped attributes and are validated here.
+  const DATA = document.body.dataset;
+  const SID = String(DATA.sid || "");
+  const MODE = String(DATA.mode || "");                 // "generate" or "import"
+  const API_BASE = String(DATA.apiBase || "");          // e.g. "/plugin/totalreclaw/pair"
+  const EXPIRES_AT_MS = Number(DATA.expiresAtMs);
+  const SERVER_NOW_MS = Number(DATA.serverNowMs);
+  if (!/^[A-Za-z0-9_-]{16,64}$/.test(SID)
+      || !/^(generate|import)$/.test(MODE)
+      || !/^\\/[A-Za-z0-9_.\\/-]*$/.test(API_BASE)
+      || API_BASE.indexOf("//") !== -1
+      || !Number.isFinite(EXPIRES_AT_MS)
+      || !Number.isFinite(SERVER_NOW_MS)) {
+    throw new Error("pair page: invalid session attributes");
+  }
   // Client-observed time at page load (used to adjust for clock skew).
   const CLIENT_EPOCH_AT_LOAD = Date.now();
 
@@ -621,7 +589,7 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
     const words = mnemonic.split(" ");
     let gridHtml = '';
     for (let i = 0; i < words.length; i++) {
-      gridHtml += '<div class="mnemonic-word" style="animation-delay:' + (i * 30) + 'ms"><span class="num">' + (i+1) + '.</span><span class="word">' + escapeHtml(words[i]) + '</span></div>';
+      gridHtml += '<div class="mnemonic-word"><span class="num">' + (i+1) + '.</span><span class="word">' + escapeHtml(words[i]) + '</span></div>';
     }
     const node = el(
       '<div>' +
@@ -632,7 +600,7 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
       '<div class="btn-row"><button id="copy" class="secondary">Copy to clipboard</button></div>' +
       '<div class="callout warn"><strong>Use it ONLY with TotalReclaw.</strong> <em>Never</em> reuse this phrase for a crypto wallet, banking, email, or any other service. TotalReclaw recovery phrases must be dedicated.</div>' +
       '<h2>Store it somewhere safe</h2>' +
-      '<p>Your recovery phrase is 12 words. Store it somewhere safe — a password manager works well. Use it only for TotalReclaw. Don\'t reuse it anywhere else. Don\'t put funds on it.</p>' +
+      '<p>Your recovery phrase is 12 words. Store it somewhere safe — a password manager works well. Use it only for TotalReclaw. Don\\'t reuse it anywhere else. Don\\'t put funds on it.</p>' +
       '<ul>' +
       '<li>A password manager (1Password, Bitwarden, Apple Keychain, etc.)</li>' +
       '<li>An encrypted notes app (Notes with end-to-end encryption, Standard Notes, Obsidian vault)</li>' +
@@ -654,6 +622,11 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
       '</div>' +
       '</div>'
     );
+    // Stagger the reveal through the CSSOM (an inline style attribute would
+    // be blocked by the strict style-src).
+    Array.prototype.forEach.call(node.querySelectorAll(".mnemonic-word"), function(w, i) {
+      w.style.animationDelay = (i * 30) + "ms";
+    });
     render(node);
 
     $("#copy").addEventListener("click", function() {
@@ -667,9 +640,9 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
     const probeEl = $("#ack-probes");
     for (const idx of probe) {
       const row = el(
-        '<div style="display:flex; align-items:center; gap:0.75rem; margin:0.5rem 0;">' +
-        '<span style="min-width:5ch; color:var(--text-dim);">Word #' + (idx+1) + '</span>' +
-        '<input type="text" autocapitalize="none" autocorrect="off" spellcheck="false" data-idx="' + idx + '" />' +
+        '<div class="probe-row">' +
+        '<span class="probe-label">Word #' + (idx+1) + '</span>' +
+        '<input type="text" autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false" data-idx="' + idx + '" />' +
         '</div>'
       );
       probeEl.appendChild(row);
@@ -709,7 +682,7 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
       '<h1>Import your TotalReclaw recovery phrase</h1>' +
       '<p>Enter your 12-word recovery phrase to restore your account. It is processed ENTIRELY in your browser and encrypted before it leaves this page.</p>' +
       '<div class="callout warn"><strong>Use it ONLY with TotalReclaw.</strong> Do <em>not</em> paste a phrase that controls a crypto wallet, banking account, email, or any other service. TotalReclaw recovery phrases must be dedicated.</div>' +
-      '<textarea id="phrase" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="word1 word2 word3 ... word12"></textarea>' +
+      '<textarea id="phrase" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="word1 word2 word3 ... word12"></textarea>' +
       '<div id="phrase-error" class="callout danger hidden"></div>' +
       '<p><small>Checksum is verified in your browser. Invalid phrases are rejected before upload.</small></p>' +
       '<div class="btn-row">' +
@@ -845,7 +818,68 @@ button.secondary:hover:not(:disabled) { border-color: var(--border-accent); colo
     renderCodeEntry();
   });
 })();
-</script>
+`;
+
+function cspHash(text: string): string {
+  return `'sha256-${createHash('sha256').update(text, 'utf8').digest('base64')}'`;
+}
+
+/**
+ * Content-Security-Policy for the pair page. script-src is the SHA-256 hash
+ * of the constant script, so injected markup cannot run script. No
+ * 'unsafe-inline'. There is no img-src: this page loads no images. Trusted
+ * Types are not enabled yet: the renderer still builds its screens through
+ * innerHTML (tracked with the planned page port).
+ */
+export const PAIR_PAGE_CSP: string = [
+  "default-src 'none'",
+  `script-src ${cspHash(PAIR_PAGE_SCRIPT)}`,
+  `style-src ${cspHash(PAIR_PAGE_STYLE)}`,
+  "connect-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join('; ');
+
+export function renderPairPage(inputs: PairPageTemplateInputs): string {
+  const { sid, mode, expiresAtMs, apiBase, nowMs } = inputs;
+
+  // Per-request values appear ONLY as HTML-escaped data-* attributes; the
+  // script validates them on boot.
+  const bodyAttrs =
+    `data-sid="${escapeAttr(sid)}" ` +
+    `data-mode="${escapeAttr(mode)}" ` +
+    `data-api-base="${escapeAttr(apiBase)}" ` +
+    `data-expires-at-ms="${Math.floor(Number(expiresAtMs))}" ` +
+    `data-server-now-ms="${Math.floor(Number(nowMs))}"`;
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
+<meta name="color-scheme" content="dark" />
+<title>TotalReclaw &mdash; Pair your account</title>
+<style>${PAIR_PAGE_STYLE}</style>
+</head>
+<body ${bodyAttrs}>
+<div class="wrap">
+  <div class="brand">
+    <span class="brand-dot"></span>
+    <span>TotalReclaw</span>
+  </div>
+
+  <div class="card" id="stage">
+    <!-- Stages render dynamically. Initial content is Stage 0: code entry. -->
+    <div id="stage-body">Loading pairing session&hellip;</div>
+    <div class="countdown" id="countdown" aria-live="polite"></div>
+  </div>
+
+  <p class="mt-2 center"><small>End-to-end encrypted. Gateway does not see your key in plaintext.</small></p>
+</div>
+
+<script>${PAIR_PAGE_SCRIPT}</script>
 </body>
 </html>
 `;

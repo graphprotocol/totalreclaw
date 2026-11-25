@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+### Security
+
+- **The local pair page now sends a strict `script-src` (and `style-src`) pinned by hash.** The page that takes the recovery phrase used `script-src 'unsafe-inline'`, so any future HTML or script injection bug would have run script next to the phrase. The page script and stylesheet are now constants (per-request values travel as HTML-escaped `data-*` attributes on `<body>` and are validated on boot), the response carries `script-src 'sha256-...'; style-src 'sha256-...'` computed from the exact served text, and the three inline `style=` attributes (one set from JS) moved into classes or the CSSOM. The page also gets `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy`, a `Permissions-Policy` and `no-transform`. `img-src` is dropped (the page loads no images). Trusted Types are not enabled on this page yet: its renderer still builds screens through `innerHTML` and stays as is until the planned page port. The page's phrase inputs also gained `autocomplete="off"`, and the script rejects an `apiBase` containing `//`. No crypto, key exchange or network call changed. Tests: `pairing/pair-page.test.ts`, `pairing/pair-http.test.ts`, `pairing/pair-page-csp-browser.test.ts` (headless Chromium walk of both modes with zero CSP violations; skipped when no Chromium is installed).
+
+### Fixed
+
+- **The OpenClaw local-mode phrase page (`/plugin/totalreclaw/pair/finish`) works again; it has been dead since 24acd7d8 (2026-04-20).** Its script had a JavaScript syntax error (an unescaped `Don't` inside a single-quoted string in the generate-flow copy), so the browser rejected the whole script and the page stayed on "Loading pairing session". Escaping it revives a page that takes the recovery phrase, which no released version has served working since April. Behaviour is therefore NOT unchanged for local-mode `openclaw totalreclaw pair`: it now actually runs. A real local-mode pairing must pass RC QA before any release. The new unit test compiles the served script and the browser test walks both flows.
+
 ### Changed
 
 - **Recall downloads much less data on large vaults.** Blind-index queries now return fact ids only. Each unique fact's payload (blob + embedding) is then fetched once, in batches of 100, with at most 6 subgraph queries in flight. Before, every trapdoor batch carried the full payload of every fact it matched, so a fact that matched several batches was downloaded several times. Same candidates in the same order, so ranking is unchanged. On a mocked 1,000-fact vault, a recall dropped from about 10 MB to 3.2 MB. Port of the Python change (public #703); internal #666.

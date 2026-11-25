@@ -77,7 +77,7 @@ import {
   type PairSessionStatus,
 } from './pair-session-store.js';
 import { compareSecondaryCodesCT, decryptPairingPayload } from './pair-crypto.js';
-import { renderPairPage } from './pair-page.js';
+import { renderPairPage, PAIR_PAGE_CSP } from './pair-page.js';
 import {
   awaitPhraseUpload,
   openRemotePairSession,
@@ -252,17 +252,20 @@ export function buildPairRoutes(cfg: PairHttpConfig): PairRouteBundle {
     // Critical: no-store prevents the browser from saving this page
     // (which, transiently, holds the mnemonic in JS memory during the
     // generate flow). Per design doc section 5b attack #11.
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Cache-Control', 'no-store, no-cache, no-transform, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
-    // Tight CSP — no external resources. Inline scripts are OK because
-    // everything is self-contained; no runtime code evaluation is used.
-    res.setHeader(
-      'Content-Security-Policy',
-      "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-    );
+    // Strict CSP: the page script and stylesheet are constants, pinned by
+    // SHA-256 hash (no 'unsafe-inline'); everything else is 'none'/'self'.
+    res.setHeader('Content-Security-Policy', PAIR_PAGE_CSP);
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader(
+      'Permissions-Policy',
+      'camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), clipboard-read=(self), clipboard-write=(self)',
+    );
     res.end(html);
   }
 

@@ -36,8 +36,11 @@ available. See :func:`_bip39_words`.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import html as _html
 import json
+import re
 from functools import lru_cache
 from typing import List
 
@@ -65,16 +68,65 @@ def _bip39_words() -> List[str]:
         return []
 
 
-def _escape_js_string(s: str) -> str:
-    """JSON-encode a string for safe ``<script>`` embedding."""
-    encoded = json.dumps(s, ensure_ascii=False)
-    return (
-        encoded.replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-        .replace("&", "\\u0026")
-        .replace("\u2028", "\\u2028")
-        .replace("\u2029", "\\u2029")
+# Session-id shape the page script accepts (matches the server's token rules).
+_SID_RE = re.compile(r"[A-Za-z0-9_-]{16,64}")
+
+
+def _csp_hash(text: str) -> str:
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    return "'sha256-" + base64.b64encode(digest).decode("ascii") + "'"
+
+
+@lru_cache(maxsize=1)
+def pair_page_script() -> str:
+    """The page script, byte-for-byte as served. It is a CONSTANT: no
+    per-request value is ever interpolated into it (those travel as escaped
+    ``data-*`` attributes on ``<body>``). The BIP-39 wordlist is public and
+    fixed for the life of the process."""
+    return _PAIR_SCRIPT.replace("__BIP39_JS__", json.dumps(_bip39_words()).replace("<", "\\u003c"))
+
+
+def pair_page_style() -> str:
+    """The page stylesheet, byte-for-byte as served."""
+    return _PAIR_STYLE
+
+
+@lru_cache(maxsize=1)
+def pair_page_csp() -> str:
+    """Content-Security-Policy for the pair page.
+
+    ``script-src`` / ``style-src`` are the SHA-256 hashes of the exact script
+    and style text, so injected markup cannot run script. No
+    ``'unsafe-inline'``. ``img-src data:`` stays for the checkbox tick, which
+    is a CSS data: URL. Trusted Types removes the DOM HTML/script sinks.
+    """
+    return "; ".join(
+        [
+            "default-src 'none'",
+            "script-src " + _csp_hash(pair_page_script()),
+            "style-src " + _csp_hash(pair_page_style()),
+            "img-src data:",
+            "connect-src 'self'",
+            "base-uri 'none'",
+            "form-action 'none'",
+            "frame-ancestors 'none'",
+            "require-trusted-types-for 'script'",
+            "trusted-types 'none'",
+        ]
     )
+
+
+_PLACEHOLDER_RE = re.compile(r"__(BODY_ATTRS|SID_HTML)__")
+
+
+@lru_cache(maxsize=2)
+def _page_shell(mode: str) -> str:
+    """The page with every constant part filled in. Only the two per-request
+    placeholders remain; they are substituted in a single pass."""
+    panels = _GENERATE_PANEL_HTML if mode == "generate" else _IMPORT_PANEL_HTML
+    return _PAIR_PAGE_HTML.replace("__PANELS__", panels).replace(
+        "__STYLE__", pair_page_style()
+    ).replace("__SCRIPT__", pair_page_script())
 
 
 def render_pair_page(
@@ -92,44 +144,22 @@ def render_pair_page(
     directly (no ``/respond`` suffix — the relay and local-mode differ
     in wire shape here; local-mode's handler accepts the POST body at
     exactly the URL the page was served from).
+
+    Per-request values (sid, api_base, expiry, mode) are emitted ONLY as
+    HTML-escaped ``data-*`` attributes on ``<body>`` (and the visible session
+    line); the script is constant and validates them on boot.
     """
     if mode not in ("generate", "import"):
         raise ValueError(f"pair.pair_page: invalid mode '{mode}'")
 
-    sid_js = _escape_js_string(sid)
-    mode_js = _escape_js_string(mode)
-    api_base_js = _escape_js_string(api_base)
-    bip39 = _bip39_words()
-    bip39_js = json.dumps(bip39)
-    expires_safe = int(expires_at_ms)
-    sid_html = _html.escape(sid)
-
-    # Panel rendering: local-mode is single-mode (generate XOR import),
-    # so no tab switcher. The PIN screen + done screen are always there.
-    if mode == "generate":
-        panels_html = _GENERATE_PANEL_HTML
-        default_mode_js = "generate"
-    else:
-        panels_html = _IMPORT_PANEL_HTML
-        default_mode_js = "import"
-
-    script = (
-        _PAIR_SCRIPT
-        .replace("__SID_JS__", sid_js)
-        .replace("__MODE_JS__", mode_js)
-        .replace("__API_BASE_JS__", api_base_js)
-        .replace("__EXPIRES_AT_MS__", str(expires_safe))
-        .replace("__BIP39_JS__", bip39_js)
-        .replace("__DEFAULT_MODE_JS__", _escape_js_string(default_mode_js))
+    attrs = (
+        f'data-sid="{_html.escape(sid, quote=True)}" '
+        f'data-api-base="{_html.escape(api_base, quote=True)}" '
+        f'data-expires-at-ms="{int(expires_at_ms)}" '
+        f'data-mode="{mode}"'
     )
-
-    return (
-        _PAIR_PAGE_HTML
-        .replace("__SID_HTML__", sid_html)
-        .replace("__PANELS__", panels_html)
-        .replace("__STYLE__", _PAIR_STYLE)
-        .replace("__SCRIPT__", script)
-    )
+    values = {"BODY_ATTRS": attrs, "SID_HTML": _html.escape(sid)}
+    return _PLACEHOLDER_RE.sub(lambda m: values[m.group(1)], _page_shell(mode))
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +314,7 @@ em { font-style: normal; color: var(--fg); font-weight: 500; background: var(--p
 .err-banner[hidden] { display: none; }
 .toast { position: fixed; left: 50%; bottom: calc(88px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px); padding: 10px 16px; background: var(--bg-elev-2); border: 1px solid var(--border-strong); border-radius: 999px; color: var(--fg); font-size: 0.86rem; box-shadow: var(--shadow-soft); opacity: 0; pointer-events: none; z-index: 10; transition: opacity var(--transition), transform var(--transition); max-width: calc(100% - 32px); text-align: center; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.session-line { text-align: center; margin-top: 28px; font-size: .72rem; color: var(--fg-faint); letter-spacing: .08em; opacity: .6; }
 @media (min-width: 600px) { .wizard { padding: 36px 24px 40px; max-width: 560px; } .heading { font-size: 2.1rem; } .pin-cell { max-width: 60px; font-size: 1.8rem; } }
 @media (max-width: 360px) { .wizard { padding: 14px 14px calc(20px + env(safe-area-inset-bottom)); } .pin-cell { font-size: 1.4rem; } .brand-text { display: none; } }
 """
@@ -335,16 +366,25 @@ _IMPORT_PANEL_HTML = r"""
 _PAIR_SCRIPT = r"""
 "use strict";
 (function(){
-  const SID = __SID_JS__;
-  const INITIAL_MODE = __MODE_JS__;
-  const API_BASE = __API_BASE_JS__;
-  const EXPIRES_AT_MS = __EXPIRES_AT_MS__;
+  // Session constants come from data-* attributes on <body> (the script is
+  // constant so it can be pinned by hash in the CSP).
+  const DATA = document.body.dataset;
+  const SID = String(DATA.sid || "");
+  const INITIAL_MODE = String(DATA.mode || "");
+  const API_BASE = String(DATA.apiBase || "");
+  const EXPIRES_AT_MS = Number(DATA.expiresAtMs);
+  if (!/^[A-Za-z0-9_-]{16,64}$/.test(SID)
+      || API_BASE !== "/pair/" + SID
+      || !Number.isFinite(EXPIRES_AT_MS)
+      || !/^(generate|import)$/.test(INITIAL_MODE)) {
+    throw new Error("pair page: invalid session attributes");
+  }
   const HKDF_INFO = "totalreclaw-pair-v2";
   const AEAD_KEY_BYTES = 32;
   const AEAD_NONCE_BYTES = 12;
   const AEAD_TAG_BITS = 128;
   const BIP39 = __BIP39_JS__;
-  const DEFAULT_MODE = __DEFAULT_MODE_JS__;
+  const DEFAULT_MODE = INITIAL_MODE;
 
   // UX constants (see rc.13 design decisions in pair-html.ts).
   const PASTE_PIN_AUTOSUBMIT = true;
@@ -592,7 +632,7 @@ _PAIR_SCRIPT = r"""
   }
 
   function buildWordGrid(gridEl, options) {
-    gridEl.innerHTML = '';
+    gridEl.replaceChildren();
     const readonly = !!options.readonly;
     for (let i = 0; i < 12; i++) {
       const cell = document.createElement('label'); cell.className = 'word-cell';
@@ -807,7 +847,7 @@ _PAIR_PAGE_HTML = r"""<!DOCTYPE html>
 <title>Set up TotalReclaw</title>
 <style>__STYLE__</style>
 </head>
-<body>
+<body __BODY_ATTRS__>
 <a href="#main" class="skip-link">Skip to content</a>
 <main id="main" class="wizard" aria-live="polite">
   <header class="topbar">
@@ -918,7 +958,7 @@ __PANELS__
       </div>
     </article>
   </section>
-  <p style="text-align:center;margin-top:28px;font-size:.72rem;color:var(--fg-faint);letter-spacing:.08em;opacity:.6">Session: __SID_HTML__</p>
+  <p class="session-line">Session: __SID_HTML__</p>
 </main>
 <script>__SCRIPT__</script>
 </body>
