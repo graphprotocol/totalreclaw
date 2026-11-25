@@ -1,6 +1,8 @@
 import { TotalReclaw, FactMetadata, RerankedResult } from '@totalreclaw/client';
 import type { ToolContext } from './types.js';
 import { toolError } from './helpers.js';
+import { parseAllowSensitive, screenExplicit, logLabel } from '../pii.js';
+import { SENSITIVE_PARAM_SCHEMA } from '../sensitive-schema.js';
 import {
   REMEMBER_TOOL_DESCRIPTION,
 } from '../prompts.js';
@@ -152,6 +154,7 @@ export const rememberToolDefinition = {
         description:
           'Optional "why" clause for decision-style claims (single-fact mode). See facts[].reasoning.',
       },
+      ...SENSITIVE_PARAM_SCHEMA,
       metadata: {
         type: 'object',
         properties: {
@@ -302,6 +305,8 @@ interface StoreSingleFactOptions {
   expiresAt?: string;
   scope?: string;
   reasoning?: string;
+  /** Log-safe stand-in for `text` (redacted when the PII filter did not allow it). */
+  logText?: string;
 }
 
 async function storeSingleFact(
@@ -316,6 +321,7 @@ async function storeSingleFact(
     expiresAt,
     scope,
     reasoning,
+    logText,
   } = opts;
   // Store-time dedup check (HTTP mode)
   let supersededId: string | undefined;
@@ -340,7 +346,7 @@ async function storeSingleFact(
         // Batch mode: apply shouldSupersede logic
         const action = shouldSupersede(importance, dupResult.match);
         if (action === 'skip') {
-          console.error(`Store-time dedup: skipping "${text.slice(0, 60)}..." (sim=${dupResult.similarity.toFixed(3)})`);
+          console.error(`Store-time dedup: skipping "${logText ?? text.slice(0, 60)}..." (sim=${dupResult.similarity.toFixed(3)})`);
           return {
             success: true,
             fact_id: '',
@@ -408,6 +414,9 @@ export async function handleRemember(
     return toolError('Invalid input: provide either a "fact" string or a "facts" array');
   }
 
+  const allowSensitive = parseAllowSensitive(input?.allow_sensitive);
+  const confirmToken = input?.confirm_token;
+
   // ── Batch mode ─────────────────────────────────────────────────────────────
   if (isBatch) {
     const factsArray = input.facts as BatchFact[];
@@ -441,6 +450,21 @@ export async function handleRemember(
         continue;
       }
 
+      // PRD-04 DEP-4 block-and-tell, per fact. A blocked fact is reported in
+      // its result slot with the block notice; the rest of the batch proceeds.
+      const batchPii = screenExplicit(f.text, allowSensitive, confirmToken);
+      if (batchPii.notice) {
+        results.push({
+          success: false,
+          fact_id: '',
+          was_duplicate: false,
+          action: 'skipped',
+          ...batchPii.notice,
+        } as RememberOutput);
+        skipped++;
+        continue;
+      }
+
       try {
         const storeResult = await storeSingleFact(client, {
           text: f.text,
@@ -449,6 +473,7 @@ export async function handleRemember(
           isExplicitRemember: false, // batch mode: not explicit remember
           scope: f.scope,
           reasoning: f.reasoning,
+          logText: logLabel(f.text, batchPii.decision),
         });
 
         if (storeResult.action === 'skipped' && storeResult.was_duplicate) {
@@ -508,6 +533,15 @@ export async function handleRemember(
     }
   }
 
+  // PRD-04 DEP-4 block-and-tell. First gate after validation, so a blocked
+  // value never reaches a log line below.
+  const singlePii = screenExplicit(singleInput.fact, allowSensitive, confirmToken);
+  if (singlePii.notice) {
+    return {
+      content: [{ type: 'text', text: JSON.stringify(singlePii.notice) }],
+    };
+  }
+
   try {
     // Support both top-level and metadata-nested scope/reasoning for flexibility.
     const topLevelScope = typeof (input as Record<string, unknown>).scope === 'string'
@@ -531,6 +565,7 @@ export async function handleRemember(
       expiresAt: singleInput.metadata?.expires_at,
       scope: topLevelScope ?? metaScope,
       reasoning: topLevelReasoning ?? metaReasoning,
+      logText: logLabel(singleInput.fact, singlePii.decision),
     });
 
     if (_onRememberCallback) {

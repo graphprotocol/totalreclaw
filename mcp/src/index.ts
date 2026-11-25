@@ -26,10 +26,10 @@ import type { ToolContext, ToolResponse } from './tools/types.js';
 import { isQuotaExceededError, rethrowIfQuota, shortErrorMessage, logWriteError } from './tools/write-errors.js';
 import { quotaExceededMessage } from './quota-copy.js';
 import { pickMemoryId } from './tools/helpers.js';
-import { classifyForgetTarget, forgetNotFoundResponse, forgetLookupFailedResponse } from './tools/forget.js';
+import { classifyForgetTarget, factWasPinned, forgetNotFoundResponse, forgetLookupFailedResponse } from './tools/forget.js';
 import {
   findNearDuplicate,
-  shouldSupersede,
+  dedupAction,
   clusterFacts,
   getStoreDedupThreshold,
   getConsolidationThreshold,
@@ -65,6 +65,7 @@ import {
   rerank,
   detectQueryIntent,
   INTENT_WEIGHTS,
+  defaultPinBoost,
 } from './subgraph/reranker.js';
 import {
   submitFactOnChain,
@@ -125,7 +126,10 @@ import {
   isDigestBlob,
   readBlobUnified,
   readClaimFromBlob,
+  blobIsPinned,
 } from './claims-helper.js';
+import { parseAllowSensitive, screenExplicit, logLabel } from './pii.js';
+import { mergeBlockedResults } from './blocked-results.js';
 import { isValidMemoryType, type MemoryType } from './memory-types.js';
 import {
   normalizeTypeToV1,
@@ -930,6 +934,47 @@ async function handleRememberSubgraph(
     };
   }
 
+  // PRD-04 DEP-4 block-and-tell. Runs before anything else touches the text,
+  // so a blocked value never reaches a log line below. The automatic path
+  // (trajectory poller) drops non-`allow` facts before it calls this handler,
+  // so everything arriving here is an explicit tool call.
+  const allowSensitive = parseAllowSensitive(input?.allow_sensitive);
+  const confirmToken = input?.confirm_token;
+  const blockedResults: Array<{ index: number; result: Record<string, unknown> }> = [];
+  const screenedItems: typeof textsToStore = [];
+  const itemLogText = new Map<(typeof textsToStore)[number], string>();
+  for (const [itemIndex, item] of textsToStore.entries()) {
+    const screened = screenExplicit(item.text, allowSensitive, confirmToken);
+    if (screened.notice) {
+      blockedResults.push({ index: itemIndex, result: { success: false, fact_id: '', action: 'skipped', ...screened.notice } });
+    } else {
+      screenedItems.push(item);
+      itemLogText.set(item, logLabel(item.text, screened.decision));
+    }
+  }
+  if (screenedItems.length === 0) {
+    // Single fact: the notice itself, same shape as Hermes. Batch: per-fact notices.
+    if (!factsArray && blockedResults.length === 1) {
+      const { success: _s, fact_id: _f, action: _a, ...notice } = blockedResults[0].result;
+      return { content: [{ type: 'text', text: JSON.stringify(notice) }] };
+    }
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: false,
+          results: blockedResults.map((b) => b.result),
+          total: textsToStore.length,
+          created: 0,
+          skipped: textsToStore.length,
+          dedup_skipped: 0,
+          dedup_superseded: 0,
+          mode: 'subgraph',
+        }),
+      }],
+    };
+  }
+
   // Determine if this is an explicit remember (user-initiated) — always supersede.
   // For batch mode (multiple facts from auto-extraction), apply full skip/supersede logic.
   const isExplicitRemember = !!(input?.fact as string);
@@ -944,7 +989,7 @@ async function handleRememberSubgraph(
   const pendingPayloads: Buffer[] = [];
   const pendingFactMeta: Array<{ factId: string; action: string }> = [];
 
-  for (const item of textsToStore) {
+  for (const item of screenedItems) {
     let itemSuperseded = false; // Per-fact flag for action tracking
     try {
       // 1. Generate blind indices (word-based)
@@ -981,6 +1026,7 @@ async function handleRememberSubgraph(
                 if (isDigestBlob(decryptedBlob)) continue;
                 const doc = readClaimFromBlob(decryptedBlob);
                 const text = doc.text;
+                const candPinned = blobIsPinned(decryptedBlob);
 
                 let candEmbedding: number[] | null = null;
                 if (c.encryptedEmbedding) {
@@ -1004,57 +1050,44 @@ async function handleRememberSubgraph(
                   decayScore: parseFloat(c.decayScore) || 0.5,
                   createdAt: parseInt(c.timestamp) || 0,
                   version: 1,
+                  pinned: candPinned,
                 });
               } catch { /* skip undecryptable */ }
             }
 
             const dupMatch = findNearDuplicate(embedding, decryptedCandidates, getStoreDedupThreshold());
             if (dupMatch) {
-              if (isExplicitRemember) {
-                // Explicit remember: always supersede — queue tombstone for old fact
-                effectiveImportance = Math.max(item.importance, dupMatch.existingFact.importance);
-                const tombstonePayload: FactPayload = {
-                  id: dupMatch.existingFact.id,
-                  timestamp: new Date().toISOString(),
-                  owner: state.smartAccountAddress,
-                  encryptedBlob: Buffer.from('tombstone').toString('hex'),
-                  blindIndices: [],
-                  decayScore: 0,
-                  source: 'mcp_dedup',
-                  contentFp: '',
-                  agentId: 'mcp-server',
-                };
-                pendingPayloads.push(encodeFactProtobuf(tombstonePayload));
-                console.error(`Store-time dedup: queued supersede for ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
-                dedupSuperseded++;
-                itemSuperseded = true;
-              } else {
-                // Batch mode: apply shouldSupersede logic
-                const action = shouldSupersede(item.importance, dupMatch.existingFact);
-                if (action === 'skip') {
-                  console.error(`Store-time dedup: skipping "${item.text.slice(0, 60)}..." (sim=${dupMatch.similarity.toFixed(3)})`);
-                  results.push({ success: true, fact_id: '', action: 'skipped_dedup' });
-                  dedupSkipped++;
-                  continue;
-                }
-                // action === 'supersede'
-                effectiveImportance = Math.max(item.importance, dupMatch.existingFact.importance);
-                const tombstonePayload: FactPayload = {
-                  id: dupMatch.existingFact.id,
-                  timestamp: new Date().toISOString(),
-                  owner: state.smartAccountAddress,
-                  encryptedBlob: Buffer.from('tombstone').toString('hex'),
-                  blindIndices: [],
-                  decayScore: 0,
-                  source: 'mcp_dedup',
-                  contentFp: '',
-                  agentId: 'mcp-server',
-                };
-                pendingPayloads.push(encodeFactProtobuf(tombstonePayload));
-                console.error(`Store-time dedup: queued supersede for ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
-                dedupSuperseded++;
-                itemSuperseded = true;
+              // PRD-04 DEP-5: a pinned near-duplicate is never tombstoned.
+              const action = dedupAction(dupMatch.existingFact, item.importance, isExplicitRemember);
+              if (action === 'skip_pinned') {
+                console.error(`Store-time dedup: skipping "${itemLogText.get(item)}" — existing ${dupMatch.existingFact.id} is pinned (sim=${dupMatch.similarity.toFixed(3)})`);
+                results.push({ success: true, fact_id: '', action: 'skipped_dedup', pinned: true } as typeof results[number]);
+                dedupSkipped++;
+                continue;
               }
+              if (action === 'skip') {
+                console.error(`Store-time dedup: skipping "${itemLogText.get(item)}" (sim=${dupMatch.similarity.toFixed(3)})`);
+                results.push({ success: true, fact_id: '', action: 'skipped_dedup' });
+                dedupSkipped++;
+                continue;
+              }
+              // action === 'supersede': queue a tombstone for the old fact.
+              effectiveImportance = Math.max(item.importance, dupMatch.existingFact.importance);
+              const tombstonePayload: FactPayload = {
+                id: dupMatch.existingFact.id,
+                timestamp: new Date().toISOString(),
+                owner: state.smartAccountAddress,
+                encryptedBlob: Buffer.from('tombstone').toString('hex'),
+                blindIndices: [],
+                decayScore: 0,
+                source: 'mcp_dedup',
+                contentFp: '',
+                agentId: 'mcp-server',
+              };
+              pendingPayloads.push(encodeFactProtobuf(tombstonePayload));
+              console.error(`Store-time dedup: queued supersede for ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
+              dedupSuperseded++;
+              itemSuperseded = true;
             }
           }
         } catch (dedupErr) {
@@ -1254,7 +1287,7 @@ async function handleRememberSubgraph(
       type: 'text',
       text: JSON.stringify({
         success: created > 0,
-        results,
+        results: mergeBlockedResults(results, blockedResults),
         total: textsToStore.length,
         created,
         skipped: textsToStore.length - created,
@@ -1539,6 +1572,7 @@ async function handleRecallSubgraph(
     const sourceMap = new Map<string, string>(); // v1 source, when available
     const scopeMap = new Map<string, string>();
     const importanceRaw = new Map<string, number>();
+    const pinnedIds = new Set<string>(); // PRD-04 DEP-5: user-pinned facts
     for (const c of candidates) {
       try {
         const blobHex = c.encryptedBlob.startsWith('0x') ? c.encryptedBlob.slice(2) : c.encryptedBlob;
@@ -1573,6 +1607,8 @@ async function handleRecallSubgraph(
           if (doc.v1.scope) scopeMap.set(c.id, doc.v1.scope);
         }
         importanceRaw.set(c.id, doc.importance);
+        const pinned = blobIsPinned(decryptedBlob);
+        if (pinned) pinnedIds.add(c.id);
 
         decryptedCandidates.push({
           id: c.id,
@@ -1581,6 +1617,7 @@ async function handleRecallSubgraph(
           importance: parseFloat(c.decayScore) || 0.5,
           createdAt: parseInt(c.timestamp) || undefined,
           source: sourceMap.get(c.id),
+          pinned,
         });
       } catch {
         // Skip candidates that fail to decrypt (e.g., wrong key, corrupt data)
@@ -1604,6 +1641,7 @@ async function handleRecallSubgraph(
       k,
       weights,
       /* applySourceWeights (Retrieval v2 Tier 1) */ false,
+      /* pinBoost (PRD-04 DEP-5): core's default multiplier for pinned facts */ defaultPinBoost(),
     );
 
     timer.mark('rerank');
@@ -1622,6 +1660,8 @@ async function handleRecallSubgraph(
       rrf_score: r.rrfScore,
       source_weight: r.sourceWeight ?? 1.0,
       cosine_similarity: r.cosineSimilarity ?? 0,
+      // Key omitted when not pinned, like Hermes.
+      ...(pinnedIds.has(r.id) ? { pinned: true } : {}),
       importance: Math.round((r.importance ?? 0.5) * 10),
       age_days: r.createdAt
         ? Math.floor((Date.now() / 1000 - r.createdAt) / 86400)
@@ -1696,14 +1736,18 @@ async function handleForgetSubgraph(
     // Existence check first: never tombstone (or report deleted_count: 1 for)
     // an id that isn't an active fact of this owner.
     let lookup: 'exists' | 'missing' | 'inactive';
+    let lookedUpFact: Awaited<ReturnType<typeof fetchFactForForget>> = null;
     try {
       lookup = await classifyForgetTarget(
-        () => fetchFactForForget(
-          state.smartAccountAddress,
-          factId,
-          state.serverUrl,
-          Buffer.from(state.authKey).toString('hex'),
-        ),
+        async () => {
+          lookedUpFact = await fetchFactForForget(
+            state.smartAccountAddress,
+            factId,
+            state.serverUrl,
+            Buffer.from(state.authKey).toString('hex'),
+          );
+          return lookedUpFact;
+        },
       );
     } catch (lookupErr) {
       logWriteError('Forget existence check failed', lookupErr);
@@ -1759,6 +1803,11 @@ async function handleForgetSubgraph(
           fact_ids: success ? [factId] : [],
           tx_hash: txHash,
           mode: 'subgraph',
+          // PRD-04 DEP-5: tell the agent it just forgot a pinned memory.
+          // Key omitted when not pinned, like Hermes.
+          ...(success && factWasPinned(lookedUpFact, (hex) => decrypt(Buffer.from(hex, 'hex').toString('base64'), state.encryptionKey))
+            ? { was_pinned: true }
+            : {}),
           ...(success && !indexed ? { partial: true } : {}),
         }),
       }],

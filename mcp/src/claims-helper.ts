@@ -551,3 +551,30 @@ export function readBlobUnified(decryptedJson: string): V1BlobReadResult {
   return readClaimFromBlob(decryptedJson);
 }
 
+
+/**
+ * Is this decrypted blob a pinned fact? (PRD-04 DEP-5)
+ *
+ * True for a v1.1 blob with `pin_status: "pinned"` and for a v0 short-key
+ * claim with `st: "p"`. Reads the raw JSON, like Hermes' pin guard, so a blob
+ * core cannot parse as a claim (an enum value this version does not know)
+ * still counts as pinned: fail closed, since this answer only protects facts.
+ * Any parse failure is "not pinned" (a non-JSON blob cannot carry a pin).
+ */
+export function blobIsPinned(decryptedJson: string): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const wasm = require('@totalreclaw/core') as typeof import('@totalreclaw/core');
+    if (wasm.isPinnedClaim(decryptedJson)) return true;
+  } catch {
+    // core cannot parse it as a claim: fall through to the raw sentinels
+  }
+  try {
+    const obj = JSON.parse(decryptedJson) as unknown;
+    if (obj === null || typeof obj !== 'object') return false;
+    const rec = obj as Record<string, unknown>;
+    return rec.pin_status === 'pinned' || rec.st === 'p';
+  } catch {
+    return false;
+  }
+}

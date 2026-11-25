@@ -3,6 +3,7 @@ import type { ToolContext } from './types.js';
 import { pickMemoryId } from './helpers.js';
 import { FORGET_TOOL_DESCRIPTION } from '../prompts.js';
 import { VALID_MEMORY_SCOPES } from '../v1-types.js';
+import { blobIsPinned } from '../claims-helper.js';
 
 export interface ForgetIntput {
   /** Canonical memory identifier. `fact_id` accepted as a back-compat alias. */
@@ -178,4 +179,25 @@ export function forgetLookupFailedResponse(): {
     }],
     isError: true,
   };
+}
+
+/**
+ * Was the fact pinned when forgotten? (PRD-04 DEP-5, Hermes `was_pinned`.)
+ *
+ * Decrypts the blob the existence lookup already returned (no extra network
+ * call). Answers `false` when the blob is missing or cannot be decrypted:
+ * the key is then omitted from the result, like Hermes when it has no
+ * snapshot. Forget itself is never blocked by a pin.
+ */
+export function factWasPinned(
+  fact: { encryptedBlob?: string | null } | null | undefined,
+  decryptBlob: (hexEncryptedBlob: string) => string,
+): boolean {
+  const blob = fact?.encryptedBlob;
+  if (!blob) return false;
+  try {
+    return blobIsPinned(decryptBlob(blob.startsWith('0x') ? blob.slice(2) : blob));
+  } catch {
+    return false;
+  }
 }
