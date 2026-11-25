@@ -151,7 +151,7 @@ export class ConfirmationStore {
       this.tokens.delete(token);
       return 'expired';
     }
-    if (age < CONFIRM_TOKEN_MIN_AGE_MS) return 'same_turn';
+    if (age < CONFIRM_TOKEN_MIN_AGE_MS) return 'too_soon';
     if (entry.category !== String(category)) return 'category_mismatch';
     this.tokens.delete(token);
     return null;
@@ -202,8 +202,9 @@ export function screenExplicit(
         console.error(`[pii] remember blocked: sensitive text (category=${decision.category})`);
       }
       return { decision, notice: sensitiveBlockNotice(decision, store.issue(decision.category)) };
-    } catch {
+    } catch (err) {
       // Fail closed: never store, never throw.
+      console.error(`[pii] remember blocked: confirmation store error (${err instanceof Error ? err.name : 'error'})`);
       return { decision, notice: sensitiveBlockNotice(decision) };
     }
   }

@@ -135,7 +135,7 @@ describe('ConfirmationStore', () => {
 
     const token = store.issue('payment_card');
     expect(token).toMatch(/^[0-9a-f]{16}$/);
-    expect(store.redeem(token, 'payment_card')).toBe('same_turn');
+    expect(store.redeem(token, 'payment_card')).toBe('too_soon');
     t += pii.CONFIRM_TOKEN_MIN_AGE_MS;
     expect(store.redeem(token, 'api_key')).toBe('category_mismatch');
     expect(store.redeem(token, 'payment_card')).toBeNull();

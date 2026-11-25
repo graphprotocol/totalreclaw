@@ -563,6 +563,13 @@ export function readBlobUnified(decryptedJson: string): V1BlobReadResult {
  */
 export function blobIsPinned(decryptedJson: string): boolean {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const wasm = require('@totalreclaw/core') as typeof import('@totalreclaw/core');
+    if (wasm.isPinnedClaim(decryptedJson)) return true;
+  } catch {
+    // core cannot parse it as a claim: fall through to the raw sentinels
+  }
+  try {
     const obj = JSON.parse(decryptedJson) as unknown;
     if (obj === null || typeof obj !== 'object') return false;
     const rec = obj as Record<string, unknown>;

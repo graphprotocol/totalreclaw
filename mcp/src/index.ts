@@ -129,6 +129,7 @@ import {
   blobIsPinned,
 } from './claims-helper.js';
 import { parseAllowSensitive, screenExplicit, logLabel } from './pii.js';
+import { mergeBlockedResults } from './blocked-results.js';
 import { isValidMemoryType, type MemoryType } from './memory-types.js';
 import {
   normalizeTypeToV1,
@@ -939,13 +940,13 @@ async function handleRememberSubgraph(
   // so everything arriving here is an explicit tool call.
   const allowSensitive = parseAllowSensitive(input?.allow_sensitive);
   const confirmToken = input?.confirm_token;
-  const blockedResults: Array<Record<string, unknown>> = [];
+  const blockedResults: Array<{ index: number; result: Record<string, unknown> }> = [];
   const screenedItems: typeof textsToStore = [];
   const itemLogText = new Map<(typeof textsToStore)[number], string>();
-  for (const item of textsToStore) {
+  for (const [itemIndex, item] of textsToStore.entries()) {
     const screened = screenExplicit(item.text, allowSensitive, confirmToken);
     if (screened.notice) {
-      blockedResults.push({ success: false, fact_id: '', action: 'skipped', ...screened.notice });
+      blockedResults.push({ index: itemIndex, result: { success: false, fact_id: '', action: 'skipped', ...screened.notice } });
     } else {
       screenedItems.push(item);
       itemLogText.set(item, logLabel(item.text, screened.decision));
@@ -954,7 +955,7 @@ async function handleRememberSubgraph(
   if (screenedItems.length === 0) {
     // Single fact: the notice itself, same shape as Hermes. Batch: per-fact notices.
     if (!factsArray && blockedResults.length === 1) {
-      const { success: _s, fact_id: _f, action: _a, ...notice } = blockedResults[0];
+      const { success: _s, fact_id: _f, action: _a, ...notice } = blockedResults[0].result;
       return { content: [{ type: 'text', text: JSON.stringify(notice) }] };
     }
     return {
@@ -962,7 +963,7 @@ async function handleRememberSubgraph(
         type: 'text',
         text: JSON.stringify({
           success: false,
-          results: blockedResults,
+          results: blockedResults.map((b) => b.result),
           total: textsToStore.length,
           created: 0,
           skipped: textsToStore.length,
@@ -1060,7 +1061,7 @@ async function handleRememberSubgraph(
               const action = dedupAction(dupMatch.existingFact, item.importance, isExplicitRemember);
               if (action === 'skip_pinned') {
                 console.error(`Store-time dedup: skipping "${itemLogText.get(item)}" — existing ${dupMatch.existingFact.id} is pinned (sim=${dupMatch.similarity.toFixed(3)})`);
-                results.push({ success: true, fact_id: '', action: 'skipped_dedup', existing_pinned: true } as typeof results[number]);
+                results.push({ success: true, fact_id: '', action: 'skipped_dedup', pinned: true } as typeof results[number]);
                 dedupSkipped++;
                 continue;
               }
@@ -1286,7 +1287,7 @@ async function handleRememberSubgraph(
       type: 'text',
       text: JSON.stringify({
         success: created > 0,
-        results: [...results, ...blockedResults],
+        results: mergeBlockedResults(results, blockedResults),
         total: textsToStore.length,
         created,
         skipped: textsToStore.length - created,

@@ -97,3 +97,27 @@ describe('forget was_pinned', () => {
     expect(factWasPinned({ encryptedBlob: 'zz' }, () => { throw new Error('bad key'); })).toBe(false);
   });
 });
+
+describe('managed batch keeps block notices at their input index', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { mergeBlockedResults } = require('../src/blocked-results') as typeof import('../src/blocked-results');
+
+  test('results[i] maps to facts[i] for blocked facts', () => {
+    const stored = [{ id: 'a' }, { id: 'c' }];
+    const out = mergeBlockedResults(stored, [{ index: 1, result: { blocked: 'sensitive' } }]);
+    expect(out).toEqual([{ id: 'a' }, { blocked: 'sensitive' }, { id: 'c' }]);
+  });
+
+  test('no blocked facts: unchanged', () => {
+    const stored = [{ id: 'a' }];
+    expect(mergeBlockedResults(stored, [])).toBe(stored);
+  });
+
+  test('blocked first and last', () => {
+    const out = mergeBlockedResults(['b'], [
+      { index: 0, result: { n: 0 } },
+      { index: 2, result: { n: 2 } },
+    ]);
+    expect(out).toEqual([{ n: 0 }, 'b', { n: 2 }]);
+  });
+});

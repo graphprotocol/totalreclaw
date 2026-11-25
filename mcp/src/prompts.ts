@@ -100,8 +100,9 @@ Besides remember and forget, three tools correct stored memories without wiping 
 - "pin that" / "never forget this" -> totalreclaw_pin (keeps a fact through auto-resolution);
 - "that was actually a directive, not a preference" -> totalreclaw_retype;
 - "that was work context" / "file that under personal" / "put that in my work memories" / "categorize as X" / "that's a work thing" -> totalreclaw_set_scope (scopes: work, personal, health, family, creative, finance, misc, unspecified).
-Automatic extraction never updates or deletes a pinned fact, and pinned facts rank higher in recall when they match the query; pinning does not add a fact to every recall. Memories marked \`pinned: true\` are ones the user chose to protect. Never forget a pinned memory unless the user asked to forget that specific memory. When the user reverses a pinned decision, remember the new decision and ask whether to unpin or remove the old one.
 All three work by supersession: they write a new claim with the override and link the original via superseded_by. The original stays as a tombstone, so history is inspectable. All three are idempotent.
+- Automatic extraction never updates or deletes a pinned fact, and pinned facts rank higher in recall when they match the query — pinning does not add a fact to every recall.
+- Memories marked \`pinned: true\` are ones the user chose to protect. Never forget a pinned memory unless the user asked to forget that specific memory. When the user reverses a pinned decision, remember the new decision and ask whether to unpin or remove the old one.
 
 ## End of conversation
 When a substantive conversation ends (goodbye, topic resolved, natural close), call totalreclaw_debrief with the key takeaways: what it was about, what was decided, what was tried and how it went, what is unfinished. Skip casual conversations. At most 5 items, each 1-3 sentences, type "summary" or "context", importance 7-8.

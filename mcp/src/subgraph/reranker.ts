@@ -15,7 +15,7 @@
  * source of cross-client divergence.
  *
  * Public surface kept for callers (mcp/src/index.ts, mcp/src/consolidation.ts):
- *   - `rerank(query, queryEmbedding, candidates, topK, _legacyWeights, applySourceWeights)`
+ *   - `rerank(query, queryEmbedding, candidates, topK, _legacyWeights, applySourceWeights, pinBoost)`
  *   - `cosineSimilarity(a, b)`
  *   - `getSourceWeight(source)`
  *   - `detectQueryIntent(query)` and `INTENT_WEIGHTS`
