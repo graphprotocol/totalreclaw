@@ -259,7 +259,7 @@ The server is cryptographically unable to read your memories, embeddings, or sea
 
 | Metric | Target |
 |--------|--------|
-| Search latency (p95) | < 140ms for 1M memories |
+| Search latency | Typically under a second; the first search after start-up is slower while the embedding model loads |
 | Recall accuracy | >= 93% of true top-250 |
 | Storage overhead | <= 2.2x vs plaintext |
 | Extraction latency | < 500ms |

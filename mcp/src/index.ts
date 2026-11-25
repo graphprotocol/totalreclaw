@@ -42,6 +42,7 @@ import {
 } from './resources/index.js';
 import { serveTotalReclawStdio, type createTotalReclawServer } from './server-setup.js';
 import { buildRecallResponse } from './recall-format.js';
+import { createRecallTimer } from './recall-timing.js';
 import {
   createCallToolHandler,
   type HandlerBundle,
@@ -1445,6 +1446,8 @@ async function handleRecallSubgraph(
   const input = args as Record<string, unknown>;
   const query = (input?.query as string) || '';
   const startTime = Date.now();
+  const timer = createRecallTimer('managed');
+  let candidateCount = 0;
 
   if (!query || typeof query !== 'string' || query.trim().length === 0) {
     return {
@@ -1467,9 +1470,11 @@ async function handleRecallSubgraph(
   try {
     // 1. Generate blind indices for the query (word + LSH trapdoors)
     const wordTrapdoors = generateBlindIndices(query.trim());
+    timer.mark('trapdoors');
 
     // 2. Generate query embedding for LSH trapdoors and cosine reranking
     const queryEmbedding = await generateEmbedding(query.trim(), { isQuery: true });
+    timer.mark('embedding');
     const lshTrapdoors = state.lshHasher.hash(queryEmbedding);
 
     // 3. Combine trapdoors
@@ -1484,6 +1489,8 @@ async function handleRecallSubgraph(
       state.serverUrl,
       Buffer.from(state.authKey).toString('hex'),
     );
+
+    timer.mark('search');
 
     // Always run broadened search and merge — ensures vocabulary mismatches
     // (e.g., "preferences" vs "prefer") don't cause recall failures.
@@ -1506,7 +1513,11 @@ async function handleRecallSubgraph(
       // Non-fatal — trapdoor results still work
     }
 
+    timer.mark('broadened_search');
+    candidateCount = candidates.length;
+
     if (candidates.length === 0) {
+      timer.emit({ candidates: 0, k, outcome: 'empty' });
       return {
         content: [{
           type: 'text',
@@ -1575,6 +1586,8 @@ async function handleRecallSubgraph(
       }
     }
 
+    timer.mark('decrypt');
+
     // 6. Detect query intent for dynamic weight selection
     const intent = detectQueryIntent(query.trim());
     const weights = INTENT_WEIGHTS[intent];
@@ -1591,6 +1604,8 @@ async function handleRecallSubgraph(
       weights,
       /* applySourceWeights (Retrieval v2 Tier 1) */ false,
     );
+
+    timer.mark('rerank');
 
     // 8. Format results
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -1615,6 +1630,9 @@ async function handleRecallSubgraph(
         : '',
     }));
 
+    timer.mark('format');
+    timer.emit({ candidates: candidateCount, k });
+
     return buildRecallResponse(
       {
         memories,
@@ -1631,6 +1649,7 @@ async function handleRecallSubgraph(
       })),
     );
   } catch (error) {
+    timer.emit({ candidates: candidateCount, k, outcome: 'error' });
     const message = error instanceof Error ? error.message : 'Unknown error';
     return {
       content: [{
