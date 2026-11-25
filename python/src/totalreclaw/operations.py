@@ -1323,7 +1323,8 @@ async def get_fact_pin_status(
     ``True`` iff the fact exists, is active, and its decrypted blob is pinned
     per ``totalreclaw_core.is_pinned_claim`` (v1.1 ``pin_status == "pinned"``
     or v0 ``st == "p"``) or, for a blob core cannot parse, carries one of
-    those sentinels. A missing fact, an inactive fact and a tombstone stub
+    those sentinels. Raises ``RuntimeError`` when the fact's ``owner`` differs
+    from ``owner`` (case-insensitive). A missing fact, an inactive fact and a tombstone stub
     are all ``False`` -- tombstoning them again cannot hurt a pin.
 
     Raises on any relay error (including :class:`RelayReadBlocked`), on a 2xx
@@ -1337,6 +1338,11 @@ async def get_fact_pin_status(
     fact = await _fetch_fact_by_id(fact_id.strip(), owner, relay, strict=True)
     if not fact:
         return False
+    # Defence in depth: the id-only query is not owner-scoped, so refuse a
+    # fact that belongs to another account. Categorical message, no ids.
+    fact_owner = str(fact.get("owner") or "").lower()
+    if fact_owner and fact_owner != str(owner or "").lower():
+        raise RuntimeError("fact owner does not match the caller")
     if fact.get("isActive") is False:
         return False
     blob_hex = fact.get("encryptedBlob", "") or ""

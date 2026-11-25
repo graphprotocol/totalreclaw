@@ -125,6 +125,9 @@ class DecryptedFact:
     metadata: dict[str, Any] = field(default_factory=dict)
     #: Entities carried on the v1 claim, if any (re-attached on rewrite).
     entities: Optional[list[dict[str, Any]]] = None
+    #: True when the decrypted blob is user-pinned. Pinned facts and Crystals
+    #: are never re-grouped or tombstoned by a recrystallize run.
+    pinned: bool = False
 
     @property
     def old_session_id(self) -> Optional[str]:
@@ -204,6 +207,8 @@ class RecrystallizePlan:
     corrected_sessions: list[CorrectedSession]
     old_crystals: list[DecryptedFact]
     estimate: QuotaEstimate
+    #: Pinned facts / Crystals left untouched (not re-grouped, not forgotten).
+    pinned_kept: list[DecryptedFact] = field(default_factory=list)
 
     def summary_lines(self) -> list[str]:
         """Human-readable dry-run report lines (printed by the CLI)."""
@@ -212,6 +217,7 @@ class RecrystallizePlan:
             f"Vault owner: {self.owner}",
             f"Atomic facts (F):            {e.atomic_facts}",
             f"Old mixed Crystals (C_old):  {e.old_crystals}",
+            f"Facts kept (pinned):         {len(self.pinned_kept)}  (left in place, never tombstoned)",
             f"Corrected sessions (total):  {len(self.corrected_sessions)}",
             f"  - multi-fact (S_multi):    {e.multi_fact_sessions}  (each gets a fresh Crystal)",
             f"  - singleton:               {e.singleton_sessions}  (re-keyed, no Crystal)",
@@ -337,7 +343,9 @@ def build_plan(
     This is the testable core of the dry-run path — no network, no crypto.
     :func:`plan_recrystallize` wraps it with the fetch+decrypt front-end.
     """
-    atomic, old_crystals = split_facts(decrypted)
+    # Pinned facts / Crystals are left exactly as they are.
+    pinned_kept = [f for f in decrypted if f.pinned]
+    atomic, old_crystals = split_facts([f for f in decrypted if not f.pinned])
     sessions = build_corrected_sessions(
         atomic,
         gap_seconds=gap_seconds,
@@ -350,6 +358,7 @@ def build_plan(
         corrected_sessions=sessions,
         old_crystals=old_crystals,
         estimate=estimate,
+        pinned_kept=pinned_kept,
     )
 
 
@@ -504,6 +513,7 @@ async def fetch_and_decrypt_vault(client: Any) -> list[DecryptedFact]:
 
                 out.append(
                     DecryptedFact(
+                        pinned=_blob_is_pinned(decrypted_blob),
                         fact_id=fact["id"],
                         text=text,
                         embedding=embedding,
@@ -528,6 +538,19 @@ async def fetch_and_decrypt_vault(client: Any) -> list[DecryptedFact]:
         skip += FETCH_PAGE_SIZE
 
     return out
+
+
+def _blob_is_pinned(decrypted_json: str) -> bool:
+    """Is this decrypted blob user-pinned? Core's check, plus the raw
+    sentinel fallback for blobs core cannot parse (same rule as the pin guard)."""
+    from totalreclaw import operations
+
+    try:
+        if operations._core.is_pinned_claim(decrypted_json):
+            return True
+    except Exception:
+        pass
+    return operations._has_raw_pin_sentinel(decrypted_json)
 
 
 def _decode_raw_blob(decrypted_json: str) -> dict[str, Any]:

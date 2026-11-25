@@ -47,6 +47,7 @@ def _fact(
     created_at: float,
     metadata: dict | None = None,
     fact_type: str = "claim",
+    pinned: bool = False,
 ) -> DecryptedFact:
     return DecryptedFact(
         fact_id=fact_id,
@@ -57,6 +58,7 @@ def _fact(
         fact_type=fact_type,
         provenance="user",
         metadata=metadata or {},
+        pinned=pinned,
     )
 
 
@@ -712,3 +714,50 @@ async def test_execute_quota_agreement_with_estimator(monkeypatch, tmp_path, _no
     assert minted_facts == plan.estimate.atomic_facts  # 3
     assert minted_facts + minted_crystals == plan.estimate.writes_new  # 4
     assert tombstones == plan.estimate.tombstones  # F + C_old = 3 + 1 = 4
+
+
+# ── Pinned facts are never re-grouped or tombstoned ───────────────────────────
+
+
+def _pinned_vault():
+    return [
+        _fact("a1", embedding=TOPIC_A, created_at=0),
+        _fact("a2", embedding=TOPIC_A, created_at=10),
+        _fact("p1", embedding=TOPIC_A, created_at=5, pinned=True),
+        _fact("pcry", embedding=None, created_at=1, pinned=True,
+              metadata={"subtype": METADATA_SUBTYPE_SESSION_CRYSTAL}),
+        _fact("cry", embedding=None, created_at=1,
+              metadata={"subtype": METADATA_SUBTYPE_SESSION_CRYSTAL}),
+    ]
+
+
+def test_plan_keeps_pinned_out_of_sessions_and_counts_them():
+    plan = build_plan("0xabc", _pinned_vault(), session_id_factory=_counting_id_factory())
+    grouped = {f.fact_id for s in plan.corrected_sessions for f in s.facts}
+    assert grouped == {"a1", "a2"}
+    assert {c.fact_id for c in plan.old_crystals} == {"cry"}
+    assert {f.fact_id for f in plan.pinned_kept} == {"p1", "pcry"}
+    assert plan.estimate.atomic_facts == 2
+    assert plan.estimate.old_crystals == 1
+    assert any("kept (pinned)" in ln and "2" in ln for ln in plan.summary_lines())
+
+
+@pytest.mark.asyncio
+async def test_execute_never_forgets_pinned(monkeypatch, tmp_path, _no_confirm):
+    import totalreclaw.recrystallize as rec
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+
+    client = _FakeClient()
+    plan = build_plan("0xabc", _pinned_vault(), session_id_factory=_counting_id_factory())
+    await execute_recrystallize(client, plan, write_side_fix_confirmed=True, confirm=True)
+    forgotten = {c[1] for c in client.calls if c[0] == "forget"}
+    assert forgotten == {"a1", "a2", "cry"}
+    assert not forgotten & {"p1", "pcry"}
+
+
+def test_pinned_blob_detection():
+    from totalreclaw.recrystallize import _blob_is_pinned
+    assert _blob_is_pinned('{"pin_status": "pinned"}')
+    assert _blob_is_pinned('{"st": "p"}')
+    assert not _blob_is_pinned('{"pin_status": "unpinned"}')
+    assert not _blob_is_pinned("not json")
