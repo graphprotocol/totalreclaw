@@ -58,6 +58,7 @@ async function main(): Promise<void> {
   try {
     ({ chromium } = await import('playwright-core'));
   } catch {
+    if (process.env.CI) throw new Error('playwright-core is not installed in CI');
     console.log('# skipped: playwright-core not installed');
     return;
   }
@@ -66,6 +67,8 @@ async function main(): Promise<void> {
     console.log('# skipped: no Chromium available');
     return;
   }
+  // In CI there is no skip: with no explicit path playwright uses its own
+  // installed Chromium, and chromium.launch() below fails the run if absent.
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-pair-csp-'));
   const sessionsPath = path.join(tmp, 'pair.json');

@@ -17,7 +17,11 @@ from pathlib import Path
 
 import pytest
 
-playwright_sync = pytest.importorskip("playwright.sync_api")
+if os.environ.get("CI"):
+    # In CI the browser walk must run, never skip.
+    import playwright.sync_api as playwright_sync  # noqa: E402
+else:
+    playwright_sync = pytest.importorskip("playwright.sync_api")
 
 from totalreclaw.pair.crypto import generate_gateway_keypair  # noqa: E402
 from totalreclaw.pair.http_server import (  # noqa: E402

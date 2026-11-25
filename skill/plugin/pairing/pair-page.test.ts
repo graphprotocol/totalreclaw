@@ -248,6 +248,9 @@ function assert(cond: boolean, name: string): void {
   let compiles = true;
   try { new vm.Script(PAIR_PAGE_SCRIPT); } catch { compiles = false; }
   assert(compiles, 'csp: the served script is syntactically valid JavaScript');
+  assert(PAIR_PAGE_SCRIPT.includes('API_BASE.indexOf("//") !== -1'), 'csp: script rejects protocol-relative api base');
+  assert(/<textarea id="phrase" autocomplete="off"/.test(PAIR_PAGE_SCRIPT), 'phrase textarea has autocomplete=off');
+  assert(/autocomplete="off" spellcheck="false" data-idx/.test(PAIR_PAGE_SCRIPT), 'retype probe inputs have autocomplete=off');
   assert(!/style="/.test(PAIR_PAGE_SCRIPT), 'csp: script builds no style attributes');
   assert(!scripts[0].includes('abcdefghijklmnop1234'), 'csp: per-request sid never appears in the script');
   const other = renderPairPage({ sid: 'zzzzzzzzzzzzzzzzzzzz', mode: 'import', expiresAtMs: 9, apiBase: '/x', nowMs: 3 });

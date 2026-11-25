@@ -335,6 +335,7 @@ export const PAIR_PAGE_SCRIPT: string = `
   if (!/^[A-Za-z0-9_-]{16,64}$/.test(SID)
       || !/^(generate|import)$/.test(MODE)
       || !/^\\/[A-Za-z0-9_.\\/-]*$/.test(API_BASE)
+      || API_BASE.indexOf("//") !== -1
       || !Number.isFinite(EXPIRES_AT_MS)
       || !Number.isFinite(SERVER_NOW_MS)) {
     throw new Error("pair page: invalid session attributes");
@@ -641,7 +642,7 @@ export const PAIR_PAGE_SCRIPT: string = `
       const row = el(
         '<div class="probe-row">' +
         '<span class="probe-label">Word #' + (idx+1) + '</span>' +
-        '<input type="text" autocapitalize="none" autocorrect="off" spellcheck="false" data-idx="' + idx + '" />' +
+        '<input type="text" autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false" data-idx="' + idx + '" />' +
         '</div>'
       );
       probeEl.appendChild(row);
@@ -681,7 +682,7 @@ export const PAIR_PAGE_SCRIPT: string = `
       '<h1>Import your TotalReclaw recovery phrase</h1>' +
       '<p>Enter your 12-word recovery phrase to restore your account. It is processed ENTIRELY in your browser and encrypted before it leaves this page.</p>' +
       '<div class="callout warn"><strong>Use it ONLY with TotalReclaw.</strong> Do <em>not</em> paste a phrase that controls a crypto wallet, banking account, email, or any other service. TotalReclaw recovery phrases must be dedicated.</div>' +
-      '<textarea id="phrase" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="word1 word2 word3 ... word12"></textarea>' +
+      '<textarea id="phrase" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="word1 word2 word3 ... word12"></textarea>' +
       '<div id="phrase-error" class="callout danger hidden"></div>' +
       '<p><small>Checksum is verified in your browser. Invalid phrases are rejected before upload.</small></p>' +
       '<div class="btn-row">' +
