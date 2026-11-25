@@ -32,7 +32,7 @@ import re
 import unicodedata
 from typing import List
 
-__all__ = ["extract_query_entities"]
+__all__ = ["extract_query_entities", "derive_entities_for_write"]
 
 
 def normalize_entity(name: str) -> str:
@@ -125,8 +125,12 @@ _RE_DATE_ISO = re.compile(r"\b(\d{4}/\d{1,2}/\d{1,2})\b")
 _RE_NONALNUM = re.compile(r"[^A-Za-z0-9]")
 
 
-def extract_query_entities(query: str) -> List[str]:
+def extract_query_entities(query: str, *, use_domain_seeds: bool = True) -> List[str]:
     """Extract candidate entity-name strings from a free-text query.
+
+    ``use_domain_seeds=False`` skips Rule 3 (the domain-seed vocabulary). The
+    write path sets it: seeds are meant to widen recall, but stored as
+    entities they add junk (``may``, ``meeting``). Read-side default unchanged.
 
     Returns a de-duplicated list of normalized entity strings in insertion
     order. Pure stdlib; no network, no LLM.
@@ -167,7 +171,7 @@ def extract_query_entities(query: str) -> List[str]:
 
     # Rule 3: domain seeds (match against the lowered text).
     lowered = query.lower()
-    for seed in DOMAIN_SEEDS:
+    for seed in (DOMAIN_SEEDS if use_domain_seeds else ()):
         if re.search(r"\b" + re.escape(seed) + r"\b", lowered):
             found.setdefault(seed, None)
 
@@ -184,3 +188,52 @@ def extract_query_entities(query: str) -> List[str]:
         _add(m.group(1))
 
     return list(found.keys())
+
+
+#: Entity type given to heuristically derived entities. The heuristic only finds
+#: names, not kinds, so it uses the most generic of the v1 entity types.
+DERIVED_ENTITY_TYPE = "concept"
+
+#: Bare month names are dates, not entities ("in May" is not the word "may").
+_WRITE_SKIP_NAMES = frozenset({
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+})
+
+#: Same per-claim cap the v1 claim builder applies.
+_MAX_DERIVED_ENTITIES = 8
+
+
+def derive_entities_for_write(text: str) -> List[dict]:
+    """Derive v1 claim entities (``{"name", "type"}``) from fact text.
+
+    For explicit remembers, which carry no LLM-extracted entities. Uses
+    :func:`extract_query_entities`, the helper recall uses, so a stored fact
+    and a later query agree on entity names. Never raises: any error returns
+    ``[]`` (the write then proceeds without entities).
+    """
+    try:
+        text = text or ""
+        names = [
+            n for n in extract_query_entities(text, use_domain_seeds=False)
+            if n not in _WRITE_SKIP_NAMES
+        ]
+        # Drop a name contained in a longer derived name ("acme corp" keeps
+        # itself, drops "acme" and "corp").
+        names = [
+            n for n in names
+            if not any(n != m and re.search(r"\b" + re.escape(n) + r"\b", m) for m in names)
+        ]
+        out = []
+        for n in names[:_MAX_DERIVED_ENTITIES]:
+            # Restore the casing the user wrote (case-insensitive search).
+            m = re.search(r"\b" + re.escape(n) + r"\b", text, re.IGNORECASE)
+            out.append({"name": m.group(0) if m else n, "type": DERIVED_ENTITY_TYPE})
+        return out
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).debug(
+            "entity derivation failed; storing without entities", exc_info=True
+        )
+        return []
