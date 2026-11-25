@@ -94,7 +94,7 @@ import {
 import type { UnusableCredentials } from './dispatch.js';
 import { bundleVaultToBuffers, redactedBundleSummary, type DerivedBundleV1 } from './subgraph/bundle.js';
 import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, lookupFactById, fetchFactForForget } from './subgraph/search.js';
-import { RecentWrites, recordSubmittedPayloads } from './subgraph/recent-writes.js';
+import { RecentWrites, recordSubmittedPayloads, TOMBSTONE_BLOB_HEX } from './subgraph/recent-writes.js';
 import { createRewriteLookup, createForgetLookup } from './subgraph/fact-lookup.js';
 import { confirmIndexed } from './subgraph/confirm-indexed.js';
 import {
@@ -1088,7 +1088,7 @@ async function handleRememberSubgraph(
                 id: dupMatch.existingFact.id,
                 timestamp: new Date().toISOString(),
                 owner: state.smartAccountAddress,
-                encryptedBlob: Buffer.from('tombstone').toString('hex'),
+                encryptedBlob: TOMBSTONE_BLOB_HEX,
                 blindIndices: [],
                 decayScore: 0,
                 source: 'mcp_dedup',
@@ -1195,7 +1195,7 @@ async function handleRememberSubgraph(
               id: decision.existingFactId,
               timestamp: new Date().toISOString(),
               owner: state.smartAccountAddress,
-              encryptedBlob: Buffer.from('tombstone').toString('hex'),
+              encryptedBlob: TOMBSTONE_BLOB_HEX,
               blindIndices: [],
               decayScore: 0,
               source: 'mcp_contradiction',
@@ -1787,7 +1787,7 @@ async function handleForgetSubgraph(
       id: factId,
       timestamp: new Date().toISOString(),
       owner: state.smartAccountAddress,
-      encryptedBlob: Buffer.from('tombstone').toString('hex'),
+      encryptedBlob: TOMBSTONE_BLOB_HEX,
       blindIndices: [],
       decayScore: 0,
       source: 'mcp_forget',

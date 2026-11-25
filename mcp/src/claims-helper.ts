@@ -366,6 +366,8 @@ export interface BuildV1ClaimInput {
    * core validation using the same plugin-extra pattern as schema_version.
    */
   metadata?: Record<string, unknown>;
+  /** Top-level additive blob key (Hermes provenance label); re-attached after validation, like Python. */
+  agentName?: string;
 }
 
 /**
@@ -415,6 +417,7 @@ export function buildV1ClaimBlob(input: BuildV1ClaimInput): string {
   const validated = getWasm().validateMemoryClaimV1(JSON.stringify(claim));
   const parsed = JSON.parse(validated) as Record<string, unknown>;
   parsed.schema_version = MEMORY_CLAIM_V1_SCHEMA_VERSION;
+  if (typeof input.agentName === 'string' && input.agentName) parsed.agent_name = input.agentName;
   // am-1: re-attach Crystal metadata after validation (same plugin-extra pattern).
   if (input.metadata && typeof input.metadata === 'object') {
     parsed.metadata = input.metadata;

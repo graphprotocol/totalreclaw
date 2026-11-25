@@ -138,6 +138,7 @@ describe('retype / set_scope keep the pin (#779)', () => {
       entities: [{ name: 'ClickHouse', type: 'tool' }],
       expiresAt: '2030-01-01T00:00:00Z',
       metadata: { session_id: 's-1' },
+      agentName: 'John (Hermes)',
     });
     const r = await executeRetype(id, 'preference', h.deps);
     const parsed = JSON.parse(UNHEX(h.cache.get(OWNER, r.new_memory_id!)!.encryptedBlob));
@@ -145,5 +146,31 @@ describe('retype / set_scope keep the pin (#779)', () => {
     expect(parsed.entities).toEqual([{ name: 'ClickHouse', type: 'tool' }]);
     expect(parsed.expires_at).toBe('2030-01-01T00:00:00Z');
     expect(parsed.metadata).toEqual({ session_id: 's-1' });
+    expect(parsed.agent_name).toBe('John (Hermes)');
+  });
+
+  test('set_scope carries agent_name', async () => {
+    const h = harness();
+    const id = crypto.randomUUID();
+    rememberHere(h.cache, id, { agentName: 'John (Hermes)' });
+    const r = await executeSetScope(id, 'personal', h.deps);
+    expect(JSON.parse(UNHEX(h.cache.get(OWNER, r.new_memory_id!)!.encryptedBlob)).agent_name).toBe('John (Hermes)');
+  });
+
+  test('pin and unpin keep expiry, metadata and agent_name', async () => {
+    const h = harness();
+    const id = crypto.randomUUID();
+    rememberHere(h.cache, id, { expiresAt: '2030-01-01T00:00:00Z', metadata: { session_id: 's-1' }, agentName: 'John (Hermes)' });
+    const pin = await executePinOperation(id, 'pinned', h.deps);
+    const pinned = JSON.parse(UNHEX(h.cache.get(OWNER, pin.new_fact_id!)!.encryptedBlob));
+    expect(pinned.pin_status).toBe('pinned');
+    expect(pinned.expires_at).toBe('2030-01-01T00:00:00Z');
+    expect(pinned.metadata).toEqual({ session_id: 's-1' });
+    expect(pinned.agent_name).toBe('John (Hermes)');
+    const unpin = await executePinOperation(pin.new_fact_id!, 'active', h.deps);
+    const back = JSON.parse(UNHEX(h.cache.get(OWNER, unpin.new_fact_id!)!.encryptedBlob));
+    expect(back.expires_at).toBe('2030-01-01T00:00:00Z');
+    expect(back.metadata).toEqual({ session_id: 's-1' });
+    expect(back.agent_name).toBe('John (Hermes)');
   });
 });

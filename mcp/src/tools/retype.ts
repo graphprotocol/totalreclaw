@@ -12,7 +12,7 @@ import crypto from 'node:crypto';
 import type { ToolContext } from './types.js';
 import { resolveMemoryId } from './helpers.js';
 import type { SubgraphSearchFact } from '../subgraph/search.js';
-import type { RecentWriteInput } from '../subgraph/recent-writes.js';
+import { TOMBSTONE_BLOB_HEX, type RecentWriteInput } from '../subgraph/recent-writes.js';
 import { encodeFactProtobuf } from '../subgraph/store.js';
 import {
   MEMORY_CLAIM_V1_SCHEMA_VERSION,
@@ -196,6 +196,8 @@ export function extractV1Fields(decrypted: string): {
   expiresAt?: string;
   /** Provenance metadata (session_id, import source, Crystal fields). */
   metadata?: Record<string, unknown>;
+  /** Top-level `agent_name` provenance label (string passthrough). */
+  agentName?: string;
 } {
   try {
     const decodedClaim = JSON.parse(decrypted) as Record<string, unknown>;
@@ -232,6 +234,8 @@ export function extractV1Fields(decrypted: string): {
             ? (decodedClaim.entities as MemoryEntityV1[])
             : undefined,
         expiresAt: typeof decodedClaim.expires_at === 'string' ? decodedClaim.expires_at : undefined,
+        agentName:
+          typeof decodedClaim.agent_name === 'string' && decodedClaim.agent_name ? decodedClaim.agent_name : undefined,
         metadata:
           decodedClaim.metadata && typeof decodedClaim.metadata === 'object' && !Array.isArray(decodedClaim.metadata)
             ? (decodedClaim.metadata as Record<string, unknown>)
@@ -304,12 +308,13 @@ export function extractV1Fields(decrypted: string): {
  */
 export function carriedFields(
   e: ReturnType<typeof extractV1Fields>,
-): Pick<Parameters<typeof buildV1ClaimBlob>[0], 'pinStatus' | 'entities' | 'expiresAt' | 'metadata'> {
+): Pick<Parameters<typeof buildV1ClaimBlob>[0], 'pinStatus' | 'entities' | 'expiresAt' | 'metadata' | 'agentName'> {
   return {
     pinStatus: e.pinStatus,
     entities: e.entities,
     expiresAt: e.expiresAt,
     metadata: e.metadata,
+    agentName: e.agentName,
   };
 }
 
@@ -412,7 +417,7 @@ export async function executeMetadataOp<T>(
     id: memoryId,
     timestamp: new Date().toISOString(),
     owner: deps.owner,
-    encryptedBlob: Buffer.from('tombstone').toString('hex'),
+    encryptedBlob: TOMBSTONE_BLOB_HEX,
     blindIndices: [],
     decayScore: 0,
     source: `mcp_${opName}`,
