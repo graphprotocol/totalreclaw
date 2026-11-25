@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './platform-guard-first.js';
 import { TotalReclaw } from '@totalreclaw/client';
 import {
   handleRemember,

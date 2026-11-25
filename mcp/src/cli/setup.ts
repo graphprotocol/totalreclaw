@@ -26,6 +26,7 @@
  * this phase.
  */
 
+import '../platform-guard-first.js';
 import * as readline from 'node:readline';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
