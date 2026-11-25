@@ -18,7 +18,9 @@ from totalreclaw.operations import (
     export_facts,
     fetch_recent_facts,
     find_existing_content_fps,
+    search_facts,
 )
+import totalreclaw.relay as relay_mod
 from totalreclaw.relay import SubgraphQueryError, parse_subgraph_data
 from totalreclaw.retype_setscope import execute_retype
 
@@ -49,12 +51,20 @@ class TestHelper:
         with pytest.raises(SubgraphQueryError):
             parse_subgraph_data(body)
 
-    def test_message_truncated_and_no_variables(self):
-        body = {"errors": [{"message": "x" * 5000, "extensions": {"vars": "SECRET"}}]}
+    def test_message_categorical(self):
+        body = {"errors": [{"message": "owner 0xSECRET bad", "extensions": {"v": "SECRET"}}]}
         with pytest.raises(SubgraphQueryError) as ei:
             parse_subgraph_data(body)
-        assert len(str(ei.value)) < 400
-        assert "SECRET" not in str(ei.value)
+        assert str(ei.value) == "subgraph query returned errors (1 item(s))"
+
+    def test_first_message_debug_only_truncated(self, caplog):
+        body = {"errors": [{"message": "x" * 5000}]}
+        with caplog.at_level(logging.DEBUG, logger="totalreclaw.relay"):
+            with pytest.raises(SubgraphQueryError):
+                parse_subgraph_data(body)
+        recs = [r for r in caplog.records if "first message" in r.getMessage()]
+        assert recs and recs[0].levelno == logging.DEBUG
+        assert len(recs[0].getMessage()) < 300
 
 
 class TestExport:
@@ -113,6 +123,7 @@ class TestOtherSites:
             await fetch_recent_facts(keys, OWNER, _relay(body), 5)
 
     async def test_prewrite_dedup_fails_open_with_warning(self, caplog):
+        relay_mod._LAST_WARN.clear()
         with caplog.at_level(logging.WARNING):
             assert await find_existing_content_fps(derive_keys_from_mnemonic(MNEMONIC), OWNER, _relay(ERR_BODY), ["a"]) == set()
         assert any("fail-open" in r.message for r in caplog.records)
@@ -124,10 +135,55 @@ class TestOtherSites:
 
 class TestRecallLenient:
     @pytest.mark.parametrize("body", [ERR_BODY, PARTIAL_BODY, NULL_BODY])
-    def test_empty_with_warning_not_raise(self, body, caplog):
+    def test_returns_error_not_raise_and_warns(self, body, caplog):
+        relay_mod._LAST_WARN.clear()
         with caplog.at_level(logging.WARNING):
-            assert _recall_rows(body, "facts") == []
+            rows, err = _recall_rows(body, "facts")
+        assert rows == [] and isinstance(err, SubgraphQueryError)
         assert any("SubgraphQueryError" in r.message for r in caplog.records)
 
+    def test_warning_rate_limited(self, caplog):
+        relay_mod._LAST_WARN.clear()
+        with caplog.at_level(logging.WARNING):
+            for _ in range(5):
+                _recall_rows(ERR_BODY, "facts")
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
     def test_normal(self):
-        assert _recall_rows({"data": {"facts": [{"id": "1"}]}}, "facts") == [{"id": "1"}]
+        assert _recall_rows({"data": {"facts": [{"id": "1"}]}}, "facts") == (
+            [{"id": "1"}], None,
+        )
+
+
+class TestSearchFactsOutage:
+    async def _search(self, handler):
+        relay = MagicMock()
+        relay.query_subgraph = AsyncMock(side_effect=handler)
+        return await search_facts(
+            query="hello world test", keys=derive_keys_from_mnemonic(MNEMONIC),
+            owner=OWNER, relay=relay,
+        )
+
+    async def test_all_error_bodies_raise_like_http_outage(self):
+        with pytest.raises(SubgraphQueryError):
+            await self._search(lambda *a, **k: ERR_BODY)
+
+    async def test_all_http_errors_raise_today(self):
+        def boom(*a, **k):
+            raise RuntimeError("503")
+        with pytest.raises(RuntimeError):
+            await self._search(boom)
+
+    async def test_empty_vault_returns_empty(self):
+        out = await self._search(lambda *a, **k: {"data": {"blindIndexes": [], "facts": []}})
+        assert out == []
+
+    async def test_one_read_errors_partial_no_raise(self):
+        calls = {"n": 0}
+
+        def handler(query, variables, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return ERR_BODY
+            return {"data": {"blindIndexes": [], "facts": []}}
+        assert await self._search(handler) == []

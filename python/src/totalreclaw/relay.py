@@ -123,8 +123,9 @@ class SubgraphQueryError(RuntimeError):
     that body untouched, so a ``.get("data", {})`` chain would read it as
     "no results". ``parse_subgraph_data`` raises this instead (internal#559).
 
-    The message carries only the first error message, truncated. It never
-    carries the query variables or the rest of the body.
+    The message is categorical (error count only), matching the DEP-5
+    precedent. The first error message, truncated, goes to the DEBUG log.
+    Query variables and the body are never logged.
     """
 
 
@@ -146,15 +147,31 @@ def parse_subgraph_data(body: Any) -> dict[str, Any]:
     if errors:
         first = errors[0] if isinstance(errors, list) else errors
         msg = first.get("message") if isinstance(first, dict) else first
-        msg = str(msg)[:_SUBGRAPH_ERROR_MSG_MAX]
         count = len(errors) if isinstance(errors, list) else 1
-        raise SubgraphQueryError(
-            f"subgraph query returned errors ({count} item(s)): {msg}"
+        logger.debug(
+            "subgraph error body, first message: %s", str(msg)[:_SUBGRAPH_ERROR_MSG_MAX]
         )
+        raise SubgraphQueryError(f"subgraph query returned errors ({count} item(s))")
     data = body.get("data")
     if not isinstance(data, dict):
         raise SubgraphQueryError("subgraph response has no data")
     return data
+
+
+def log_rate_limited(
+    site: str, level_msg: str, *args: Any, interval: float = 60.0
+) -> None:
+    """WARNING at most once per ``interval`` seconds per ``site``, else DEBUG."""
+    now = time.monotonic()
+    last = _LAST_WARN.get(site)
+    if last is None or now - last >= interval:
+        _LAST_WARN[site] = now
+        logger.warning(level_msg, *args)
+    else:
+        logger.debug(level_msg, *args)
+
+
+_LAST_WARN: dict[str, float] = {}
 
 
 class RelayReadError(httpx.HTTPStatusError):
