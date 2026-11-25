@@ -52,7 +52,7 @@ export interface ConfirmIndexedOptions {
   subgraphUrl: string;
   authKeyHex?: string;
   /** Smart Account address; sent as X-Wallet-Address so the relay routes the read by tier (#513). */
-  walletAddress?: string;
+  walletAddress: string;
   /** Test injection. */
   poster?: (
     url: string,

@@ -23,7 +23,7 @@ const RELAY = 'https://relay.test';
 const SA = '0xAbC0000000000000000000000000000000000001';
 const AUTH = 'deadbeef'.repeat(8);
 
-interface Seen { url: string; headers: Record<string, string> }
+interface Seen { url: string; headers: Record<string, string>; body?: string }
 let seen: Seen[] = [];
 const realFetch = globalThis.fetch;
 const realEnv = process.env.TOTALRECLAW_SUBGRAPH_URL;
@@ -32,9 +32,17 @@ beforeEach(() => {
   seen = [];
   delete process.env.TOTALRECLAW_SUBGRAPH_URL;
   globalThis.fetch = (async (url: any, init: any) => {
-    seen.push({ url: String(url), headers: { ...(init?.headers ?? {}) } });
+    seen.push({ url: String(url), headers: { ...(init?.headers ?? {}) }, body: init?.body });
+    const q = String(JSON.parse(init?.body ?? '{}').query ?? '');
+    const isSearch = q.includes('SearchByBlindIndex');
+    const isByIds = q.includes('id_in');
     return new Response(JSON.stringify({
-      data: { blindIndexes: [], facts: [], fact: null, globalStates: [] },
+      data: {
+        blindIndexes: isSearch ? [{ id: 'bi-1', fact: { id: 'f1' } }] : [],
+        facts: isByIds ? [{ id: 'f1', isActive: true }] : [],
+        fact: null,
+        globalStates: [],
+      },
     }), { status: 200 });
   }) as typeof fetch;
 });
@@ -58,7 +66,16 @@ function expectAllHaveWallet() {
 
 describe('X-Wallet-Address on every subgraph read (#513)', () => {
   it('searchSubgraph (blind-index + payload fetch)', async () => {
-    await searchSubgraph(SA, ['t1', 't2'], 10, RELAY, AUTH);
+    process.env.TOTALRECLAW_SUBGRAPH_PAGE_SIZE = '1'; // saturated page -> paginate request
+    try {
+      await searchSubgraph(SA, ['t1'], 10, RELAY, AUTH);
+    } finally {
+      delete process.env.TOTALRECLAW_SUBGRAPH_PAGE_SIZE;
+    }
+    const bodies = seen.map((s) => String(s.body));
+    expect(bodies.some((b) => b.includes('SearchByBlindIndex'))).toBe(true);
+    expect(bodies.some((b) => b.includes('id_gt'))).toBe(true); // paginate
+    expect(bodies.some((b) => b.includes('id_in'))).toBe(true); // payload fetch
     expectAllHaveWallet();
   });
   it('searchSubgraphBroadened', async () => {
