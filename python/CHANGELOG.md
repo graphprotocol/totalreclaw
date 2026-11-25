@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Batch writes no longer store a fact with an on-chain decayScore below 0.3 (#789, interim).** The subgraph marks any fact under 0.3 inactive, so a batch-written fact with importance 2 (or a legacy 0.2 float) was invisible to every client. `store_fact_batch` (remember_batch, auto-extraction, import, recrystallize) now floors live facts at 0.3 (`ACTIVE_DECAY_THRESHOLD`); tombstones still write 0, and `store_fact` is unchanged. The canonical-scale decision is separate. Tests: `tests/test_decay_floor_789.py`.
+- **Batch writes no longer store a fact with an on-chain decayScore below 0.3 (#789, interim).** The subgraph marks any fact under 0.3 inactive, so a batch-written fact with importance 2 (or a legacy 0.2 float) was invisible to every client. `store_fact_batch` (remember_batch, auto-extraction, import, recrystallize) now floors live facts at 0.3 (`ACTIVE_DECAY_THRESHOLD`); tombstones still write 0, and the single-fact `store_fact` (`remember`, Session Crystals scored 1-2) is floored the same way with values >= 1 byte-identical. The canonical-scale decision is separate. Staging check pending: write an importance-1 and an importance-2 fact and confirm `isActive: true`. Tests: `tests/test_decay_floor_789.py`.
 
 - **A Session Crystal with importance 10 is stored as 10 again, not 1 (regression from #807).** The Crystal producer sends `importance / 10.0`, so 10 arrived as the float `1.0`, which `normalize_importance` read as 1 on the 1-10 scale. Floats in `(0, 1]` are now the legacy 0-1 scale (1.0 -> 10, 0.8 -> 8); ints stay 1-10 by type (`1` is still 1, #704). The on-chain decayScore was never affected. Tests: `tests/test_importance_scale.py`.
 

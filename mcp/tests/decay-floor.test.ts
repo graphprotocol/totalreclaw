@@ -15,6 +15,8 @@ describe('ACTIVE_DECAY_THRESHOLD matches the subgraph', () => {
     const m = mapping.match(/INACTIVE_THRESHOLD\s*=\s*BigDecimal\.fromString\("([0-9.]+)"\)/);
     expect(m).not.toBeNull();
     expect(Number(m![1])).toBe(ACTIVE_DECAY_THRESHOLD);
+    // the comparison direction matters too: active iff decayScore >= threshold
+    expect(mapping).toContain('decoded.decayScore.ge(INACTIVE_THRESHOLD)');
     expect(ACTIVE_DECAY_THRESHOLD).toBe(0.3);
   });
 });
@@ -43,6 +45,10 @@ describe('write sites in index.ts', () => {
     expect(INDEX_SRC).toContain('decayScore: liveDecayScore(item.importance)');
     expect(INDEX_SRC).not.toMatch(/decayScore:\s*[\w.]*[iI]mportance\s*\/\s*10/);
   });
+  it.each(['index.ts', 'tools/pin.ts', 'tools/retype.ts'])('%s has no raw importance-derived decayScore (/ 10 or * 0.1)', (f) => {
+    const src = readFileSync(join(__dirname, '..', 'src', f), 'utf8');
+    expect(src).not.toMatch(/decayScore:\s*[^,\n]*(\/\s*10\b|\*\s*0\.1\b)/);
+  });
   it('tombstone writes in index.ts keep decayScore 0 and never use the floor', () => {
     const lines = INDEX_SRC.split('\n');
     const tomb = lines.map((l, i) => (l.includes('encryptedBlob: TOMBSTONE_BLOB_HEX') ? i : -1)).filter((i) => i >= 0);
@@ -51,6 +57,18 @@ describe('write sites in index.ts', () => {
       const near = lines.slice(i, i + 4).join('\n');
       expect(near).toMatch(/decayScore:\s*0,/);
     }
+  });
+});
+
+describe('floored payload bytes', () => {
+  it('encodeFactProtobuf(liveDecayScore(2)) equals the literal-0.3 payload', () => {
+    const base: FactPayload = {
+      id: 'x', timestamp: '2026-01-01T00:00:00.000Z', owner: '0x' + '1'.repeat(40),
+      encryptedBlob: '00', blindIndices: [], decayScore: 0.3, source: 's', contentFp: '', agentId: 'a',
+    };
+    const a = Buffer.from(encodeFactProtobuf({ ...base, decayScore: liveDecayScore(2) })).toString('hex');
+    const b = Buffer.from(encodeFactProtobuf(base)).toString('hex');
+    expect(a).toBe(b);
   });
 });
 
