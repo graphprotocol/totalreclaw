@@ -12,7 +12,7 @@ export interface RecallTimer {
   /** Record the time elapsed since the previous mark (or start) under `stage`. */
   mark(stage: string): void;
   /** Emit the single log line. Safe to call more than once; only the first emits. */
-  emit(info: { candidates?: number; k?: number; outcome?: 'ok' | 'empty' | 'error' }): void;
+  emit(info: { candidates?: number; k?: number; outcome?: 'ok' | 'empty' | 'error' | 'invalid' }): void;
 }
 
 const nowMs = (): number => Number(process.hrtime.bigint()) / 1e6;

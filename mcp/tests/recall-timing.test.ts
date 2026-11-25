@@ -1,4 +1,5 @@
 import { createRecallTimer } from '../src/recall-timing.js';
+import { handleRecall } from '../src/tools/recall.js';
 import { handleSupport } from '../src/tools/support.js';
 
 describe('recall timing', () => {
@@ -33,5 +34,39 @@ describe('recall timing', () => {
   it('support text no longer promises 140 ms', async () => {
     const res = await handleSupport({} as any, {});
     expect(res.content[0].text).not.toContain('140');
+    expect(res.content[0].text).not.toContain('under a second');
+  });
+
+  describe('handleRecall (self-hosted) emits exactly one line per call', () => {
+    const run = async (client: any, args: any) => {
+      const err = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const res = await handleRecall({ client } as any, args);
+      const lines = err.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('TotalReclaw recall-timing '));
+      jest.restoreAllMocks();
+      return { res, lines };
+    };
+    const parse = (l: string) => JSON.parse(l.slice('TotalReclaw recall-timing '.length));
+
+    it('ok path: one line, no timing data in the response', async () => {
+      const { res, lines } = await run({ recall: jest.fn().mockResolvedValue([]) }, { query: 'hello', k: 5 });
+      expect(lines).toHaveLength(1);
+      expect(parse(lines[0])).toMatchObject({ path: 'self-hosted', outcome: 'ok', k: 5 });
+      const body = JSON.stringify(res);
+      expect(body).not.toContain('stages_ms');
+      expect(body).not.toContain('recall-timing');
+    });
+
+    it('error path: one line with k present', async () => {
+      const { lines } = await run({ recall: jest.fn().mockRejectedValue(new Error('boom')) }, { query: 'hello' });
+      expect(lines).toHaveLength(1);
+      expect(parse(lines[0])).toMatchObject({ outcome: 'error' });
+      expect(typeof parse(lines[0]).k).toBe('number');
+    });
+
+    it('invalid query: one line, outcome invalid', async () => {
+      const { lines } = await run({ recall: jest.fn() }, { query: '  ' });
+      expect(lines).toHaveLength(1);
+      expect(parse(lines[0]).outcome).toBe('invalid');
+    });
   });
 });

@@ -79,10 +79,11 @@ export async function handleRecall(
   const input = args as RecallInput;
   const startTime = Date.now();
   const timer = createRecallTimer('self-hosted');
-  let timerK: number | undefined;
+  let timerK: number = DEFAULT_RECALL_TOP_K;
   let timerCandidates = 0;
 
   if (!input.query || typeof input.query !== 'string' || input.query.trim().length === 0) {
+    timer.emit({ candidates: 0, k: timerK, outcome: 'invalid' });
     return {
       content: [{
         type: 'text',

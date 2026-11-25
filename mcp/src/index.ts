@@ -1450,6 +1450,7 @@ async function handleRecallSubgraph(
   let candidateCount = 0;
 
   if (!query || typeof query !== 'string' || query.trim().length === 0) {
+    timer.emit({ candidates: 0, outcome: 'invalid' });
     return {
       content: [{
         type: 'text',
