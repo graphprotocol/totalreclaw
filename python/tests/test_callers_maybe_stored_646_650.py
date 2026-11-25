@@ -318,3 +318,21 @@ async def test_import_counts_nothing_sent_as_not_sent():
 
     ids, errors = await group_and_store_adaptive(store, [{"text": "a"}], 15, 10**6)
     assert ids == [] and "not sent" in errors[0]
+
+
+@pytest.mark.asyncio
+async def test_settle_resends_a_write_proven_replaced(stack):
+    """client.settle_pending_writes() sends a write again (once) when the gate proves
+    its nonce was used by another op."""
+    w, client, _ = stack
+    w.bundle_delay = 1000
+    await client.remember("proven replaced then re-sent", importance=7)
+    op = next(iter(w.ops.values()))
+    w.inject_foreign(SA, op.nonce, fee_mult=1.5)
+    w.bundle_delay = 1
+    w.advance(30)                       # the foreign op mined: ours is dead
+    await client.settle_pending_writes()
+    w.advance(60)
+    mine = [p for p in w.executed_payloads if not p.startswith(b"foreign")]
+    assert len(mine) == 1 and len(w.executed_payloads) == 2
+    w.assert_invariants()

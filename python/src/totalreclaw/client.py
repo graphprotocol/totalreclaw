@@ -1239,6 +1239,9 @@ class TotalReclaw:
             session_id=self._relay.session_id,
             profile=profile,
             deadline_s=deadline_s,
+            eoa_address=self._eoa_address,
+            eoa_private_key=self._signing_priv_key,
+            data_edge_address=self._data_edge_address,
         )
 
     async def resolve_maybe_op(self, maybe_op: dict) -> str:
