@@ -110,7 +110,7 @@ This is the first line of the short-circuit. Once one call is blocked, **every**
 
 ### 4.3 Client-wide read pause (on `RelayClient`)
 
-The `RelayClient` lives as long as `AgentState`'s `TotalReclaw` client: one per daemon process, shared by the sync-loop hooks and the Hermes async tools. That makes it the right owner. Plain attribute writes are enough; no lock is needed.
+The `RelayClient` lives as long as `AgentState`'s `TotalReclaw` client: one per daemon process, shared by the sync-loop hooks and the Hermes async tools. That makes it the right owner. Readers are lock-free (one attribute read, no torn record). The writers, `_set_read_block` (a read-modify-write of the episode counter and the record) and `_clear_read_block`, serialize on a small `threading.Lock`, so two concurrent first denials cannot mint two episodes and a clear is never undone by a set that read the old record.
 
 ```python
 @dataclass
@@ -218,7 +218,7 @@ This covers pauses triggered off-turn, by background extraction dedup or an impo
   - `{"error": <full plain notice sentence without the [totalreclaw] prefix>, "error_code": "read_quota_exceeded"|"rate_limited", "reads_paused_until": iso, "retry_after_seconds": int, "resets_at": iso|null, "upgrade_url": str|null, "instruction": "Relay this to the user in one sentence. Do NOT say they have no memories."}`
   - **No `count` or `memories` keys**, so it can't be read as "0 results".
 - `export_all`, `pin`, `unpin`, `retype`, `set_scope`: same `except RelayReadBlocked` → the same payload.
-- `status`: add `"reads": {"paused": bool, "reason": kind|null, "until": iso|null, "upgrade_url": …}` from `client.read_block`. This makes no subgraph call. Optionally parse spec B's `reads_used` / `reads_limit` / `reads_quota_mode` into `BillingStatus` as optional fields (default `None`) and pass them through.
+- `status`: add `"reads": {"paused": bool, "reason": kind|null, "until": iso|null, "upgrade_url": …}` from the episode record (`client.read_block_record`, kept past the pause deadline), not the live window `client.read_block`. A past `until` with `paused: true` means a re-probe is pending until the next read. This makes no subgraph call. Optionally parse spec B's `reads_used` / `reads_limit` / `reads_quota_mode` into `BillingStatus` as optional fields (default `None`) and pass them through.
 - `remember` / `forget`: no change. Add a test that proves they're unaffected.
 
 Behavioural control surface (the lesson from #563: the tool description, not SKILL.md prose, is what holds):
