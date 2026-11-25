@@ -580,7 +580,7 @@ contract TotalReclawAccount is SimpleAccount {
             try this._decodeExecuteBatch(callData[4:]) returns (
                 address[] memory targets, uint256[] memory values, bytes[] memory datas
             ) {
-                return _isBatchInScope(targets, values, datas, grantTarget, allowedSelectors);
+                return _isBatchInScope(targets, values, datas, grantTarget);
             } catch {
                 return false;
             }
@@ -599,16 +599,19 @@ contract TotalReclawAccount is SimpleAccount {
         (targets, values, datas) = abi.decode(payload, (address[], uint256[], bytes[]));
     }
 
-    /// @dev Per-inner-call scope assertion. Ported verbatim from
-    ///      `SessionKeyModule._isBatchInScope` -- the load-bearing cred-6
-    ///      invariant: returns true ONLY when EVERY inner call's target,
-    ///      zero-value, and selector all pass.
+    /// @dev Per-inner-call scope assertion -- the load-bearing cred-6
+    ///      invariant: returns true ONLY when EVERY inner call passes the
+    ///      same rule the single-call `execute` path applies (target ==
+    ///      grant target AND value == 0). There is deliberately NO
+    ///      inner-selector check: DataEdge inner calls carry raw protobuf
+    ///      payloads with no selector (its fallback accepts them), and the
+    ///      outer `execute`/`executeBatch` selector allowlist is enforced
+    ///      by `_isCallDataInScope`. An empty batch is rejected.
     function _isBatchInScope(
         address[] memory targets,
         uint256[] memory values,
         bytes[] memory datas,
-        address grantTarget,
-        bytes4[] memory allowedSelectors
+        address grantTarget
     ) internal pure returns (bool) {
         uint256 n = targets.length;
         if (n == 0) return false;
@@ -617,19 +620,6 @@ contract TotalReclawAccount is SimpleAccount {
         for (uint256 i = 0; i < n; i++) {
             if (targets[i] != grantTarget) return false;
             if (values[i] != 0) return false;
-
-            bytes memory inner = datas[i];
-            if (inner.length < 4) return false;
-
-            // First 4 bytes of `inner` -- in-memory layout is
-            // (length: 32 bytes)(data...), so mload at offset 0x20 yields
-            // a word whose top 4 bytes are the selector.
-            bytes4 innerSel;
-            // solhint-disable-next-line no-inline-assembly
-            assembly {
-                innerSel := mload(add(inner, 0x20))
-            }
-            if (!_inSelectors(innerSel, allowedSelectors)) return false;
         }
         return true;
     }

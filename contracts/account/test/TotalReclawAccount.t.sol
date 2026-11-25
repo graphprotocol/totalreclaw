@@ -132,7 +132,7 @@ contract TotalReclawAccountTest is Test {
     function test_pinned_implementation_create2_address() public pure {
         assertEq(
             _predictImplAddress(TOTAL_RECLAW_ACCOUNT_SALT_V1),
-            0x6d17938F29072B3b7E883d410076B0D73676Cf34,
+            0xCF932161eCb91C91014f3911285D9FbfbDbF8709,
             "TotalReclawAccount predicted implementation address drifted - update the deployment plan's pinned value if intentional"
         );
     }
@@ -561,31 +561,107 @@ contract TotalReclawAccountTest is Test {
         assertEq(vd, 1, "any nonzero value in batch must SIG_VALIDATION_FAILED");
     }
 
-    function test_batch_rejects_out_of_scope_inner_selector() public {
-        bytes4[] memory onlyBatch = new bytes4[](1);
-        onlyBatch[0] = EXECUTE_BATCH_SEL;
+    /// @dev #542: DataEdge inner calls are raw protobuf with no selector;
+    ///      the batch path must not require one (or even 4 bytes).
+    function test_batch_accepts_selectorless_protobuf_inner_calls_2() public {
+        _installGrant(1);
+        _assertBatchValidates(_rawProtobufBatch(2), "raw-pb-2", 0);
+    }
 
+    function test_batch_accepts_selectorless_protobuf_inner_calls_15() public {
+        _installGrant(1);
+        _assertBatchValidates(_rawProtobufBatch(15), "raw-pb-15", 0);
+    }
+
+    function test_batch_accepts_empty_and_short_inner_data() public {
+        _installGrant(1);
+        address[] memory targets = new address[](3);
+        uint256[] memory values = new uint256[](3);
+        bytes[] memory datas = new bytes[](3);
+        for (uint256 i = 0; i < 3; i++) {
+            targets[i] = DATA_EDGE;
+        }
+        datas[0] = "";
+        datas[1] = hex"0a";
+        datas[2] = hex"0a0b0c";
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+        _assertBatchValidates(cd, "short-inner", 0);
+    }
+
+    function test_batch_rejects_one_wrong_target_among_raw_protobuf_inners() public {
+        _installGrant(1);
+        address[] memory targets = new address[](3);
+        uint256[] memory values = new uint256[](3);
+        bytes[] memory datas = new bytes[](3);
+        for (uint256 i = 0; i < 3; i++) {
+            targets[i] = DATA_EDGE;
+            datas[i] = abi.encodePacked(hex"0a10", bytes16(uint128(i)));
+        }
+        targets[1] = address(0xBADC0DE);
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+        _assertBatchValidates(cd, "wrong-target-pb", 1);
+    }
+
+    function test_batch_rejects_nonzero_value_among_raw_protobuf_inners() public {
+        _installGrant(1);
+        address[] memory targets = new address[](3);
+        uint256[] memory values = new uint256[](3);
+        bytes[] memory datas = new bytes[](3);
+        for (uint256 i = 0; i < 3; i++) {
+            targets[i] = DATA_EDGE;
+            datas[i] = abi.encodePacked(hex"0a10", bytes16(uint128(i)));
+        }
+        values[2] = 1 wei;
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+        _assertBatchValidates(cd, "nonzero-value-pb", 1);
+    }
+
+    function test_batch_rejects_mismatched_array_lengths() public {
+        _installGrant(1);
+        // values too short
+        {
+            address[] memory targets = new address[](2);
+            uint256[] memory values = new uint256[](1);
+            bytes[] memory datas = new bytes[](2);
+            targets[0] = DATA_EDGE;
+            targets[1] = DATA_EDGE;
+            _assertBatchValidates(
+                abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas)),
+                "len-values",
+                1
+            );
+        }
+        // datas too long
+        {
+            address[] memory targets = new address[](2);
+            uint256[] memory values = new uint256[](2);
+            bytes[] memory datas = new bytes[](3);
+            targets[0] = DATA_EDGE;
+            targets[1] = DATA_EDGE;
+            _assertBatchValidates(
+                abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas)),
+                "len-datas",
+                1
+            );
+        }
+    }
+
+    /// @dev Outer-selector allowlist is unchanged: a grant that allows only
+    ///      `execute` must reject an `executeBatch` outer call even when
+    ///      every inner call is in scope.
+    function test_batch_rejects_outer_selector_not_in_allowlist() public {
+        bytes4[] memory onlyExecute = new bytes4[](1);
+        onlyExecute[0] = EXECUTE_SEL;
         TotalReclawAccount.PermissionGrant memory grant =
-            _buildGrant(signer, DATA_EDGE, onlyBatch, 1);
-        bytes32 installH = keccak256("install-batch-only");
-        bytes memory installCd = _batchWithSingleInner(EXECUTE_BATCH_SEL);
+            _buildGrant(signer, DATA_EDGE, onlyExecute, 1);
+        bytes32 installH = keccak256("install-execute-only");
         bytes memory installSig = abi.encode(grant, _signWithKey(signerPriv, installH));
-        PackedUserOperation memory installOp = _makePackedOp(installCd, installSig);
+        PackedUserOperation memory installOp =
+            _makePackedOp(_executeCallData(DATA_EDGE, 0, hex"00"), installSig);
         vm.prank(ENTRY_POINT);
-        assertEq(
-            account.validateUserOp(installOp, installH, 0),
-            0,
-            "install must succeed with all-in-scope inner"
-        );
+        assertEq(account.validateUserOp(installOp, installH, 0), 0, "install via execute");
 
-        bytes memory cd = _batchWithSingleInner(EXECUTE_SEL);
-        bytes32 h = keccak256("inner-sel-bad");
-        bytes memory sig = _signWithKey(signerPriv, h);
-        PackedUserOperation memory op = _makePackedOp(cd, sig);
-
-        vm.prank(ENTRY_POINT);
-        uint256 vd = account.validateUserOp(op, h, 0);
-        assertEq(vd, 1, "inner selector not in grant must SIG_VALIDATION_FAILED");
+        _assertBatchValidates(_rawProtobufBatch(2), "outer-sel-not-allowed", 1);
     }
 
     function test_batch_rejects_empty_batch() public {
@@ -803,14 +879,25 @@ contract TotalReclawAccountTest is Test {
         return abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
     }
 
-    function _batchWithSingleInner(bytes4 innerSel) internal pure returns (bytes memory) {
-        address[] memory targets = new address[](1);
-        uint256[] memory values = new uint256[](1);
-        bytes[] memory datas = new bytes[](1);
-        targets[0] = DATA_EDGE;
-        values[0] = 0;
-        datas[0] = abi.encodePacked(innerSel, uint256(0));
+    function _rawProtobufBatch(uint256 n) internal pure returns (bytes memory) {
+        address[] memory targets = new address[](n);
+        uint256[] memory values = new uint256[](n);
+        bytes[] memory datas = new bytes[](n);
+        for (uint256 i = 0; i < n; i++) {
+            targets[i] = DATA_EDGE;
+            // Selector-less payload (first byte is a protobuf field tag).
+            datas[i] = abi.encodePacked(hex"0a20", keccak256(abi.encode(i)));
+        }
         return abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+    }
+
+    function _assertBatchValidates(bytes memory cd, string memory label, uint256 expected)
+        internal
+    {
+        bytes32 h = keccak256(bytes(label));
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+        vm.prank(ENTRY_POINT);
+        assertEq(account.validateUserOp(op, h, 0), expected, label);
     }
 
     function _makePackedOp(bytes memory callData, bytes memory sig)
