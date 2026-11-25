@@ -2,8 +2,8 @@
   "description": "Labelled paraphrase pairs for the forget guard (match_forgotten) and the explicit-mode write gate (decide_write). label=true: forget -> must NOT be stored (restates the forgotten entry); gate -> explicit remember must NOT store (duplicate of existing). cos = Harrier cosine (onnx-community/harrier-oss-v1-270m-ONNX, model_q4.onnx, via totalreclaw.embedding.get_embedding). Tests feed 2-d unit vectors [1,0] vs [cos, sqrt(1-cos^2)].",
   "paraphrase_min_cosine": 0.8,
   "contained_min_cosine": 0.65,
-  "expected_counts": {"forget": {"tp": 13, "fp": 0, "fn": 4, "tn": 17}, "gate": {"tp": 7, "fp": 1, "fn": 2, "tn": 9}},
-  "must_store": ["porto-moved-lisbon", "porto-lives-lisbon", "veg-sister", "porto-brother", "veg-vegan", "h15-braga", "h15-farfetch", "brother-porto"],
+  "expected_counts": {"forget": {"tp": 13, "fp": 2, "fn": 4, "tn": 19}, "gate": {"tp": 7, "fp": 1, "fn": 2, "tn": 9}},
+  "must_store": ["porto-moved-lisbon", "porto-lives-lisbon", "veg-sister", "porto-brother", "veg-vegan", "h15-braga", "h15-farfetch", "brother-porto", "doctor-alcohol", "dentist-veg"],
   "forget": [
     {"name": "veg-nomeat-short", "entry": "User is vegetarian.", "text": "User doesn't eat meat.", "label": true, "cos": 0.8287},
     {"name": "veg-meatfree-diet", "entry": "User is vegetarian.", "text": "User follows a meat-free diet.", "label": true, "cos": 0.8387},
@@ -38,7 +38,11 @@
     {"name": "unemployed-new-job", "entry": "User is unemployed.", "text": "User started a new job.", "label": false, "cos": 0.7559},
     {"name": "coffee-tea", "entry": "User drinks black coffee every morning.", "text": "User switched to green tea in the mornings.", "label": false, "cos": 0.7586},
     {"name": "color-swap", "entry": "User's favorite color is blue.", "text": "User's favorite color is green.", "label": false, "cos": 0.9415},
-    {"name": "dark-light", "entry": "User prefers dark mode.", "text": "User prefers light mode.", "label": false, "cos": 0.9052}
+    {"name": "dark-light", "entry": "User prefers dark mode.", "text": "User prefers light mode.", "label": false, "cos": 0.9052},
+    {"name": "doctor-alcohol", "entry": "User doesn't drink alcohol.", "text": "User's doctor doesn't drink alcohol.", "label": false, "cos": 0.9},
+    {"name": "dentist-veg", "entry": "User is vegetarian.", "text": "User's dentist is also vegetarian.", "label": false, "cos": 0.823},
+    {"name": "veg-padded-vegan", "entry": "User is vegetarian.", "text": "User is vegan and gluten-free.", "label": false, "cos": 0.869, "known_miss": true, "note": "known false positive: padded value change; the same-size exclusion is defeated by extra words and no threshold separates it from true paraphrases"},
+    {"name": "teetotal-heavy-drinker", "entry": "User is teetotal.", "text": "User is a heavy drinker.", "label": false, "cos": 0.831, "known_miss": true, "note": "known false positive: padded value change (see veg-padded-vegan)"}
   ],
   "gate": [
     {"name": "h15-porto-tidewater", "existing": "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small climate-tech startup, where they are building the company's carbon-accounting dashboard.", "text": "User lives in Porto and works at Tidewater.", "label": true, "cos": 0.7132},

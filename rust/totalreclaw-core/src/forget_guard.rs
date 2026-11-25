@@ -66,17 +66,21 @@
 //!
 //!    - `paraphrase`: the candidate shares no content token with the forgotten
 //!      text, the cosine is >= [`PARAPHRASE_MIN_COSINE`], and none of these
-//!      exclusions hold: the forgotten text has an anchor (a name, place or
-//!      number, so a disjoint candidate changed the value); both token sets
+//!      exclusions hold: the forgotten text or the candidate has an anchor (a
+//!      name, place, number or date, so the candidate names something else or
+//!      changed the value); both token sets
 //!      have the same size (a one-for-one swap, "vegetarian" -> "vegan"); the
 //!      candidate adds a relation word (a new subject). Catches "User doesn't
 //!      eat meat" after "User is vegetarian" was forgotten (internal #715).
 //!
-//!    Relation words ([`RELATION_WORDS`]: "sister", "brother", "boss", ...)
-//!    veto `superset`, `anchor` and `paraphrase`: a candidate that adds one that
-//!    the forgotten text lacks is about someone else ("User's sister is
-//!    vegetarian" after "User is vegetarian" was forgotten). `subset` cannot add
-//!    words, and `clause` needs an equal token set, so neither needs the veto.
+//!    Relation words ([`RELATION_WORDS`]: family, friends, colleagues and common
+//!    roles such as "doctor" or "landlord") veto `superset`, `anchor` and
+//!    `paraphrase`: a candidate that adds one the forgotten text lacks is
+//!    about someone else ("User's sister is vegetarian" after "User is
+//!    vegetarian" was forgotten). The list is finite: a subject noun outside it
+//!    (a pet, an employer, a person's name written lowercase) is not vetoed
+//!    unless the anchor rules catch it. `subset` cannot add words, and
+//!    `clause` needs an equal token set, so neither needs the veto.
 //!
 //!    Otherwise a candidate that both drops and adds content words never
 //!    matches. That keeps value swaps out: "favorite color is green" after
@@ -279,6 +283,7 @@ pub const RELATION_WORDS: &[&str] = &[
     "brothers",
     "child",
     "children",
+    "coach",
     "colleague",
     "colleagues",
     "cousin",
@@ -288,8 +293,11 @@ pub const RELATION_WORDS: &[&str] = &[
     "dad",
     "daughter",
     "daughters",
+    "dentist",
+    "doctor",
     "family",
     "father",
+    "flatmate",
     "friend",
     "friends",
     "girlfriend",
@@ -297,9 +305,15 @@ pub const RELATION_WORDS: &[&str] = &[
     "grandma",
     "grandmother",
     "grandpa",
+    "grandparent",
+    "grandparents",
     "husband",
+    "inlaw",
+    "inlaws",
     "kid",
     "kids",
+    "landlord",
+    "laws",
     "manager",
     "mom",
     "mother",
@@ -317,8 +331,11 @@ pub const RELATION_WORDS: &[&str] = &[
     "son",
     "sons",
     "spouse",
+    "teacher",
     "teammate",
     "teammates",
+    "tenant",
+    "therapist",
     "uncle",
     "wife",
 ];
@@ -444,7 +461,7 @@ pub fn match_forgotten(
         return None;
     }
     let norm = normalize_text(text);
-    let cand_tokens = guard_tokens(text);
+    let (cand_tokens, cand_anchors) = guard_tokens_with_anchors(text);
     let clauses = candidate_clauses(text);
 
     for entry in entries {
@@ -467,10 +484,11 @@ pub fn match_forgotten(
         let adds_relation = adds_relation_word(&entry_tokens, &cand_tokens);
         if entry_tokens.intersection(&cand_tokens).next().is_none() {
             // No shared content word: only a pure-semantic paraphrase can match.
-            // Entry anchors (names, places, numbers) mean a disjoint candidate
-            // changed the value; equal token counts are a one-for-one swap
+            // Anchors (names, places, numbers) on either side mean the candidate
+            // names something else or changed the value; equal token counts are a one-for-one swap
             // ("vegetarian" -> "vegan"); a new relation word is a new subject.
             if entry_anchors.is_empty()
+                && cand_anchors.is_empty()
                 && !adds_relation
                 && entry_tokens.len() != cand_tokens.len()
                 && cos >= PARAPHRASE_MIN_COSINE
