@@ -253,9 +253,9 @@ def normalize_importance(value) -> int:
     Scale is decided by TYPE, never by guessing on the value of an int:
 
     * ``int`` (not bool): already on the 1-10 scale. ``1`` stays 1.
-    * ``float`` strictly between 0 and 1: the legacy 0-1 scale, scaled x10
-      (0.7 -> 7).
-    * any other ``float``: 1-10 scale, rounded (1.0 -> 1, 8.0 -> 8).
+    * ``float`` in ``(0, 1]``: the legacy 0-1 scale, scaled x10
+      (0.7 -> 7, 1.0 -> 10). Floats <= 1 are always legacy.
+    * any other ``float``: 1-10 scale, rounded (1.5 -> 2, 8.0 -> 8).
 
     The result is clamped to 1-10. Non-numeric input falls back to 5.
     """
@@ -263,7 +263,7 @@ def normalize_importance(value) -> int:
         return 5
     if isinstance(value, float) and not math.isfinite(value):
         return 5
-    if isinstance(value, float) and 0 < value < 1:
+    if isinstance(value, float) and 0 < value <= 1:
         scaled = int(round(value * 10))
     else:
         scaled = int(round(value))

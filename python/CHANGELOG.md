@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Session Crystal with importance 10 is stored as 10 again, not 1 (regression from #807).** The Crystal producer sends `importance / 10.0`, so 10 arrived as the float `1.0`, which `normalize_importance` read as 1 on the 1-10 scale. Floats in `(0, 1]` are now the legacy 0-1 scale (1.0 -> 10, 0.8 -> 8); ints stay 1-10 by type (`1` is still 1, #704). The on-chain decayScore was never affected. Tests: `tests/test_importance_scale.py`.
+
 - **Forget guard and explicit write gate catch paraphrases (internal #715, #777).** Python fallbacks mirror the new core rules; the core binding is used when it has them (core change: see `rust/totalreclaw-core/CHANGELOG.md`).
   - After a fact is forgotten, auto-extraction no longer re-stores it reworded with no shared content word ("User doesn't eat meat." after "User is vegetarian."): new match reason `paraphrase` at cosine >= 0.80, skipped when the forgotten fact names something, when the wording is a one-for-one swap, or when it adds a relation word. Relation words ("sister", "brother", ...) also stop a different subject from matching `superset` and `anchor`. An explicit remember is not blocked by this and a paraphrase match does not release the ledger entry.
   - `totalreclaw_remember` of a short text whose names and words all appear in one longer stored fact (cosine >= 0.65) now returns the existing `possible_duplicate` result with `match: "contained"` instead of writing a second copy; `force=true` still stores. Auto-extraction does not use this rule.
