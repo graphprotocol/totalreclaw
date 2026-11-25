@@ -146,3 +146,41 @@ def test_async_passes_query_embedding():
         asyncio.run(auto_recall_async("dietary preference", state))
     assert client.kwargs["query_embedding"] == VEC
     assert client.kwargs["include_embeddings"] is True
+
+
+def test_ensure_loaded_concurrent_loads_once(monkeypatch):
+    import sys
+    import types
+
+    from totalreclaw import embedding as emb
+
+    monkeypatch.setattr(emb, "_session", None)
+    monkeypatch.setattr(emb, "_tokenizer", None)
+    monkeypatch.setattr(emb, "_hf_cache_has_model", lambda: True)
+    counts = {"session": 0}
+
+    def fake_session(*a, **k):
+        counts["session"] += 1
+        time.sleep(0.2)
+        return object()
+
+    ort = types.SimpleNamespace(
+        SessionOptions=lambda: types.SimpleNamespace(),
+        GraphOptimizationLevel=types.SimpleNamespace(ORT_ENABLE_ALL=0),
+        InferenceSession=fake_session,
+    )
+    tf = types.SimpleNamespace(
+        AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *a, **k: object())
+    )
+    hub = types.SimpleNamespace(hf_hub_download=lambda **k: "/x")
+    monkeypatch.setitem(sys.modules, "onnxruntime", ort)
+    monkeypatch.setitem(sys.modules, "transformers", tf)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+
+    results = []
+    ts = [threading.Thread(target=lambda: results.append(emb._ensure_loaded())) for _ in range(2)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert counts["session"] == 1
+    assert results[0] is results[1] or results[0] == results[1]
+    assert emb._session is not None and emb._tokenizer is not None
