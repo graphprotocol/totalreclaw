@@ -9,6 +9,8 @@ integration (Hermes, LangChain, CrewAI, or custom agents).
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import json
 import logging
 import time
@@ -85,6 +87,35 @@ def _format_recall_context(results) -> str:
     return totalreclaw_core.format_recall_context(json.dumps(items), int(time.time()))
 
 
+# Max seconds the pre-turn hook may spend embedding the query before it
+# falls back to lexical-only recall (#639). Generous enough for a warm ONNX
+# forward pass, small enough not to eat the prefetch budget.
+QUERY_EMBED_TIMEOUT_S = 2.0
+
+_embed_pool = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="tr-recall-embed"
+)
+
+
+def _embed_query_or_none(query: str, timeout: float = QUERY_EMBED_TIMEOUT_S) -> Optional[list]:
+    """Query embedding for auto-recall, or None to fall back to lexical recall.
+
+    Same embedder the ``totalreclaw_recall`` tool uses. Never starts the
+    one-time model download inside the pre-turn hook, and never blocks longer
+    than *timeout*. Any failure returns None.
+    """
+    try:
+        from totalreclaw import embedding as _emb
+
+        if not _emb.is_model_available_locally():
+            return None
+        fut = _embed_pool.submit(_emb.get_embedding, query)
+        return fut.result(timeout=timeout)
+    except Exception as e:  # incl. concurrent.futures.TimeoutError
+        logger.debug("auto-recall query embedding skipped: %s", e)
+        return None
+
+
 def auto_recall(
     query: str,
     state: "AgentState",
@@ -114,14 +145,17 @@ def auto_recall(
         return None
 
     try:
-        # No query vector here, so candidate vectors would score 0 anyway:
-        # skip downloading them (#647).
+        # With a query vector, candidate vectors are needed for cosine
+        # reranking and the LSH trapdoors catch paraphrases (#639). Without
+        # one they would score 0 anyway: skip downloading them (#647).
+        query_embedding = _embed_query_or_none(query)
         results = run_sync(
             client.recall(
                 query,
                 top_k=top_k,
                 max_candidates=state.get_max_candidate_pool(),
-                include_embeddings=False,
+                include_embeddings=query_embedding is not None,
+                **({"query_embedding": query_embedding} if query_embedding else {}),
             )
         )
 
@@ -161,11 +195,15 @@ async def auto_recall_async(
         return None
 
     try:
+        query_embedding = await asyncio.get_running_loop().run_in_executor(
+            None, _embed_query_or_none, query
+        )
         results = await client.recall(
             query,
             top_k=top_k,
             max_candidates=state.get_max_candidate_pool(),
-            include_embeddings=False,
+            include_embeddings=query_embedding is not None,
+            **({"query_embedding": query_embedding} if query_embedding else {}),
         )
         if results:
             return _format_recall_context(results)
