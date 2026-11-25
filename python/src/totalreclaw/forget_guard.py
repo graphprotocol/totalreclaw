@@ -59,12 +59,14 @@ _CLAUSE_PUNCTUATION_RE = re.compile("[()\\[\\]{},;:.!?\u2014\u2013]")
 #: Mirrors ``totalreclaw_core::forget_guard::RELATION_WORDS``. Keep sorted.
 RELATION_WORDS = frozenset((
     "aunt", "aunts", "baby", "boss", "boyfriend", "brother", "brothers", "child",
-    "children", "colleague", "colleagues", "cousin", "cousins", "coworker", "coworkers",
-    "dad", "daughter", "daughters", "family", "father", "friend", "friends", "girlfriend",
-    "grandfather", "grandma", "grandmother", "grandpa", "husband", "kid", "kids", "manager",
-    "mom", "mother", "mum", "neighbor", "neighbour", "nephew", "niece", "parent", "parents",
-    "partner", "roommate", "sister", "sisters", "son", "sons", "spouse", "teammate",
-    "teammates", "uncle", "wife",
+    "children", "coach", "colleague", "colleagues", "cousin", "cousins", "coworker",
+    "coworkers", "dad", "daughter", "daughters", "dentist", "doctor", "family", "father",
+    "flatmate", "friend", "friends", "girlfriend", "grandfather", "grandma", "grandmother",
+    "grandpa", "grandparent", "grandparents", "husband", "inlaw", "inlaws", "kid", "kids",
+    "landlord", "laws", "manager", "mom", "mother", "mum", "neighbor", "neighbour",
+    "nephew", "niece", "parent", "parents", "partner", "roommate", "sister", "sisters",
+    "son", "sons", "spouse", "teacher", "teammate", "teammates", "tenant", "therapist",
+    "uncle", "wife",
 ))
 
 #: Mirrors ``totalreclaw_core::forget_guard::STOPWORDS``. Keep sorted.
@@ -222,7 +224,7 @@ def _py_match_forgotten(
     if not text or not text.strip() or not entries:
         return None
     norm = _normalize_text(text)
-    cand = set(guard_tokens(text))
+    cand, cand_anchors = _tokens_and_anchors(text)
     clauses = _candidate_clauses(text)
     for entry in entries:
         etext = entry.get("text") or ""
@@ -239,7 +241,7 @@ def _py_match_forgotten(
         if not (ent & cand):
             # No shared content word: only a pure-semantic paraphrase can match
             # (see the Rust module docs for the three exclusions).
-            if not anchors and not adds_rel and len(ent) != len(cand) and cos >= PARAPHRASE_MIN_COSINE:
+            if not anchors and not cand_anchors and not adds_rel and len(ent) != len(cand) and cos >= PARAPHRASE_MIN_COSINE:
                 return {"id": entry.get("id", ""), "reason": "paraphrase", "cosine": cos}
             continue
         if cand <= ent and cos >= SUBSET_MIN_COSINE:
