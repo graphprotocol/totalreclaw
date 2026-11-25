@@ -146,7 +146,7 @@ contract TotalReclawAccountTest is Test {
     function test_pinned_implementation_create2_address() public pure {
         assertEq(
             _predictImplAddress(TOTAL_RECLAW_ACCOUNT_SALT_V1),
-            0x59B323d609F1aad9FeA38e8d840631366B99b444,
+            0xdAD6297485931d9a972714c2Cc23A85aa66CD8cA,
             "TotalReclawAccount predicted implementation address drifted - update the deployment plan's pinned value if intentional"
         );
     }
@@ -351,6 +351,7 @@ contract TotalReclawAccountTest is Test {
         uint256 vd = account.validateUserOp(op, hash2, 0);
         assertEq(vd, 1, "replayed nonce must SIG_VALIDATION_FAILED");
 
+        // Burn semantics: even a higher nonce cannot re-install this signer.
         TotalReclawAccount.PermissionGrant memory grant2 =
             _buildGrant(signer, DATA_EDGE, _twoSelectors(), 2);
         bytes32 hash3 = keccak256("fresh-nonce");
@@ -360,7 +361,7 @@ contract TotalReclawAccountTest is Test {
 
         vm.prank(ENTRY_POINT);
         uint256 vd2 = account.validateUserOp(op2, hash3, 0);
-        assertEq(vd2, 0, "fresh nonce must succeed after revoke");
+        assertEq(vd2, 1, "revoked signer is burned: higher nonce must also fail");
     }
 
     function test_cross_chain_grant_replay_rejected() public {
@@ -434,11 +435,7 @@ contract TotalReclawAccountTest is Test {
     // Revocation -- owner-gated, idempotent, actually blocks reuse.
     // ============================================================
 
-    function test_revoke_idempotent() public {
-        vm.prank(owner);
-        account.revokeSessionKey(signer); // never installed -- no-op, no revert
-        assertFalse(account.isSessionKeyActive(signer));
-
+    function test_revoke_repeat_is_harmless() public {
         _installGrant(1);
         assertTrue(account.isSessionKeyActive(signer));
 
@@ -448,8 +445,80 @@ contract TotalReclawAccountTest is Test {
         account.revokeSessionKey(signer);
         assertFalse(account.isSessionKeyActive(signer));
 
+        vm.expectEmit(true, false, false, false, address(account));
+        emit TotalReclawAccount.SessionKeyRevoked(signer);
         vm.prank(owner);
-        account.revokeSessionKey(signer); // already revoked -- no-op, no revert, no 2nd event
+        account.revokeSessionKey(signer); // repeat: no revert, event again
+        assertFalse(account.isSessionKeyActive(signer));
+    }
+
+    function _tryInstall(uint256 nonce, string memory label) internal returns (uint256) {
+        TotalReclawAccount.PermissionGrant memory grant =
+            _buildGrant(signer, DATA_EDGE, _twoSelectors(), nonce);
+        bytes32 h = keccak256(abi.encode(label, nonce));
+        bytes memory sig = abi.encode(grant, _signWithKey(signerPriv, h));
+        PackedUserOperation memory op = _makePackedOp(_executeCallData(DATA_EDGE, 0, hex"00"), sig);
+        vm.prank(ENTRY_POINT);
+        return account.validateUserOp(op, h, 0);
+    }
+
+    function test_revoke_uninstalled_signer_blocks_later_install() public {
+        vm.prank(owner);
+        account.revokeSessionKey(signer); // nothing installed yet
+        assertEq(_tryInstall(1, "a"), 1, "nonce 1 blocked");
+        assertEq(_tryInstall(5, "b"), 1, "nonce 5 blocked");
+        assertEq(_tryInstall(type(uint256).max, "c"), 1, "max nonce blocked");
+        assertFalse(account.isSessionKeyActive(signer));
+    }
+
+    function test_revoke_installed_signer_still_works() public {
+        _installGrant(3);
+        vm.prank(owner);
+        account.revokeSessionKey(signer);
+        assertFalse(account.isSessionKeyActive(signer));
+        assertEq(_validate(_batchOf(1), "post-revoke"), 1);
+        assertEq(_tryInstall(4, "after"), 1, "no grant installs after revoke");
+    }
+
+    function test_install_lower_nonce_than_installed_fails() public {
+        _installGrant(5);
+        assertEq(_tryInstall(3, "lo"), 1, "lower nonce rejected");
+        assertTrue(account.isSessionKeyActive(signer));
+    }
+
+    function test_install_identical_resend_validates_without_reinstall() public {
+        _installGrant(5);
+        vm.recordLogs();
+        assertEq(_tryInstall(5, "resend"), 0, "identical resend validates");
+        assertEq(vm.getRecordedLogs().length, 0, "no re-install event");
+        (uint256 n,,,) = account.getSessionKeyGrant(signer);
+        assertEq(n, 5);
+    }
+
+    function test_install_equal_nonce_different_grant_fails() public {
+        _installGrant(5);
+        bytes4[] memory one = new bytes4[](1);
+        one[0] = _twoSelectors()[0];
+        TotalReclawAccount.PermissionGrant memory g = _buildGrant(signer, DATA_EDGE, one, 5);
+        bytes32 h = keccak256("diff");
+        bytes memory sig = abi.encode(g, _signWithKey(signerPriv, h));
+        PackedUserOperation memory op = _makePackedOp(_executeCallData(DATA_EDGE, 0, hex"00"), sig);
+        vm.prank(ENTRY_POINT);
+        assertEq(account.validateUserOp(op, h, 0), 1, "equal nonce, different grant rejected");
+    }
+
+    function test_identical_resend_fails_after_burn() public {
+        _installGrant(5);
+        vm.prank(owner);
+        account.revokeSessionKey(signer);
+        assertEq(_tryInstall(5, "after-burn"), 1, "identical resend fails after burn");
+    }
+
+    function test_install_higher_nonce_than_installed_works() public {
+        _installGrant(5);
+        assertEq(_tryInstall(6, "hi"), 0, "higher nonce installs");
+        (uint256 n,,,) = account.getSessionKeyGrant(signer);
+        assertEq(n, 6);
     }
 
     function test_revoke_reverts_for_non_owner_caller() public {
