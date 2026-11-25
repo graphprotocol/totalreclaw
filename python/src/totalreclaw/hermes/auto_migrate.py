@@ -287,9 +287,11 @@ def _resolve_smart_account(mnemonic: str, creds: dict) -> Optional[str]:
     # credentials.json with no scope_address.
     try:
         return run_sync(_derive_smart_account_address(mnemonic))
-    except Exception:  # noqa: BLE001 — network failure is non-fatal here
-        logger.debug(
-            "auto_migrate: Smart Account RPC derivation failed", exc_info=True
+    except Exception:  # noqa: BLE001 — fail closed: no address, no migration (internal#679)
+        logger.warning(
+            "auto_migrate: Smart Account RPC lookup failed; not migrating "
+            "(the EOA is never used in its place), will retry on the next boot",
+            exc_info=True,
         )
         return None
 

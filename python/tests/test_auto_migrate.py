@@ -671,3 +671,51 @@ def test_register_vault_reports_failure_from_inside_a_running_loop(
         return auto_migrate._register_vault(TEST_MNEMONIC)
 
     assert asyncio.run(driver()) is False
+
+
+# ---------------------------------------------------------------------------
+# internal#679: a failed Smart Account lookup fails closed (no EOA, no bundle)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def failing_sa_rpc(monkeypatch):
+    """The RPC answers nothing usable, through the real derivation function."""
+    import totalreclaw.client as client_mod
+
+    async def _nothing(eoa_address: str, rpc_url: str):
+        return None
+
+    monkeypatch.setattr(client_mod, "_query_smart_account_for_owner", _nothing)
+
+
+def test_failed_sa_lookup_does_not_migrate_or_use_the_eoa(
+    isolated_home: Path, fake_keychain, failing_sa_rpc
+) -> None:
+    creds_path = _write_legacy_plaintext_uncached(isolated_home)
+    before = creds_path.read_text()
+
+    assert auto_migrate._resolve_smart_account(TEST_MNEMONIC, {}) is None
+    assert auto_migrate.maybe_migrate() is False
+
+    # Install left on the legacy path, untouched; retried on the next boot.
+    assert creds_path.read_text() == before
+
+
+def test_eager_resolve_does_not_persist_the_eoa(tmp_path: Path, failing_sa_rpc) -> None:
+    import io as _io
+
+    from totalreclaw.hermes import cli as hermes_cli
+
+    path = tmp_path / "credentials.json"
+    path.write_text(json.dumps({"mnemonic": TEST_MNEMONIC}))
+    before = path.read_text()
+    out, err = _io.StringIO(), _io.StringIO()
+    stub_io = type("IO", (), {"write": lambda self, s: out.write(s),
+                              "write_err": lambda self, s: err.write(s)})()
+
+    hermes_cli._try_eager_resolve_scope_address(path, TEST_MNEMONIC, stub_io)
+
+    assert path.read_text() == before
+    assert "scope_address" not in path.read_text()
+    assert "could not be resolved" in err.getvalue()

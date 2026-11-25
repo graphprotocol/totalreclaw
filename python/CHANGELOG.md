@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Smart Account lookup fails closed instead of returning the EOA (internal#679).** When the RPC errored or answered with nothing, `_derive_smart_account_address` returned the EOA address as the Smart Account, so a write could be sent from an address with no code and a Hermes migration or setup could persist the wrong account. It now raises `SmartAccountLookupError` (retryable; nothing is cached, registered or written). Callers: `TotalReclaw.resolve_address` (and so remember / recall / forget / export) raises; Hermes `auto_migrate` logs a warning, leaves the install on the legacy path and retries next boot; the setup wizard's eager resolve does not write `scope_address`; the `doctor` check reports a warning; the pair ack helper `derive_smart_account_address_strict` still returns `None`. No caller needs the EOA in its place. Key derivation is unchanged. Tests: `tests/test_sa_lookup_fail_closed.py`, `tests/test_auto_migrate.py`.
+
 - **A failed relay pairing no longer says "You're all set".** When the completion handler returned a failure instead of raising (for example, writing the credentials failed), the gateway still sent the relay a plain ack, so the pair page reported success with nothing saved. It now nacks, as MCP does, and the page shows the error. Only short snake_case error codes are forwarded; free text such as an exception message (which can contain local paths) becomes `completion_failed`.
 
 - **Agent-facing wording (internal#651, #727, #514, #472).**

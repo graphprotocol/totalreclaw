@@ -255,39 +255,50 @@ async def _query_smart_account_for_owner(eoa_address: str, rpc_url: str) -> Opti
         return ("0x" + result[-40:]).lower()
 
 
+class SmartAccountLookupError(RuntimeError):
+    """The Smart Account address could not be resolved (RPC error, empty or
+    malformed answer).
+
+    Retryable: nothing was cached and nothing was written. The EOA address is
+    NEVER a substitute for the Smart Account: the EOA has no code, so a write
+    sent from it fails, and a read keyed on it returns nothing (internal#679).
+    """
+
+
 async def _derive_smart_account_address(mnemonic: str, rpc_url: str = "https://sepolia.base.org") -> str:
     """Derive the CREATE2 Smart Account address by querying the factory contract.
 
     Calls SimpleAccountFactory.getAddress(owner, 0) via eth_call on a public RPC.
     This matches the `toSimpleSmartAccount` logic in permissionless/viem.
-    Falls back to the EOA address when the RPC returns no usable result.
+
+    Fails closed: raises :class:`SmartAccountLookupError` when the RPC errors
+    or returns no usable result. It never returns the EOA address (callers
+    that need the EOA call :func:`_get_eoa_address` explicitly).
     """
     eoa_address = _get_eoa_address(mnemonic)
-    address = await _query_smart_account_for_owner(eoa_address, rpc_url)
+    try:
+        address = await _query_smart_account_for_owner(eoa_address, rpc_url)
+    except Exception as err:  # network error, bad JSON, timeout
+        raise SmartAccountLookupError(
+            f"Smart Account lookup failed ({type(err).__name__}); try again shortly"
+        ) from None
     if address is None:
-        # Fallback to EOA if RPC fails
-        return eoa_address.lower()
+        raise SmartAccountLookupError(
+            "Smart Account lookup returned no usable address from the RPC; try again shortly"
+        )
     return address
 
 
 async def derive_smart_account_address_strict(
     mnemonic: str, rpc_url: str = "https://sepolia.base.org"
 ) -> Optional[str]:
-    """Like :func:`_derive_smart_account_address` but never falls back.
-
-    Returns ``None`` on ANY failure (RPC error, empty result) instead of the
-    EOA address — for callers that report the address to someone else and
-    must never present the EOA as the Smart Account (e.g. the pair ``ack``
-    frame, which the relay uses to look up billing). The EOA is derived
-    synchronously before the first ``await``, so the phrase is only needed
-    for that instant.
+    """Like :func:`_derive_smart_account_address` but returns ``None`` on ANY
+    failure instead of raising: for callers that only *report* the address
+    (e.g. the pair ``ack`` frame, which the relay uses to look up billing) and
+    must simply omit it when unknown. Never returns the EOA address.
     """
     try:
-        eoa_address = _get_eoa_address(mnemonic)
-    except Exception:
-        return None
-    try:
-        return await _query_smart_account_for_owner(eoa_address, rpc_url)
+        return await _derive_smart_account_address(mnemonic, rpc_url)
     except Exception:
         return None
 
