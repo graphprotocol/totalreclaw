@@ -94,7 +94,7 @@ async function gqlQuery<T>(
       body: JSON.stringify({ query, variables }),
     });
     if (!response.ok) {
-      const bodyText = await response.text().catch(() => '');
+      const bodyText = await Promise.resolve(response.text?.()).catch(() => '') ?? '';
       const err = classifySubgraphError(response.status, bodyText, response.headers?.get?.('retry-after') ?? null);
       if (err instanceof RelayReadBlocked) setReadBlock(err, walletAddress);
       else console.error(`[search] gqlQuery HTTP ${response.status}: ${bodyText.slice(0, 200) || 'no body'}`);
@@ -647,18 +647,8 @@ export async function fetchFactForForget(
     body: JSON.stringify({ query, variables: { id: factId } }),
   });
   if (!response.ok) {
-    const err = classifySubgraphError(
-      response.status,
-      await response.text().catch(() => ''),
-      response.headers?.get?.('retry-after') ?? null,
-    );
-    if (err instanceof RelayReadBlocked) {
-      setReadBlock(err, owner);
-      throw err;
-    }
     throw new Error(`fact lookup failed: HTTP ${response.status}`);
   }
-  clearReadBlock(owner);
   const json = (await response.json()) as {
     data?: { fact?: (SubgraphSearchFact & { owner?: string }) | null };
     errors?: unknown[];
