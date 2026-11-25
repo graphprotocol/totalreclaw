@@ -534,7 +534,7 @@ export async function fetchFactForForget(
   const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${effectiveRelayUrl}/v1/subgraph`;
   const query = `
     query GetFactForForget($id: ID!) {
-      fact(id: $id) { id owner isActive }
+      fact(id: $id) { id owner isActive encryptedBlob }
     }
   `;
   const headers: Record<string, string> = {

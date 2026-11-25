@@ -81,6 +81,8 @@ export interface DecryptedCandidate {
   decayScore: number;
   createdAt: number;
   version: number;
+  /** True when the user pinned this fact (PRD-04 DEP-5): never superseded or tombstoned by dedup. */
+  pinned?: boolean;
 }
 
 /** A match result from near-duplicate detection. */
@@ -163,6 +165,24 @@ export function shouldSupersede(
 ): 'supersede' | 'skip' {
   const wasm = getWasm();
   return wasm.shouldSupersede(newImportance, existingFact.importance) ? 'supersede' : 'skip';
+}
+
+/**
+ * Store-time dedup decision for a near-duplicate match (PRD-04 DEP-5).
+ *
+ * A pinned existing fact is never tombstoned, whether the write is explicit
+ * or automatic: the new write is skipped (`skip_pinned`). Otherwise an
+ * explicit remember always supersedes, and a batch write follows
+ * {@link shouldSupersede}.
+ */
+export function dedupAction(
+  existingFact: DecryptedCandidate,
+  newImportance: number,
+  isExplicitRemember: boolean,
+): 'supersede' | 'skip' | 'skip_pinned' {
+  if (existingFact.pinned) return 'skip_pinned';
+  if (isExplicitRemember) return 'supersede';
+  return shouldSupersede(newImportance, existingFact);
 }
 
 // ---------------------------------------------------------------------------

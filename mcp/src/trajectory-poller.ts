@@ -40,6 +40,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { filterForAutoExtraction } from './pii.js';
 
 // ---------------------------------------------------------------------------
 // Public surface
@@ -218,7 +219,11 @@ export function startTrajectoryPoller(
           const { kept, dropped } = deps.filterByImportance(rawFacts);
           deps.logger.info(`extractd: importance-filter kept=${kept.length} dropped=${dropped}`);
           const maxFacts = deps.getMaxFactsPerExtraction();
-          const facts = kept.slice(0, maxFacts);
+          // PRD-04 DEP-4: automatic writes store only `allow` verdicts.
+          // `block` and `flag` facts are dropped here (never stored, never
+          // logged by text); only an explicit remember with a confirmation
+          // token may store a sensitive value.
+          const facts = filterForAutoExtraction(kept.slice(0, maxFacts)).kept;
           if (facts.length > 0) {
             const stored = await deps.persistFacts(facts);
             deps.logger.info(`extractd: stored ${stored} facts to encrypted vault`);

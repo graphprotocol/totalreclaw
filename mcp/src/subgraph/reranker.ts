@@ -95,6 +95,8 @@ export interface RerankerCandidate {
   createdAt?: number;
   /** Memory Taxonomy v1 source ("user" | "user-inferred" | ... ). */
   source?: string;
+  /** True when the user pinned this fact (PRD-04 DEP-5). Sent to core as `pinned`. */
+  pinned?: boolean;
 }
 
 export interface RerankerResult extends RerankerCandidate {
@@ -103,6 +105,15 @@ export interface RerankerResult extends RerankerCandidate {
   cosineSimilarity?: number;
   /** Source weight multiplier applied (1.0 if no weighting). */
   sourceWeight?: number;
+}
+
+/**
+ * Core's default pin multiplier (PRD-04 F1 / DEP-5, 1.5), or `undefined` on a
+ * core without it. Pass it as the `pinBoost` argument of {@link rerank}.
+ */
+export function defaultPinBoost(): number | undefined {
+  const fn = (core as unknown as { defaultPinBoost?: () => number }).defaultPinBoost;
+  return typeof fn === 'function' ? fn() : undefined;
 }
 
 // Core's RankedResult JSON shape (returned by rerankWithConfig).
@@ -135,6 +146,9 @@ interface CoreRankedResult {
  * @param applySourceWeights When true, multiply the final fused score by
  *                           the v1 source-weight (Retrieval v2 Tier 1).
  *                           Default true at all production call sites.
+ * @param pinBoost           Core's multiplier for candidates with
+ *                           `pinned: true` (see {@link defaultPinBoost}).
+ *                           Omitted or <= 1.0: ranking is unchanged.
  */
 export function rerank(
   query: string,
@@ -143,6 +157,7 @@ export function rerank(
   topK: number = 16,
   _legacyWeights?: Partial<RankingWeights>,
   applySourceWeights: boolean = false,
+  pinBoost?: number,
 ): RerankerResult[] {
   if (candidates.length === 0) return [];
 
@@ -156,6 +171,7 @@ export function rerank(
     embedding: c.embedding ?? [],
     timestamp: c.createdAt != null ? String(c.createdAt) : '',
     ...(c.source ? { source: c.source } : {}),
+    ...(c.pinned ? { pinned: true } : {}),
   }));
 
   // Empty queryEmbedding is allowed: core will compute cosine = 0 across
@@ -170,6 +186,7 @@ export function rerank(
     candidatesJson,
     topK,
     applySourceWeights,
+    pinBoost !== undefined ? pinBoost : null,
   ) as CoreRankedResult[];
 
   // Map core results back to RerankerResult, restoring the optional
@@ -187,6 +204,7 @@ export function rerank(
       importance: orig?.importance,
       createdAt: orig?.createdAt,
       source: orig?.source,
+      pinned: orig?.pinned,
       rrfScore: r.score,
       cosineSimilarity: r.cosine_score,
       sourceWeight: applySourceWeights ? (r.source_weight ?? 1.0) : undefined,

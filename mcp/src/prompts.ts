@@ -75,6 +75,8 @@ Call totalreclaw_remember without being asked whenever the user shares:
 - opinions and values that shape future interactions.
 Do NOT store temporary context (today's weather, a one-time task), generic knowledge, or credentials (passwords, API keys, tokens).
 
+**Sensitive values (card numbers, IBANs, API keys, passwords, IDs).** \`totalreclaw_remember\` refuses them and returns \`blocked: "sensitive"\` with a message and a \`confirm_token\`. Relay the message to the user and wait. Only if they confirm in a later message, call it again with \`allow_sensitive=true\` and that \`confirm_token\`; without a token from an earlier turn the override is ignored.
+
 Hygiene:
 - Check recalled memories before storing to avoid duplicates; store-time dedup also runs.
 - For a correction, store the new fact. The system handles supersession.
@@ -98,6 +100,7 @@ Besides remember and forget, three tools correct stored memories without wiping 
 - "pin that" / "never forget this" -> totalreclaw_pin (keeps a fact through auto-resolution);
 - "that was actually a directive, not a preference" -> totalreclaw_retype;
 - "that was work context" / "file that under personal" / "put that in my work memories" / "categorize as X" / "that's a work thing" -> totalreclaw_set_scope (scopes: work, personal, health, family, creative, finance, misc, unspecified).
+Automatic extraction never updates or deletes a pinned fact, and pinned facts rank higher in recall when they match the query; pinning does not add a fact to every recall. Memories marked \`pinned: true\` are ones the user chose to protect. Never forget a pinned memory unless the user asked to forget that specific memory. When the user reverses a pinned decision, remember the new decision and ask whether to unpin or remove the old one.
 All three work by supersession: they write a new claim with the override and link the original via superseded_by. The original stays as a tombstone, so history is inspectable. All three are idempotent.
 
 ## End of conversation
