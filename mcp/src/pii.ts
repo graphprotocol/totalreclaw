@@ -22,7 +22,7 @@
  * remember still stores it (the user asked for it).
  */
 
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /** Tool parameter that overrides a `block` on an explicit remember. */
 export const ALLOW_SENSITIVE_PARAM = 'allow_sensitive';
@@ -123,17 +123,29 @@ export const CONFIRM_TOKEN_MAX_LIVE = 32;
 
 /**
  * Process-wide store of single-use confirmation tokens for sensitive writes.
- * A token records the category at issue time and is accepted only if it is
- * known, unexpired, old enough, and the category matches. Clock injectable.
+ * A token records the category and a keyed hash of the normalized text it was
+ * issued for, and is accepted only if it is known, unexpired, old enough, and
+ * the category and value hash match. The plaintext value is never stored: only
+ * an HMAC-SHA256 under a random per-process salt. A retry with a different
+ * value (even in the same category) is rejected like an invalid token.
+ *
+ * Unlike Hermes, there is no conversation binding: MCP tool calls carry no
+ * conversation id, so only value binding is possible here. Clock injectable.
  */
 export class ConfirmationStore {
-  private tokens = new Map<string, { category: string; issuedAt: number }>();
+  private tokens = new Map<string, { category: string; issuedAt: number; valueHash: Buffer }>();
+  private readonly salt = randomBytes(32);
 
   constructor(private clock: () => number = () => Date.now()) {}
 
-  issue(category: string | undefined): string {
+  private hash(text: string | undefined): Buffer {
+    const normalized = String(text ?? '').normalize('NFKC').toLowerCase().split(/\s+/).filter(Boolean).join(' ');
+    return createHmac('sha256', this.salt).update(normalized, 'utf8').digest();
+  }
+
+  issue(category: string | undefined, text?: string): string {
     const token = randomBytes(8).toString('hex');
-    this.tokens.set(token, { category: String(category), issuedAt: this.clock() });
+    this.tokens.set(token, { category: String(category), issuedAt: this.clock(), valueHash: this.hash(text) });
     while (this.tokens.size > CONFIRM_TOKEN_MAX_LIVE) {
       const oldest = this.tokens.keys().next().value as string;
       this.tokens.delete(oldest);
@@ -142,7 +154,7 @@ export class ConfirmationStore {
   }
 
   /** Returns `null` and consumes the token if valid, else the reject reason. */
-  redeem(token: unknown, category: string | undefined): string | null {
+  redeem(token: unknown, category: string | undefined, text?: string): string | null {
     if (typeof token !== 'string' || token === '') return 'no_token';
     const entry = this.tokens.get(token);
     if (!entry) return 'unknown_token';
@@ -153,6 +165,7 @@ export class ConfirmationStore {
     }
     if (age < CONFIRM_TOKEN_MIN_AGE_MS) return 'too_soon';
     if (entry.category !== String(category)) return 'category_mismatch';
+    if (!timingSafeEqual(entry.valueHash, this.hash(text))) return 'value_mismatch';
     this.tokens.delete(token);
     return null;
   }
@@ -192,7 +205,7 @@ export function screenExplicit(
   if (decision.decision === 'block') {
     try {
       if (allowSensitive) {
-        const reason = store.redeem(confirmToken, decision.category);
+        const reason = store.redeem(confirmToken, decision.category, text);
         if (reason === null) {
           console.error(`[pii] remember storing sensitive text on explicit request (category=${decision.category})`);
           return { decision, notice: null };
@@ -201,7 +214,7 @@ export function screenExplicit(
       } else {
         console.error(`[pii] remember blocked: sensitive text (category=${decision.category})`);
       }
-      return { decision, notice: sensitiveBlockNotice(decision, store.issue(decision.category)) };
+      return { decision, notice: sensitiveBlockNotice(decision, store.issue(decision.category, text)) };
     } catch (err) {
       // Fail closed: never store, never throw.
       console.error(`[pii] remember blocked: confirmation store error (${err instanceof Error ? err.name : 'error'})`);

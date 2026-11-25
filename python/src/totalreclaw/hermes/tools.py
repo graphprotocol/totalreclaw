@@ -213,6 +213,11 @@ async def remember(
         text,
         parse_allow_sensitive(args.get("allow_sensitive")),
         _confirm_token if isinstance(_confirm_token, str) else None,
+        # Host conversation id when the tool layer passes one (#718): binds the
+        # confirmation token to that conversation. None = value binding only.
+        conversation_id=(
+            kwargs.get("session_id") if isinstance(kwargs.get("session_id"), str) else None
+        ),
     )
     if pii_notice is not None:
         return json.dumps(pii_notice)

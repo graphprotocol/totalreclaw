@@ -594,3 +594,100 @@ class TestAutomaticPathsStoreOnlyAllow:
             provider.on_memory_write("add", "user", CLEAN_TEXT)
             assert mp._MIRROR_WORKER.drain(timeout=5.0)
         assert [a["text"] for a in called] == [CLEAN_TEXT]
+
+
+CARD_TEXT_2 = "my other card is 5500 0000 0000 0004"
+
+
+class TestConfirmTokenBinding:
+    """#718: a token is bound to the value (and the conversation, when known)."""
+
+    async def test_same_value_accepted_whitespace_and_case_insensitive(self, store) -> None:
+        client = _remember_client()
+        state = _plugin_state(client)
+        first = await _remember({"text": CARD_TEXT}, state)
+        store.note_turn_completed()
+        res = await _remember(
+            {"text": "  " + CARD_TEXT.upper().replace(" ", "  ") + " ", "allow_sensitive": True,
+             "confirm_token": first["confirm_token"]},
+            state,
+        )
+        assert res["stored"] is True
+
+    async def test_different_value_same_category_rejected_like_invalid_token(self, store, caplog) -> None:
+        client = _remember_client()
+        state = _plugin_state(client)
+        caplog.set_level(logging.DEBUG)
+        first = await _remember({"text": CARD_TEXT}, state)
+        store.note_turn_completed()
+        res = await _remember(
+            {"text": CARD_TEXT_2, "allow_sensitive": True, "confirm_token": first["confirm_token"]}, state
+        )
+        # Same response shape as an invalid token: a fresh block notice.
+        assert res["blocked"] == "sensitive" and res["category"] == "payment_card"
+        assert res["confirm_token"] != first["confirm_token"]
+        assert "reason=value_mismatch" in caplog.text
+        assert "5500" not in caplog.text
+        client.remember.assert_not_called()
+        # The original value still redeems with its own token.
+        res2 = await _remember(
+            {"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": first["confirm_token"]}, state
+        )
+        assert res2["stored"] is True
+
+    def test_store_holds_no_plaintext(self) -> None:
+        s = pii.ConfirmationStore(clock=_Clock())
+        s.issue("payment_card", CARD_TEXT, "conv-a")
+        assert "4111" not in repr(s._tokens)
+
+    def test_reuse_rejected(self) -> None:
+        s = pii.ConfirmationStore(clock=_Clock())
+        t = s.issue("payment_card", CARD_TEXT)
+        s.note_turn_completed()
+        assert s.redeem(t, "payment_card", CARD_TEXT) is None
+        assert s.redeem(t, "payment_card", CARD_TEXT) == "unknown_token"
+
+    def test_expiry_unchanged(self) -> None:
+        clock = _Clock()
+        s = pii.ConfirmationStore(clock=clock)
+        t = s.issue("payment_card", CARD_TEXT)
+        s.note_turn_completed()
+        clock.t += pii.CONFIRM_TOKEN_TTL_SECONDS
+        assert s.redeem(t, "payment_card", CARD_TEXT) == "expired"
+
+    def test_conversation_mismatch_rejected(self) -> None:
+        s = pii.ConfirmationStore(clock=_Clock())
+        t = s.issue("payment_card", CARD_TEXT, "chat-a")
+        s.note_turn_completed("chat-a")
+        assert s.redeem(t, "payment_card", CARD_TEXT, "chat-b") == "conversation_mismatch"
+        assert s.redeem(t, "payment_card", CARD_TEXT, None) == "conversation_mismatch"
+        assert s.redeem(t, "payment_card", CARD_TEXT, "chat-a") is None
+
+    def test_other_conversations_turn_does_not_release_token(self) -> None:
+        s = pii.ConfirmationStore(clock=_Clock())
+        t = s.issue("payment_card", CARD_TEXT, "chat-a")
+        s.note_turn_completed("chat-b")  # chat B finishes a turn
+        assert s.redeem(t, "payment_card", CARD_TEXT, "chat-a") == "same_turn"
+        s.note_turn_completed("chat-a")
+        assert s.redeem(t, "payment_card", CARD_TEXT, "chat-a") is None
+
+    async def test_session_id_kwarg_binds_conversation(self, store) -> None:
+        from totalreclaw.hermes.tools import remember
+
+        client = _remember_client()
+        state = _plugin_state(client)
+
+        async def call(args, **kw):
+            with patch("totalreclaw.embedding.get_embedding", return_value=None):
+                return json.loads(await remember(args, state, **kw))
+
+        first = await call({"text": CARD_TEXT}, session_id="chat-a")
+        store.note_turn_completed("chat-b")
+        args = {"text": CARD_TEXT, "allow_sensitive": True, "confirm_token": first["confirm_token"]}
+        assert (await call(args, session_id="chat-a"))["blocked"] == "sensitive"
+        client.remember.assert_not_called()
+        second = await call({"text": CARD_TEXT}, session_id="chat-a")
+        store.note_turn_completed("chat-a")
+        args["confirm_token"] = second["confirm_token"]
+        assert (await call(args, session_id="chat-b"))["blocked"] == "sensitive"
+        client.remember.assert_not_called()
