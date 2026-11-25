@@ -1157,6 +1157,21 @@ async def upgrade(args: dict, state: "PluginState", **kwargs) -> str:
             # the Smart Account address was populated elsewhere.
             pass
 
+        # Already Pro: the relay refuses a second Pro checkout, which used to
+        # surface as an error (#472). Best-effort probe; if it fails, fall
+        # through to the normal checkout so a real upgrade is never blocked.
+        try:
+            current = await client.status()
+            if str(getattr(current, "tier", "")).lower() == "pro":
+                return json.dumps({
+                    "already_pro": True,
+                    "message": (
+                        "You're already on Pro, so there is nothing to upgrade."
+                    ),
+                })
+        except Exception:
+            pass
+
         checkout = await client.relay.create_checkout()
         payload = {
             "checkout_url": checkout.checkout_url,

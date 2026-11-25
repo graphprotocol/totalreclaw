@@ -563,15 +563,16 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
             return (
                 "## TotalReclaw memory\n"
                 "TotalReclaw is the user's long-term memory: end-to-end "
-                "encrypted, on-chain, and portable across every AI tool they "
-                "run. Hermes' built-in memory (USER.md / MEMORY.md) is only "
-                "the short profile loaded each session. Use "
+                "encrypted, on-chain, and portable across their AI tools. "
+                "Hermes' built-in memory (USER.md / MEMORY.md) is only "
+                "the short profile; use the built-in `memory` tool only when "
+                "the user names it (\"write to USER.md\"). Use "
                 "`totalreclaw_remember` to remember and `totalreclaw_recall` "
-                "to recall anything about the user. Entries saved with the "
+                "to recall anything about them. Entries saved with the "
                 "built-in `memory` tool are copied to TotalReclaw "
-                "automatically, so never save the same fact with both. To "
-                "forget something, call `totalreclaw_forget` and also remove "
-                "it from the built-in memory if it's there."
+                "automatically, so never save a fact with both. To "
+                "forget, call `totalreclaw_forget` and also remove it from "
+                "the built-in memory if present."
             )
         return (
             "## TotalReclaw setup pending\n"

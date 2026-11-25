@@ -1979,7 +1979,7 @@ wheels = [
 
 [[package]]
 name = "totalreclaw"
-version = "2.5.3"
+version = "2.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -2024,7 +2024,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5" },
     { name = "qrcode", extras = ["pil"], specifier = ">=7.4,<9" },
-    { name = "totalreclaw-core", specifier = ">=2.6.1,<3.0.0" },
+    { name = "totalreclaw-core", specifier = ">=2.7.0,<3.0.0" },
     { name = "transformers", specifier = ">=4.40,<5" },
     { name = "websockets", specifier = ">=12.0" },
 ]
@@ -2032,15 +2032,15 @@ provides-extras = ["keychain", "dev"]
 
 [[package]]
 name = "totalreclaw-core"
-version = "2.6.1"
+version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d6/6c/74efb2892fea1f57ae18aca78719dc22aa55b68dffadfe1782ef77fb83f0/totalreclaw_core-2.6.1.tar.gz", hash = "sha256:7208497b85d522143a17458f571581784896df96ebdf513d069a599900d7d43c", size = 226594, upload-time = "2026-11-02T04:05:20.127Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/22/ec/b9dc262e225898eb0605d0f7ef6004e3d2d087025483051944ec4102f894/totalreclaw_core-2.7.0.tar.gz", hash = "sha256:6b60ad90d2b3e01be86833ffef23dec8cc7df63bab100620974bdd0ffc4f5654", size = 270986, upload-time = "2026-11-23T12:42:32.478Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/b3/f48413d0d477f039c4c4ca522cf8709257a5e194cd604f2bfd890309b38b/totalreclaw_core-2.6.1-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:a0eb238cf46d0a52f08918649d26b2650d241cd30efffc82fd36b6fb04bd36ad", size = 1679352, upload-time = "2026-11-02T04:05:09.33Z" },
-    { url = "https://files.pythonhosted.org/packages/2e/22/a0a10809582a1871233991848367cc85ef3f58af25bba6322b51cf94f323/totalreclaw_core-2.6.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:11a87af7736cac53f98a3e3fff3e29c0f3873d8d8cd23f48dbc0648cac0d8dac", size = 1605542, upload-time = "2026-11-02T04:05:12.501Z" },
-    { url = "https://files.pythonhosted.org/packages/b9/0b/4eea32fc208a53882953d2ee638b3abb7f34592cb0a64db27d29573d62b1/totalreclaw_core-2.6.1-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:1e78ab0c14fcac93d27eb081ca225b939ef2c47333f0dd89cef702fe6b87eb7a", size = 1825484, upload-time = "2026-11-02T04:05:14.365Z" },
-    { url = "https://files.pythonhosted.org/packages/3a/c3/dab380690867dfc3255a01f7dfc00ff70389c33add55a3e393ffd1855834/totalreclaw_core-2.6.1-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:d3f31dce2ec2e77eb54bf94c3650155503f9369f104c6724cfeb685b48f855df", size = 1811800, upload-time = "2026-11-02T04:05:16.368Z" },
-    { url = "https://files.pythonhosted.org/packages/fc/53/9b6524a03678b13f5da54343656e54952ff39f95c75bb271c95f3333fb57/totalreclaw_core-2.6.1-cp310-abi3-win_amd64.whl", hash = "sha256:3e57039d65c893ab8f85c664355b25cffc5839d22fe4355f909beb620a4262fb", size = 1537868, upload-time = "2026-11-02T04:05:18.018Z" },
+    { url = "https://files.pythonhosted.org/packages/17/12/0caee18177a7ad4c544f681402f51049004fe5ba47cb3c6e72a45ab347f4/totalreclaw_core-2.7.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:519b44ee9e62fb3b59680c14e07d6d6fc0de493acfc28e8153226a892d53b02b", size = 1783774, upload-time = "2026-11-23T12:42:24.649Z" },
+    { url = "https://files.pythonhosted.org/packages/af/7d/1e5ca7a3baaf8eb8c221ebaad4f5563c8bdf6408d0860a2deb8f5910f704/totalreclaw_core-2.7.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:b228cc5d0f33c8f9ec72de200186f64361bf8ad26cdd2a84485b67a760700a53", size = 1714535, upload-time = "2026-11-23T12:42:26.712Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/84/c3ee4b91800cea635e1a98d5d62901c43aa95db32c6ec21ebf57eeae8de0/totalreclaw_core-2.7.0-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:0e9f4b71fd797b24d351d28a91af002912e371bcb30d3f08bb9cce36c7039b62", size = 1951215, upload-time = "2026-11-23T12:42:28.046Z" },
+    { url = "https://files.pythonhosted.org/packages/80/a1/4d51c47167055883e68dcfa55fd4f85dce7c135fd200ea3383a50894afa7/totalreclaw_core-2.7.0-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:c9905bb175b0ca0f2d9726043e622f4db5ffe2acf0acfacb12427761938878dd", size = 1931864, upload-time = "2026-11-23T12:42:29.445Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/9a/c9a51cff9b43eb1f265eb7f3ef381ef6dc9c860186519d5ddd81e2281411/totalreclaw_core-2.7.0-cp310-abi3-win_amd64.whl", hash = "sha256:6b05a0f41891b38a073c4c3c967094640afeab133a776a39fa67bde2219e9fc7", size = 1649526, upload-time = "2026-11-23T12:42:30.97Z" },
 ]
 
 [[package]]

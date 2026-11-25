@@ -35,7 +35,7 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 
 **Don't double-call.** If auto-extraction just fired (recent log lines show extraction), skip the manual `totalreclaw_remember` — embedding dedup will silently drop the duplicate, but you waste a write against quota.
 
-**Hermes' built-in `memory` tool** keeps the short profile (`USER.md` / `MEMORY.md`) Hermes loads every session. It runs alongside TotalReclaw. For "remember X", use `totalreclaw_remember`, not the built-in tool. Entries you add or edit there are copied into the vault by themselves, so don't repeat them with `totalreclaw_remember`. Removing an entry there only frees room in the profile and does NOT forget it in TotalReclaw.
+**Hermes' built-in `memory` tool** keeps the short profile (`USER.md` / `MEMORY.md`) Hermes loads every session. It runs alongside TotalReclaw. For "remember X", use `totalreclaw_remember`, not the built-in tool. The exception is when the user names the built-in store ("write this to USER.md", "MEMORY.md", "built-in memory"): then use the built-in `memory` tool as asked. Entries you add or edit there are copied into the vault by themselves, so don't repeat them with `totalreclaw_remember`. Removing an entry there only frees room in the profile and does NOT forget it in TotalReclaw.
 
 **Don't store transient noise.** Skip `totalreclaw_remember` for:
 - Casual greetings, banter, acknowledgements
@@ -92,7 +92,7 @@ Pattern is always **recall first → mutate second**, because the mutation tools
 ### Status / upgrade / import
 
 - "status" / "how am I doing on quota" / "what tier am I on" → `totalreclaw_status` (no args). Returns tier, used / limit, and smart-account address.
-- "upgrade to Pro" / "go Pro" / more memories per month → `totalreclaw_upgrade` (returns a Stripe checkout URL — paste verbatim, no paraphrase).
+- "upgrade to Pro" / "go Pro" / more memories per month → `totalreclaw_upgrade` (returns a Stripe checkout URL — paste verbatim, no paraphrase; if it returns `already_pro`, tell the user they are already on Pro and there is nothing to upgrade).
 - "update / upgrade TotalReclaw" to a newer version ("latest", "the new RC", "rc6", a version number) is a **software update, not Pro** → see [Updating TotalReclaw](#updating-totalreclaw).
 - User asks to change the model that extracts/stores memories ("use glm-5.3-flash for memories") → `totalreclaw_set_extraction_model` with that model id (`default` resets). Never edit `.env` or restart for this; otherwise the model is automatic, so don't bring it up.
 - "import from Mem0 / ChatGPT / Claude / Gemini / mcp-memory-server" → `totalreclaw_import_from` with `dry_run=True` first to surface the count + estimated free-tier impact, then ask the user to confirm before the real run.
@@ -152,7 +152,7 @@ When the user asks to update TotalReclaw to a newer version, follow the **Update
 
 ## Restarting Hermes
 
-You cannot restart Hermes yourself. Hermes blocks gateway restart / stop commands from agent sessions: in the terminal, in cron jobs and in scripts. A `/restart` you write in a reply is plain text, not a command. Don't write restart scripts, schedule restarts or look for another way around this. Ask the user, in one line that matches how they're talking to you:
+You cannot restart Hermes yourself. Hermes blocks gateway restart / stop commands from agent sessions: in the terminal, in cron jobs and in scripts. A `/restart` you write in a reply is plain text, not a command. Don't write restart scripts, schedule restarts or look for another way around this. Before you ask, stop any background work you started (retry loops, recall jobs, import tasks): a live background session makes the gateway refuse the restart and the user waits for the timeout. Ask the user, in one line that matches how they're talking to you:
 
 - **In a chat app** (Telegram, Discord, Slack, WhatsApp, Signal, Matrix, ...): *"Send `/restart` here to finish — I'll be back in a few seconds."* This is the default for gateway chats. It works under systemd and launchd too: Hermes exits and the service manager starts it again. Never give a chat-app user shell commands for this.
 - **In the terminal CLI** (`hermes chat` / TUI, no chat app): *"Run `hermes gateway restart` in another terminal, then come back here."*
@@ -166,6 +166,8 @@ Only fall back to a shell command for a chat-app user if `/restart` answered "no
 - Your context says TotalReclaw memory is **OFFLINE**, or `totalreclaw_status` returns `"degraded": true` → the totalreclaw package can't be loaded in this Hermes install, so nothing is being saved or recalled. Tell the user in one sentence, don't claim anything was remembered, and give them the `fix` command from `totalreclaw_status` if they want to repair it.
 - `totalreclaw memory-status` says `none` (or another provider), or the gateway log says `Memory provider 'totalreclaw' is configured but not installed` → TotalReclaw isn't Hermes' memory provider yet (pairing sets it unless another provider is active, but only best-effort). Run `totalreclaw activate-memory-provider` (add `--force` if it refuses because the git wrapper owns `~/.hermes/plugins/totalreclaw/__init__.py`), then ask the user to restart Hermes (see [Restarting Hermes](#restarting-hermes): in a chat app, they send `/restart`). Don't disable Hermes' `memory` toolset: on Hermes 0.22+ that hides TotalReclaw's provider tools too.
 - User says done but `credentials.json` missing → PIN expired or wrong phrase entered; call `totalreclaw_pair` again.
+- Never write a pair link or relay host from memory in your replies. Give only the URL a tool returned: the relay may be staging, and a remembered production address would send the user to the wrong place.
+- `totalreclaw_report_qa_bug` (RC builds only) returns `filed: false` or an `error` → the report was NOT filed. Tell the user so in your next message, quote the error word for word and give the `draft_path`. Never say it was filed. On a stable build the tool does not exist: say so, don't improvise another way to file.
 - `totalreclaw_pair` returns `already_configured` → an account is already set up; tell the user. Only if they ask to replace it, call again with `replace=true`: the pairing page warns them and only they can confirm there. Never move, rename or delete `credentials.json` to get around this.
 - `onboarding required` → credentials missing; redo from the account-setup step in the install guide.
 - `quota_exceeded` → relay the result's `error` (it already carries usage and the reset date), then offer `totalreclaw_upgrade` (free tier).
