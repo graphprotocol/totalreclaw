@@ -15,7 +15,9 @@ from tests.test_operations import EOA_ADDRESS, EOA_PRIVATE_KEY, TEST_MNEMONIC
     "value,expected",
     [
         (1, 1),       # int 1 is 1 on the 1-10 scale (was 10)
-        (1.0, 1),     # float 1.0 = 1 on 1-10 (internal producers now send ints; legacy queued floats are decoded at the drain)
+        (1.0, 10),    # float <= 1 is the legacy 0-1 scale (Crystal 10/10.0 must stay 10)
+        (0.8, 8),
+        (1.5, 2),     # float > 1 is the 1-10 scale, rounded
         (0.7, 7),     # legacy 0-1 float
         (0.5, 5),
         (5, 5),
@@ -33,7 +35,7 @@ def test_normalize_importance(value, expected):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("given,stored", [(1, 1), (0.7, 7), (5, 5), (10, 10), (1.0, 1)])
+@pytest.mark.parametrize("given,stored", [(1, 1), (0.7, 7), (5, 5), (10, 10), (1.0, 10)])
 async def test_store_fact_blob_importance_and_active_decay_score(given, stored):
     keys = derive_keys_from_mnemonic(TEST_MNEMONIC)
     relay = AsyncMock(spec=RelayClient)
@@ -250,3 +252,66 @@ def test_queued_entries_old_float_and_new_int_forms_decode(tmp_path, monkeypatch
         "new format ten about planes": 10,
         "new format six about cars": 6,
     }
+
+
+# ---------------------------------------------------------------------------
+# Regression from #807: a Session Crystal with importance 10 reaches the blob
+# as 10 (the producer sends 10 / 10.0 == 1.0), with decayScore 1.0.
+# ---------------------------------------------------------------------------
+
+
+def test_session_crystal_importance_10_stored_as_10():
+    from totalreclaw.agent.debrief import Crystal
+    from totalreclaw.agent.lifecycle import session_debrief
+    import totalreclaw.operations as ops
+
+    keys = derive_keys_from_mnemonic(TEST_MNEMONIC)
+    relay = AsyncMock(spec=RelayClient)
+    relay._relay_url = "https://api-staging.totalreclaw.xyz"
+    wallet = WalletContext(
+        keys=keys, owner="0x1234", eoa_private_key=EOA_PRIVATE_KEY,
+        eoa_address=EOA_ADDRESS, sender="0x1234",
+    )
+    seen = {}
+    real_build = ops.build_canonical_claim_v1
+
+    def _build(*a, **kw):
+        seen["importance"] = kw.get("importance")
+        return real_build(*a, **kw)
+
+    def _encode(payload):
+        seen["decay"] = payload.decay_score
+        return b"x"
+
+    class _Client:
+        async def remember(self, text, source="python-client", **fields):
+            with patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock), \
+                 patch("totalreclaw.operations.build_canonical_claim_v1", side_effect=_build), \
+                 patch("totalreclaw.operations.encode_fact_protobuf", side_effect=_encode):
+                return await store_fact(
+                    text=text, wallet=wallet, relay=relay, source=source, **fields
+                )
+
+    client = _Client()
+    state = MagicMock()
+    state.is_configured.return_value = True
+    state.get_client.return_value = client
+    state.session_id = "s1"
+    state.get_all_messages.return_value = [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"turn {i}"}
+        for i in range(8)
+    ]
+    crystal = Crystal(
+        narrative="User planned a Lisbon trip and booked an aisle seat.",
+        key_outcomes=["Lisbon flight booked"],
+        importance=10,
+        topics_discussed=["travel"],
+    )
+    with patch("totalreclaw.agent.lifecycle.generate_crystal", new=AsyncMock(return_value=crystal)), \
+         patch("totalreclaw.agent.lifecycle.crystal_gate_passes", return_value=True), \
+         patch("totalreclaw.embedding.get_embedding", return_value=None):
+        ids = session_debrief(state, stored_fact_texts=[])
+
+    assert ids, "Crystal was not stored"
+    assert seen["importance"] == 10
+    assert seen["decay"] == pytest.approx(1.0)
