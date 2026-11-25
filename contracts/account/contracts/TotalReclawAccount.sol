@@ -184,7 +184,10 @@ contract TotalReclawAccount is SimpleAccount {
 
     struct GrantStorage {
         uint256 nonce; // grant nonce; 0 = uninstalled
-        uint256 issuedAt; // informational -- never compared to block.timestamp
+        // informational -- never compared to block.timestamp. Accepted
+        // limitation: grants have no expiry; an installed or still
+        // installable grant stays valid until the owner revokes the signer.
+        uint256 issuedAt;
         address target; // scope.target (DataEdge address)
         uint256 valueMax; // always 0 per spec
         // scope.selectors (execute, executeBatch). Gates ONLY the account's
@@ -389,7 +392,13 @@ contract TotalReclawAccount is SimpleAccount {
         // Replay protection -- nonce must be at-or-above the minimum.
         uint256 minN = $.minNonces[grant.signer];
         if (minN == 0) minN = 1; // first install
-        if (grant.nonce < minN) return SIG_VALIDATION_FAILED;
+        // `type(uint256).max` is the burn sentinel set by `revokeSessionKey`;
+        // it must reject even a grant whose nonce is itself `type(uint256).max`.
+        if (grant.nonce < minN || minN == type(uint256).max) return SIG_VALIDATION_FAILED;
+        // A re-install must be strictly newer than the installed grant, so
+        // a holder cannot swap in an older owner-signed grant.
+        uint256 installedNonce = $.grants[grant.signer].nonce;
+        if (installedNonce != 0 && grant.nonce <= installedNonce) return SIG_VALIDATION_FAILED;
 
         // Recover the master wallet from the EIP-712 grant signature and
         // verify it is THIS account's owner. Unlike the standalone-module
@@ -426,25 +435,20 @@ contract TotalReclawAccount is SimpleAccount {
     // Mutating -- owner-gated session-key management.
     // -------------------------------------------------------------------
 
-    /// @notice Revoke a session key. Gated by the inherited `onlyOwner`
-    ///         modifier, which accepts EITHER the owner EOA calling
-    ///         directly, OR a self-call (i.e. an owner-signed UserOp
-    ///         whose callData is `execute(address(this), 0,
-    ///         abi.encodeCall(this.revokeSessionKey, (signer)))`) -- the
-    ///         pattern the SPA's "revoke" button uses. Idempotent:
-    ///         revoking an unknown or already-revoked signer is a silent
-    ///         no-op (no revert, no duplicate event).
+    /// @notice Revoke a session key permanently ("burn the signer"). Gated
+    ///         by the inherited `onlyOwner` modifier, which accepts EITHER
+    ///         the owner EOA calling directly, OR a self-call (i.e. an
+    ///         owner-signed UserOp whose callData is `execute(address(this),
+    ///         0, abi.encodeCall(this.revokeSessionKey, (signer)))`) -- the
+    ///         pattern the SPA's "revoke" button uses. Always takes effect:
+    ///         it deletes any installed grant and sets `minNonces[signer]`
+    ///         to `type(uint256).max`, so no grant for this signer, signed
+    ///         before or after, installed or not, can ever install again.
+    ///         To re-authorise, pair a fresh session key. Repeat calls are
+    ///         harmless and emit the event again.
     function revokeSessionKey(address signer) external onlyOwner {
         SessionKeyStorage storage $ = _sessionKeyStorage();
-        GrantStorage storage g = $.grants[signer];
-        if (g.nonce == 0) {
-            // Already revoked or never installed -- idempotent no-op.
-            return;
-        }
-
-        // Bump the min-nonce so this grant cannot be re-played even with
-        // the original signed payload.
-        $.minNonces[signer] = g.nonce + 1;
+        $.minNonces[signer] = type(uint256).max;
         delete $.grants[signer];
 
         emit SessionKeyRevoked(signer);
@@ -524,7 +528,11 @@ contract TotalReclawAccount is SimpleAccount {
         if (g.account != address(this)) return false; // grant binds to THIS account
         if (g.chainId != block.chainid) return false; // cross-chain replay guard
         if (g.verifyingContract != address(this)) return false; // P3-3: account-binding
-        if (g.valueMax != 0) return false; // session keys cannot move ETH
+        // Session keys cannot move ETH through `execute` (value must be 0).
+        // Accepted limitation: a session-key UserOp without a paymaster
+        // makes the account pay the EntryPoint prefund, so the account
+        // must hold no native balance or EntryPoint deposit.
+        if (g.valueMax != 0) return false;
         if (g.target == address(0)) return false;
         // The inner call runs AS the account, so a grant targeting the
         // account itself (upgradeToAndCall, withdrawDepositTo, revoke...) or
