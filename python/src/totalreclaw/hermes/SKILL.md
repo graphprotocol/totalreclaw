@@ -88,6 +88,7 @@ Pattern is always **recall first → mutate second**, because the mutation tools
 - `pin X as canonical` → recall → `totalreclaw_pin(fact_id)`. Automatic extraction never updates or deletes a pinned fact, and pinned facts rank higher in recall when they match the query — pinning does not add a fact to every recall.
 - `unpin X` → recall → `totalreclaw_unpin(fact_id)`.
 - Memories marked `pinned: true` are ones the user chose to protect. Never forget a pinned memory unless the user asked to forget that specific memory. When the user reverses a pinned decision, remember the new decision and ask whether to unpin or remove the old one.
+- Changing a pinned memory needs the user's yes. `totalreclaw_forget`, `_unpin`, `_retype`, `_set_scope`, and a `totalreclaw_remember` that restates a pinned memory, return `confirmation_required` with a message and a `confirm_token`, and change nothing. Relay the message and wait. Only if the user says yes in a later message, call the same tool again with the same arguments and that token. Never unpin, overwrite or forget a pinned memory on your own to make a new fact fit.
 - `change type of X to <type>` → recall → `totalreclaw_retype(fact_id, type)`. Use when the extractor misclassified.
 - `change scope of X to <scope>` → recall → `totalreclaw_set_scope(fact_id, scope)`.
 

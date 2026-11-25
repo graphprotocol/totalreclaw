@@ -109,12 +109,12 @@ REMEMBER = {
                 "type": "string",
                 "description": (
                     "The confirm_token from a previous blocked result. "
-                    "Required with allow_sensitive=true. Also required to "
-                    "store text the result flagged with "
-                    "confirmation_required='restates_forgotten': that text "
-                    "restates something the user asked to forget. Ask the "
-                    "user first, and pass the token only in a later turn "
-                    "after they said yes."
+                    "Required with allow_sensitive=true. Also required when "
+                    "the result has confirmation_required: either the text "
+                    "restates something the user asked to forget "
+                    "('restates_forgotten') or it is close to a pinned "
+                    "memory ('pinned_remember'). Ask the user first, and "
+                    "pass the token only in a later turn after they said yes."
                 ),
             },
         },
@@ -161,13 +161,26 @@ RECALL = {
 
 FORGET = {
     "name": "totalreclaw_forget",
-    "description": "Delete a specific memory from TotalReclaw by its ID.",
+    "description": (
+        "Delete a specific memory from TotalReclaw by its ID. A pinned "
+        "memory is not deleted until the user confirms: see confirm_token."
+    ),
     "parameters": {
         "type": "object",
         "properties": {
             "fact_id": {
                 "type": "string",
                 "description": "The UUID of the memory to delete",
+            },
+            "confirm_token": {
+                "type": "string",
+                "description": (
+                    "Only for a memory the user pinned. The first call returns "
+                    "confirmation_required with a message and a confirm_token "
+                    "and changes nothing. Ask the user; only after they said "
+                    "yes in a later turn, call again with the same arguments "
+                    "and this token."
+                ),
             },
         },
         "required": ["fact_id"],
@@ -275,7 +288,8 @@ UNPIN = {
     "description": (
         "Unpin a previously-pinned memory so automatic resolution can "
         "supersede it again. Idempotent: unpinning an already-active claim "
-        "is a no-op."
+        "is a no-op. Ask the user first: a pin is theirs to remove, so the "
+        "first call only returns confirmation_required (see confirm_token)."
     ),
     "parameters": {
         "type": "object",
@@ -283,6 +297,16 @@ UNPIN = {
             "fact_id": {
                 "type": "string",
                 "description": "The UUID of the memory to unpin.",
+            },
+            "confirm_token": {
+                "type": "string",
+                "description": (
+                    "Only for a memory the user pinned. The first call returns "
+                    "confirmation_required with a message and a confirm_token "
+                    "and changes nothing. Ask the user; only after they said "
+                    "yes in a later turn, call again with the same arguments "
+                    "and this token."
+                ),
             },
         },
         "required": ["fact_id"],
@@ -318,6 +342,16 @@ RETYPE = {
                     "directive, commitment, episode, summary."
                 ),
             },
+            "confirm_token": {
+                "type": "string",
+                "description": (
+                    "Only for a memory the user pinned. The first call returns "
+                    "confirmation_required with a message and a confirm_token "
+                    "and changes nothing. Ask the user; only after they said "
+                    "yes in a later turn, call again with the same arguments "
+                    "and this token."
+                ),
+            },
         },
         "required": ["fact_id", "new_type"],
     },
@@ -349,6 +383,16 @@ SET_SCOPE = {
                 "description": (
                     "Target v1 life-domain scope. One of: work, personal, "
                     "health, family, creative, finance, misc, unspecified."
+                ),
+            },
+            "confirm_token": {
+                "type": "string",
+                "description": (
+                    "Only for a memory the user pinned. The first call returns "
+                    "confirmation_required with a message and a confirm_token "
+                    "and changes nothing. Ask the user; only after they said "
+                    "yes in a later turn, call again with the same arguments "
+                    "and this token."
                 ),
             },
         },

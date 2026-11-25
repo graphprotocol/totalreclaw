@@ -27,7 +27,7 @@ import type { ToolContext, ToolResponse } from './tools/types.js';
 import { isQuotaExceededError, rethrowIfQuota, shortErrorMessage, logWriteError } from './tools/write-errors.js';
 import { quotaExceededMessage } from './quota-copy.js';
 import { pickMemoryId } from './tools/helpers.js';
-import { classifyForgetTarget, factWasPinned, forgetNotFoundResponse, forgetLookupFailedResponse } from './tools/forget.js';
+import { classifyForgetTarget, factWasPinned, forgetNotFoundResponse, forgetLookupFailedResponse, pinnedForgetResponse } from './tools/forget.js';
 import {
   findNearDuplicate,
   dedupAction,
@@ -1766,6 +1766,15 @@ async function handleForgetSubgraph(
       return forgetLookupFailedResponse();
     }
     if (lookup !== 'exists') return forgetNotFoundResponse(factId, lookup);
+
+    // internal#778: forgetting a pinned memory needs the user's yes.
+    const pinAsk = pinnedForgetResponse(
+      lookedUpFact,
+      (hex) => decrypt(Buffer.from(hex, 'hex').toString('base64'), state.encryptionKey),
+      factId,
+      { token: input.confirm_token },
+    );
+    if (pinAsk) return pinAsk;
 
     // Build a tombstone payload: same fact ID with isActive=false
     // The protobuf encoder always sets isActive=true, so we build a minimal

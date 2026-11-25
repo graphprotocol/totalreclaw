@@ -14,6 +14,7 @@
  * shared single source of truth for field ordering.
  */
 
+import { ConfirmationStore, CONFIRM_TOKEN_MIN_AGE_MS } from '../src/pii';
 import { executePinOperation, type PinOpDeps } from '../src/tools/pin';
 import type { SubgraphSearchFact } from '../src/subgraph/search';
 
@@ -105,6 +106,7 @@ describe('Cross-client parity: MCP pin path matches plugin v1.1 shape', () => {
       pin_status: 'pinned',
     });
 
+    let unpinNow = 0;
     let capturedPlaintext: string | null = null;
     const deps = makeDeps({
       async fetchFactById(id) { return makeFact(id, v1Pinned); },
@@ -113,7 +115,10 @@ describe('Cross-client parity: MCP pin path matches plugin v1.1 shape', () => {
         return Buffer.from(plaintext, 'utf-8').toString('hex');
       },
     });
-    await executePinOperation('unpin-canary', 'active', deps);
+    const unpinStore = new ConfirmationStore(() => unpinNow);
+    const unpinToken = unpinStore.issue('pinned_unpin', 'unpin-canary');
+    unpinNow += CONFIRM_TOKEN_MIN_AGE_MS;
+    await executePinOperation('unpin-canary', 'active', deps, undefined, { token: unpinToken, store: unpinStore });
 
     const parsed = JSON.parse(capturedPlaintext!);
     // The plugin writes pin_status:"unpinned" on an unpin (explicit, not

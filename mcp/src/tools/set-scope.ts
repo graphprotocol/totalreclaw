@@ -14,6 +14,7 @@ import {
 } from '../v1-types.js';
 import type { ToolContext } from './types.js';
 import { resolveMemoryId } from './helpers.js';
+import { pinConfirmTokenSchema, type PinConfirmInput } from '../pin-confirm.js';
 import {
   carriedFields,
   executeMetadataOp,
@@ -50,6 +51,7 @@ export const setScopeToolDefinition = {
         description:
           'New scope value. One of: work, personal, health, family, creative, finance, misc, unspecified.',
       },
+      confirm_token: pinConfirmTokenSchema,
     },
     // `memory_id` accepts a `fact_id` alias, so only `scope` is strictly
     // required here; the handler validates the id presence.
@@ -106,6 +108,7 @@ export async function executeSetScope(
   memoryId: string,
   newScope: MemoryScope,
   deps: MetadataOpDeps,
+  confirm?: PinConfirmInput,
 ): Promise<MetadataOpResult> {
   return executeMetadataOp<MemoryScope>(
     memoryId,
@@ -127,6 +130,7 @@ export async function executeSetScope(
     }),
     newScope,
     'set_scope',
+    confirm,
   );
 }
 
@@ -149,7 +153,9 @@ export async function handleSetScopeWithDeps(
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const validation = validateSetScopeArgs(args);
   if (!validation.ok) return errorResponse(validation.error);
-  const result = await executeSetScope(validation.memoryId, validation.scope, deps);
+  const result = await executeSetScope(validation.memoryId, validation.scope, deps, {
+    token: (args as Record<string, unknown>).confirm_token,
+  });
   return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 }
 

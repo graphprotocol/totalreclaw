@@ -337,7 +337,34 @@ async def remember(
         decision = await check_store(
             client, text, embedding, mode=mode, exclude_ids=gate_exclude_ids,
         )
-        stopped = _gate_response(decision)
+        # internal#778: a near duplicate of a PINNED memory is a change to the
+        # user's pin, so storing it needs the user's confirmation. A forced
+        # remember skips the near-duplicate check, so look at the pin here.
+        pin_hit = None
+        if decision.action != "store" and decision.match is not None and decision.match.pinned:
+            pin_hit = decision.match if decision.action == "confirm" else None
+        elif (
+            force_write and gate_mode is None and not kwargs.get("_from_mirror")
+            and not kwargs.get("_skip_confirm") and decision.action == "store"
+        ):
+            probe = await check_store(client, text, embedding, mode="explicit", exclude_ids=gate_exclude_ids)
+            if probe.action == "confirm" and probe.match is not None and probe.match.pinned:
+                pin_hit = probe.match
+        if pin_hit is not None and not kwargs.get("_skip_confirm"):
+            from totalreclaw.pin_confirm import confirm_or_notice
+
+            pin_notice = confirm_or_notice(
+                "remember",
+                pin_hit.fact_id,
+                text,
+                _confirm_token if isinstance(_confirm_token, str) else None,
+                kwargs.get("session_id") if isinstance(kwargs.get("session_id"), str) else None,
+            )
+            if pin_notice is not None:
+                return json.dumps(pin_notice)
+            stopped = None  # confirmed: store it (the pin itself is not touched)
+        else:
+            stopped = _gate_response(decision)
         if stopped is not None:
             logger.info(
                 "totalreclaw_remember not written (%s duplicate of %s)",
@@ -515,6 +542,13 @@ async def forget(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": "No fact_id provided"})
 
     try:
+        # internal#778: forgetting a pinned memory needs the user's confirmation.
+        if not kwargs.get("_from_mirror"):
+            from totalreclaw.pin_confirm import pinned_change_notice
+
+            notice = await pinned_change_notice(client, "forget", fact_id, args, kwargs)
+            if notice is not None:
+                return json.dumps(notice)
         # A user-asked forget also goes into the encrypted forget ledger, so
         # later auto-extraction doesn't re-create it (#605). The memory
         # mirror's forget (a USER.md line was edited, i.e. replaced) passes
@@ -598,6 +632,11 @@ async def unpin(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": "No fact_id provided"})
 
     try:
+        from totalreclaw.pin_confirm import pinned_change_notice
+
+        notice = await pinned_change_notice(client, "unpin", fact_id, args, kwargs)
+        if notice is not None:
+            return json.dumps(notice)
         result = await client.unpin_fact(fact_id)
         response = {
             "unpinned": True,
@@ -639,6 +678,14 @@ async def retype(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": parsed.get("error")})
 
     try:
+        from totalreclaw.pin_confirm import pinned_change_notice
+
+        notice = await pinned_change_notice(
+            client, "retype", parsed["fact_id"], args, kwargs,
+            subject=f"{parsed['fact_id']}|{parsed['new_type']}",
+        )
+        if notice is not None:
+            return json.dumps(notice)
         result = await client.retype(parsed["fact_id"], parsed["new_type"])
         if not result.get("success"):
             return json.dumps({"error": result.get("error", "retype failed")})
@@ -680,6 +727,14 @@ async def set_scope(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": parsed.get("error")})
 
     try:
+        from totalreclaw.pin_confirm import pinned_change_notice
+
+        notice = await pinned_change_notice(
+            client, "set_scope", parsed["fact_id"], args, kwargs,
+            subject=f"{parsed['fact_id']}|{parsed['new_scope']}",
+        )
+        if notice is not None:
+            return json.dumps(notice)
         result = await client.set_scope(parsed["fact_id"], parsed["new_scope"])
         if not result.get("success"):
             return json.dumps({"error": result.get("error", "set_scope failed")})

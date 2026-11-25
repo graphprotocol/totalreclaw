@@ -362,6 +362,7 @@ class TestHermesToolPayloadShape:
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
         client.read_block_episode = blk.episode
+        client.get_fact_pin_status = AsyncMock(return_value=False)
         client.retype = AsyncMock(side_effect=_quota_err())
 
         raw = await tools.retype({"fact_id": "abc", "new_type": "preference"}, state)
