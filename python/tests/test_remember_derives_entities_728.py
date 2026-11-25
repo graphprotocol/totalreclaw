@@ -38,7 +38,7 @@ async def test_explicit_remember_passes_derived_entities():
     ents = client.remember.await_args.kwargs["entities"]
     assert ents, "derived entities expected"
     names = {e["name"] for e in ents}
-    assert "lisbon" in names
+    assert "Lisbon" in names
     for e in ents:
         assert set(e) == {"name", "type"}
         assert e["type"] in {"person", "project", "tool", "company", "concept", "place"}
@@ -53,6 +53,30 @@ async def test_derivation_failure_still_stores_without_entities():
     assert not client.remember.await_args.kwargs.get("entities")
 
 
+@pytest.mark.parametrize("text,banned", [
+    ("I may move to Lisbon in May", {"may"}),
+    ("Meeting with the team moved to Thursday", {"meeting"}),
+    ("The car needs new tires before the trip", {"car", "trip"}),
+])
+def test_derivation_skips_domain_seed_junk(text, banned):
+    names = {e["name"].lower() for e in derive_entities_for_write(text)}
+    assert not (names & banned)
+
+
+def test_derivation_drops_names_contained_in_longer_name():
+    names = [e["name"] for e in derive_entities_for_write("Acme Corp renews")]
+    assert names == ["Acme Corp"]
+
+
+def test_derivation_restores_source_casing():
+    names = [e["name"] for e in derive_entities_for_write("I moved to Lisbon")]
+    assert names == ["Lisbon"]
+
+
+def test_read_side_extraction_unchanged():
+    assert "may" in entity_extract.extract_query_entities("I may move to Lisbon in May")
+
+
 def test_derived_entities_land_in_v1_claim_and_resolve_as_refs():
     from totalreclaw.claims_helper import build_canonical_claim_v1
 
@@ -62,7 +86,7 @@ def test_derived_entities_land_in_v1_claim_and_resolve_as_refs():
     }
     blob = build_canonical_claim_v1(fact, importance=8)
     refs = entity_refs_from_blob(blob)
-    assert any(r["n"] == "lisbon" for r in refs)
+    assert any(r["n"].lower() == "lisbon" for r in refs)
 
 
 @pytest.mark.asyncio
