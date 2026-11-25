@@ -54,12 +54,15 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
  * spec §3.2 — "re-deriving them is pure risk"):
  *   - `_grantDigest` and the four EIP-712 typehash/domain constants
  *     (parity-tested against TS/Python).
- *   - `_isCallDataInScope` / `_isBatchInScope` / `_inSelectors` — the
+ *   - `_isCallDataInScope` / `_inSelectors` — the outer-selector
+ *     allowlist and single-call scope check.
+ *   - `_isBatchInScope` — ported, then CHANGED in internal#542: the
  *     per-inner-call `executeBatch` validation (cred-6 invariant: EVERY
- *     inner call's target, zero-value and selector are checked
- *     individually; one out-of-scope inner fails the whole batch. No
- *     outer-selector shortcut, no first-inner sampling, no partial
- *     execution).
+ *     inner call's target and zero-value are checked individually, the
+ *     same rule as single-call `execute`; one out-of-scope inner fails
+ *     the whole batch. NO inner-selector check -- DataEdge inner calls
+ *     are raw protobuf with no selector. No outer-selector shortcut, no
+ *     first-inner sampling, no partial execution).
  *   - `_recoverEcdsa` with the EIP-2 malleability guard (kept as the
  *     original hand-rolled assembly implementation rather than swapped
  *     for `ECDSA.tryRecover`, per the spec's explicit "lift verbatim"
@@ -184,7 +187,11 @@ contract TotalReclawAccount is SimpleAccount {
         uint256 issuedAt; // informational -- never compared to block.timestamp
         address target; // scope.target (DataEdge address)
         uint256 valueMax; // always 0 per spec
-        bytes4[] selectors; // scope.selectors (execute, executeBatch)
+        // scope.selectors (execute, executeBatch). Gates ONLY the account's
+        // OUTER entry points; inner calldata is unrestricted, so the grant
+        // target must be a contract where every function is safe for the
+        // session key to call AS THE ACCOUNT.
+        bytes4[] selectors;
     }
 
     /// @custom:storage-location erc7201:totalreclaw.account.sessionkeys
@@ -224,7 +231,10 @@ contract TotalReclawAccount is SimpleAccount {
         uint8 version;
         address account;
         address signer;
-        address target;
+        address target; // every function on it must be safe to call as the account
+        // Allowlist for the account's OUTER entry points (execute /
+        // executeBatch) only. Inner calldata (the target's own selector or
+        // raw payload) is NOT restricted by it.
         bytes4[] selectors;
         uint256 valueMax;
         uint256 nonce;
@@ -516,6 +526,11 @@ contract TotalReclawAccount is SimpleAccount {
         if (g.verifyingContract != address(this)) return false; // P3-3: account-binding
         if (g.valueMax != 0) return false; // session keys cannot move ETH
         if (g.target == address(0)) return false;
+        // The inner call runs AS the account, so a grant targeting the
+        // account itself (upgradeToAndCall, withdrawDepositTo, revoke...) or
+        // the EntryPoint (withdrawTo on the account's deposit) would hand the
+        // session key owner-equivalent power. Never a legitimate DataEdge.
+        if (g.target == address(this) || g.target == address(entryPoint())) return false;
         if (g.signer == address(0)) return false;
         if (g.selectors.length == 0) return false;
         if (g.masterSignature.length != 65) return false;
@@ -578,9 +593,9 @@ contract TotalReclawAccount is SimpleAccount {
             // validated. First non-match -> false; no partial-execution
             // semantics, no outer-selector-passes shortcut.
             try this._decodeExecuteBatch(callData[4:]) returns (
-                address[] memory targets, uint256[] memory values, bytes[] memory datas
+                address[] memory targets, uint256[] memory values, uint256 datasLength
             ) {
-                return _isBatchInScope(targets, values, datas, grantTarget, allowedSelectors);
+                return _isBatchInScope(targets, values, datasLength, grantTarget);
             } catch {
                 return false;
             }
@@ -590,46 +605,43 @@ contract TotalReclawAccount is SimpleAccount {
     }
 
     /// @dev Public-but-only-self entry for the try/catch decode of the
-    ///      executeBatch payload. Ported verbatim.
+    ///      executeBatch payload. The full `abi.decode` is kept so that every
+    ///      offset and length (including each `datas` element) is validated
+    ///      exactly as strictly as before, but only `datas.length` is
+    ///      returned: the inner payloads are never inspected, so copying them
+    ///      back out through the return data (internal#542) was wasted gas
+    ///      that grew with payload size.
     function _decodeExecuteBatch(bytes calldata payload)
         external
         pure
-        returns (address[] memory targets, uint256[] memory values, bytes[] memory datas)
+        returns (address[] memory targets, uint256[] memory values, uint256 datasLength)
     {
+        bytes[] memory datas;
         (targets, values, datas) = abi.decode(payload, (address[], uint256[], bytes[]));
+        datasLength = datas.length;
     }
 
-    /// @dev Per-inner-call scope assertion. Ported verbatim from
-    ///      `SessionKeyModule._isBatchInScope` -- the load-bearing cred-6
-    ///      invariant: returns true ONLY when EVERY inner call's target,
-    ///      zero-value, and selector all pass.
+    /// @dev Per-inner-call scope assertion -- the load-bearing cred-6
+    ///      invariant: returns true ONLY when EVERY inner call passes the
+    ///      same rule the single-call `execute` path applies (target ==
+    ///      grant target AND value == 0). There is deliberately NO
+    ///      inner-selector check: DataEdge inner calls carry raw protobuf
+    ///      payloads with no selector (its fallback accepts them), and the
+    ///      outer `execute`/`executeBatch` selector allowlist is enforced
+    ///      by `_isCallDataInScope`. An empty batch is rejected.
     function _isBatchInScope(
         address[] memory targets,
         uint256[] memory values,
-        bytes[] memory datas,
-        address grantTarget,
-        bytes4[] memory allowedSelectors
+        uint256 datasLength,
+        address grantTarget
     ) internal pure returns (bool) {
         uint256 n = targets.length;
         if (n == 0) return false;
-        if (values.length != n || datas.length != n) return false;
+        if (values.length != n || datasLength != n) return false;
 
         for (uint256 i = 0; i < n; i++) {
             if (targets[i] != grantTarget) return false;
             if (values[i] != 0) return false;
-
-            bytes memory inner = datas[i];
-            if (inner.length < 4) return false;
-
-            // First 4 bytes of `inner` -- in-memory layout is
-            // (length: 32 bytes)(data...), so mload at offset 0x20 yields
-            // a word whose top 4 bytes are the selector.
-            bytes4 innerSel;
-            // solhint-disable-next-line no-inline-assembly
-            assembly {
-                innerSel := mload(add(inner, 0x20))
-            }
-            if (!_inSelectors(innerSel, allowedSelectors)) return false;
         }
         return true;
     }

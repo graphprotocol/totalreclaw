@@ -1,13 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {
     PackedUserOperation
 } from "account-abstraction/contracts/interfaces/PackedUserOperation.sol";
 import {SimpleAccount} from "account-abstraction/contracts/samples/SimpleAccount.sol";
 import {TotalReclawAccount} from "../contracts/TotalReclawAccount.sol";
+
+/// @dev Verbatim copy of the Log-emitting parts of
+///      `contracts/EventfulDataEdge.sol` (fallback emits `Log(msg.data)`).
+///      Copied rather than imported because this Foundry project's root is
+///      `contracts/account/` and forge cannot resolve sources outside it.
+contract EventfulDataEdge {
+    event Log(bytes data);
+
+    fallback() external payable {
+        emit Log(msg.data);
+    }
+
+    receive() external payable {}
+}
 
 /**
  * @title TotalReclawAccountTest
@@ -132,7 +146,7 @@ contract TotalReclawAccountTest is Test {
     function test_pinned_implementation_create2_address() public pure {
         assertEq(
             _predictImplAddress(TOTAL_RECLAW_ACCOUNT_SALT_V1),
-            0x6d17938F29072B3b7E883d410076B0D73676Cf34,
+            0x59B323d609F1aad9FeA38e8d840631366B99b444,
             "TotalReclawAccount predicted implementation address drifted - update the deployment plan's pinned value if intentional"
         );
     }
@@ -561,31 +575,107 @@ contract TotalReclawAccountTest is Test {
         assertEq(vd, 1, "any nonzero value in batch must SIG_VALIDATION_FAILED");
     }
 
-    function test_batch_rejects_out_of_scope_inner_selector() public {
-        bytes4[] memory onlyBatch = new bytes4[](1);
-        onlyBatch[0] = EXECUTE_BATCH_SEL;
+    /// @dev #542: DataEdge inner calls are raw protobuf with no selector;
+    ///      the batch path must not require one (or even 4 bytes).
+    function test_batch_accepts_selectorless_protobuf_inner_calls_2() public {
+        _installGrant(1);
+        _assertBatchValidates(_rawProtobufBatch(2), "raw-pb-2", 0);
+    }
 
+    function test_batch_accepts_selectorless_protobuf_inner_calls_15() public {
+        _installGrant(1);
+        _assertBatchValidates(_rawProtobufBatch(15), "raw-pb-15", 0);
+    }
+
+    function test_batch_accepts_empty_and_short_inner_data() public {
+        _installGrant(1);
+        address[] memory targets = new address[](3);
+        uint256[] memory values = new uint256[](3);
+        bytes[] memory datas = new bytes[](3);
+        for (uint256 i = 0; i < 3; i++) {
+            targets[i] = DATA_EDGE;
+        }
+        datas[0] = "";
+        datas[1] = hex"0a";
+        datas[2] = hex"0a0b0c";
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+        _assertBatchValidates(cd, "short-inner", 0);
+    }
+
+    function test_batch_rejects_one_wrong_target_among_raw_protobuf_inners() public {
+        _installGrant(1);
+        address[] memory targets = new address[](3);
+        uint256[] memory values = new uint256[](3);
+        bytes[] memory datas = new bytes[](3);
+        for (uint256 i = 0; i < 3; i++) {
+            targets[i] = DATA_EDGE;
+            datas[i] = abi.encodePacked(hex"0a10", bytes16(uint128(i)));
+        }
+        targets[1] = address(0xBADC0DE);
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+        _assertBatchValidates(cd, "wrong-target-pb", 1);
+    }
+
+    function test_batch_rejects_nonzero_value_among_raw_protobuf_inners() public {
+        _installGrant(1);
+        address[] memory targets = new address[](3);
+        uint256[] memory values = new uint256[](3);
+        bytes[] memory datas = new bytes[](3);
+        for (uint256 i = 0; i < 3; i++) {
+            targets[i] = DATA_EDGE;
+            datas[i] = abi.encodePacked(hex"0a10", bytes16(uint128(i)));
+        }
+        values[2] = 1 wei;
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+        _assertBatchValidates(cd, "nonzero-value-pb", 1);
+    }
+
+    function test_batch_rejects_mismatched_array_lengths() public {
+        _installGrant(1);
+        // values too short
+        {
+            address[] memory targets = new address[](2);
+            uint256[] memory values = new uint256[](1);
+            bytes[] memory datas = new bytes[](2);
+            targets[0] = DATA_EDGE;
+            targets[1] = DATA_EDGE;
+            _assertBatchValidates(
+                abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas)),
+                "len-values",
+                1
+            );
+        }
+        // datas too long
+        {
+            address[] memory targets = new address[](2);
+            uint256[] memory values = new uint256[](2);
+            bytes[] memory datas = new bytes[](3);
+            targets[0] = DATA_EDGE;
+            targets[1] = DATA_EDGE;
+            _assertBatchValidates(
+                abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas)),
+                "len-datas",
+                1
+            );
+        }
+    }
+
+    /// @dev Outer-selector allowlist is unchanged: a grant that allows only
+    ///      `execute` must reject an `executeBatch` outer call even when
+    ///      every inner call is in scope.
+    function test_batch_rejects_outer_selector_not_in_allowlist() public {
+        bytes4[] memory onlyExecute = new bytes4[](1);
+        onlyExecute[0] = EXECUTE_SEL;
         TotalReclawAccount.PermissionGrant memory grant =
-            _buildGrant(signer, DATA_EDGE, onlyBatch, 1);
-        bytes32 installH = keccak256("install-batch-only");
-        bytes memory installCd = _batchWithSingleInner(EXECUTE_BATCH_SEL);
+            _buildGrant(signer, DATA_EDGE, onlyExecute, 1);
+        bytes32 installH = keccak256("install-execute-only");
         bytes memory installSig = abi.encode(grant, _signWithKey(signerPriv, installH));
-        PackedUserOperation memory installOp = _makePackedOp(installCd, installSig);
+        PackedUserOperation memory installOp =
+            _makePackedOp(_executeCallData(DATA_EDGE, 0, hex"00"), installSig);
         vm.prank(ENTRY_POINT);
-        assertEq(
-            account.validateUserOp(installOp, installH, 0),
-            0,
-            "install must succeed with all-in-scope inner"
-        );
+        assertEq(account.validateUserOp(installOp, installH, 0), 0, "install via execute");
 
-        bytes memory cd = _batchWithSingleInner(EXECUTE_SEL);
-        bytes32 h = keccak256("inner-sel-bad");
-        bytes memory sig = _signWithKey(signerPriv, h);
-        PackedUserOperation memory op = _makePackedOp(cd, sig);
-
-        vm.prank(ENTRY_POINT);
-        uint256 vd = account.validateUserOp(op, h, 0);
-        assertEq(vd, 1, "inner selector not in grant must SIG_VALIDATION_FAILED");
+        _assertBatchValidates(_rawProtobufBatch(2), "outer-sel-not-allowed", 1);
     }
 
     function test_batch_rejects_empty_batch() public {
@@ -603,6 +693,309 @@ contract TotalReclawAccountTest is Test {
         vm.prank(ENTRY_POINT);
         uint256 vd = account.validateUserOp(op, h, 0);
         assertEq(vd, 1, "empty executeBatch must SIG_VALIDATION_FAILED");
+    }
+
+    // ============================================================
+    // internal#542 review follow-ups: execute-what-was-validated,
+    // non-canonical encodings, caps, lazy install, revoke.
+    // ============================================================
+
+    /// @dev Put the REAL EventfulDataEdge runtime code at the grant target.
+    function _etchDataEdge() internal {
+        vm.etch(DATA_EDGE, address(new EventfulDataEdge()).code);
+    }
+
+    function _payload(uint256 i) internal pure returns (bytes memory) {
+        return abi.encodePacked(hex"0a20", keccak256(abi.encode("fact", i)), hex"1001");
+    }
+
+    function _batchOf(uint256 n) internal pure returns (bytes memory) {
+        address[] memory targets = new address[](n);
+        uint256[] memory values = new uint256[](n);
+        bytes[] memory datas = new bytes[](n);
+        for (uint256 i = 0; i < n; i++) {
+            targets[i] = DATA_EDGE;
+            datas[i] = _payload(i);
+        }
+        return abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+    }
+
+    function _validate(bytes memory cd, string memory label) internal returns (uint256) {
+        bytes32 h = keccak256(bytes(label));
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+        vm.prank(ENTRY_POINT);
+        return account.validateUserOp(op, h, 0);
+    }
+
+    /// @dev Execute the SAME calldata that validated, as the EntryPoint,
+    ///      against a real EventfulDataEdge; assert n Log events with the
+    ///      exact payloads, all emitted by the grant target.
+    function _assertExecutesAsValidated(uint256 n) internal {
+        _etchDataEdge();
+        _installGrant(1);
+        bytes memory cd = _batchOf(n);
+        assertEq(_validate(cd, "exec-validated"), 0, "must validate");
+
+        vm.recordLogs();
+        vm.prank(ENTRY_POINT);
+        (bool ok,) = address(account).call(cd);
+        assertTrue(ok, "execution must succeed");
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, n, "exactly n Log events");
+        for (uint256 i = 0; i < n; i++) {
+            assertEq(logs[i].emitter, DATA_EDGE, "emitted by grant target");
+            assertEq(logs[i].topics[0], keccak256("Log(bytes)"));
+            assertEq(abi.decode(logs[i].data, (bytes)), _payload(i), "exact payload");
+        }
+        assertEq(DATA_EDGE.balance, 0, "no value moved");
+    }
+
+    function test_batch_validated_calldata_executes_exactly_n_logs_2() public {
+        _assertExecutesAsValidated(2);
+    }
+
+    function test_batch_validated_calldata_executes_exactly_n_logs_15() public {
+        _assertExecutesAsValidated(15);
+    }
+
+    function test_batch_validated_calldata_executes_exactly_n_logs_30() public {
+        _assertExecutesAsValidated(30);
+    }
+
+    /// @dev SimpleAccount.executeBatch accepts an empty `values[]`; the
+    ///      validator must NOT (pins the stricter behaviour).
+    function test_batch_rejects_empty_values_array_with_n_targets() public {
+        _installGrant(1);
+        address[] memory targets = new address[](2);
+        uint256[] memory values = new uint256[](0);
+        bytes[] memory datas = new bytes[](2);
+        targets[0] = DATA_EDGE;
+        targets[1] = DATA_EDGE;
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+        assertEq(_validate(cd, "empty-values"), 1);
+    }
+
+    function _word(bytes memory cd, uint256 idx) internal pure returns (uint256 w) {
+        assembly {
+            w := mload(add(add(cd, 0x24), mul(idx, 0x20)))
+        }
+    }
+
+    function _setWord(bytes memory cd, uint256 idx, uint256 w) internal pure {
+        assembly {
+            mstore(add(add(cd, 0x24), mul(idx, 0x20)), w)
+        }
+    }
+
+    // Layout of abi.encode(targets, values, datas) after the selector:
+    // word 0..2 head offsets; targets array starts at word 3 (len), elems 4..
+
+    function test_batch_rejects_dirty_target_upper_bits() public {
+        _installGrant(1);
+        bytes memory cd = _batchOf(2);
+        _setWord(cd, 4, _word(cd, 4) | (uint256(1) << 200));
+        assertEq(_validate(cd, "dirty-target"), 1);
+    }
+
+    function test_batch_accepts_trailing_bytes_and_executes_identically() public {
+        _etchDataEdge();
+        _installGrant(1);
+        bytes memory cd = bytes.concat(_batchOf(2), hex"deadbeefdeadbeef");
+        assertEq(_validate(cd, "trailing"), 0);
+        vm.recordLogs();
+        vm.prank(ENTRY_POINT);
+        (bool ok,) = address(account).call(cd);
+        assertTrue(ok);
+        assertEq(vm.getRecordedLogs().length, 2, "trailing bytes change nothing");
+    }
+
+    function test_batch_rejects_values_offset_aliased_onto_targets() public {
+        _installGrant(1);
+        bytes memory cd = _batchOf(2);
+        _setWord(cd, 1, _word(cd, 0)); // values := targets region (non-zero words)
+        assertEq(_validate(cd, "alias-values"), 1);
+    }
+
+    function test_batch_rejects_oversized_length_word() public {
+        _installGrant(1);
+        bytes memory cd = _batchOf(2);
+        _setWord(cd, 3, uint256(1) << 64);
+        assertEq(_validate(cd, "oversized-len"), 1);
+    }
+
+    function test_batch_rejects_datas_offset_out_of_bounds() public {
+        _installGrant(1);
+        bytes memory cd = _batchOf(2);
+        _setWord(cd, 2, cd.length + 0x1000);
+        assertEq(_validate(cd, "datas-oob"), 1);
+    }
+
+    /// @dev Differential fuzz: mutate one word of a valid batch (and
+    ///      optionally truncate). Whenever validation returns 0, executing
+    ///      the same calldata must make exactly as many calls as the
+    ///      decoded batch has entries, all to the grant target, none with
+    ///      value, and must not revert.
+    function testFuzz_validated_batch_executes_only_in_scope(
+        uint256 idx,
+        uint256 xorMask,
+        uint8 trunc,
+        bool zeroWord
+    ) public {
+        _etchDataEdge();
+        _installGrant(1);
+        vm.deal(address(account), 1 ether);
+
+        bytes memory cd = _batchOf(3);
+        idx = bound(idx, 0, (cd.length - 4) / 32 - 1);
+        _setWord(cd, idx, zeroWord ? 0 : _word(cd, idx) ^ xorMask);
+        uint256 cut = trunc % 40;
+        if (cut > 0 && cut < cd.length) {
+            assembly {
+                mstore(cd, sub(mload(cd), cut))
+            }
+        }
+
+        if (_validate(cd, "fuzz") != 0) return;
+
+        (address[] memory t, uint256[] memory v, bytes[] memory d) =
+            abi.decode(_slice(cd), (address[], uint256[], bytes[]));
+        vm.recordLogs();
+        vm.prank(ENTRY_POINT);
+        (bool ok,) = address(account).call(cd);
+        assertTrue(ok, "validated batch must execute");
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(t.length, v.length);
+        assertEq(t.length, d.length);
+        // A call with EMPTY data hits DataEdge's receive() (no Log), so the
+        // expected Log count is the number of non-empty inner payloads.
+        uint256 nonEmpty;
+        for (uint256 i = 0; i < t.length; i++) {
+            assertEq(t[i], DATA_EDGE);
+            assertEq(v[i], 0);
+            if (d[i].length > 0) nonEmpty++;
+        }
+        assertEq(logs.length, nonEmpty, "one Log per non-empty inner call");
+        for (uint256 i = 0; i < logs.length; i++) {
+            assertEq(logs[i].emitter, DATA_EDGE);
+        }
+        assertEq(address(account).balance, 1 ether, "no value left the account");
+    }
+
+    function _slice(bytes memory cd) internal pure returns (bytes memory out) {
+        out = new bytes(cd.length - 4);
+        for (uint256 i = 0; i < out.length; i++) {
+            out[i] = cd[i + 4];
+        }
+    }
+
+    /// @dev Realistic-size validation gas (internal#542 review): facts run to
+    ///      several KB and a batch to ~32 KB. Validation must stay well inside
+    ///      a sane verificationGasLimit; bound is deliberately loose, the logged
+    ///      numbers are the signal.
+    function _batchOfSized(uint256 n, uint256 size) internal pure returns (bytes memory) {
+        address[] memory targets = new address[](n);
+        uint256[] memory values = new uint256[](n);
+        bytes[] memory datas = new bytes[](n);
+        for (uint256 i = 0; i < n; i++) {
+            targets[i] = DATA_EDGE;
+            datas[i] = new bytes(size);
+            datas[i][0] = 0x0a;
+        }
+        return abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+    }
+
+    function _validateGas(bytes memory cd, string memory label) internal returns (uint256 used) {
+        bytes32 h = keccak256(bytes(label));
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+        vm.prank(ENTRY_POINT);
+        uint256 g0 = gasleft();
+        uint256 vd = account.validateUserOp(op, h, 0);
+        used = g0 - gasleft();
+        assertEq(vd, 0, label);
+    }
+
+    function test_batch_validation_gas_realistic_sizes() public {
+        _installGrant(1);
+        uint256 small = _validateGas(_batchOfSized(8, 4096), "gas-8x4k"); // ~32 KB
+        uint256 mid = _validateGas(_batchOfSized(4, 8192), "gas-4x8k"); // ~32 KB
+        uint256 many = _validateGas(_batchOfSized(30, 1024), "gas-30x1k"); // ~30 KB
+        emit log_named_uint("validate gas, 8 x 4KB (~32KB)", small);
+        emit log_named_uint("validate gas, 4 x 8KB (~32KB)", mid);
+        emit log_named_uint("validate gas, 30 x 1KB", many);
+        assertLt(small, 1_000_000);
+        assertLt(mid, 1_000_000);
+        assertLt(many, 1_000_000);
+    }
+
+    // ---- grant-target guard (internal#542 review finding 6) ----
+
+    function _lazyInstallWith(address target, bytes memory cd, string memory label)
+        internal
+        returns (uint256)
+    {
+        TotalReclawAccount.PermissionGrant memory grant =
+            _buildGrant(signer, target, _twoSelectors(), 1);
+        bytes32 h = keccak256(bytes(label));
+        PackedUserOperation memory op =
+            _makePackedOp(cd, abi.encode(grant, _signWithKey(signerPriv, h)));
+        vm.prank(ENTRY_POINT);
+        return account.validateUserOp(op, h, 0);
+    }
+
+    function test_grant_rejects_target_equal_to_account() public {
+        bytes memory cd = _executeCallData(address(account), 0, hex"00");
+        assertEq(_lazyInstallWith(address(account), cd, "target-account"), 1);
+        assertFalse(account.isSessionKeyActive(signer));
+    }
+
+    function test_grant_rejects_target_equal_to_entrypoint() public {
+        bytes memory cd = _executeCallData(ENTRY_POINT, 0, hex"00");
+        assertEq(_lazyInstallWith(ENTRY_POINT, cd, "target-ep"), 1);
+        assertFalse(account.isSessionKeyActive(signer));
+    }
+
+    function test_batch_under_grant_targeting_account_or_entrypoint_fails() public {
+        address[2] memory bad = [address(account), ENTRY_POINT];
+        for (uint256 k = 0; k < 2; k++) {
+            address[] memory targets = new address[](2);
+            uint256[] memory values = new uint256[](2);
+            bytes[] memory datas = new bytes[](2);
+            targets[0] = bad[k];
+            targets[1] = bad[k];
+            bytes memory cd =
+                abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+            assertEq(_lazyInstallWith(bad[k], cd, k == 0 ? "batch-acct" : "batch-ep"), 1);
+            assertFalse(account.isSessionKeyActive(signer));
+            // and a later steady-state batch against the same target also fails
+            assertEq(_validate(cd, k == 0 ? "batch-acct-2" : "batch-ep-2"), 1);
+        }
+    }
+
+    function test_batch_of_30_validates() public {
+        _installGrant(1);
+        assertEq(_validate(_batchOf(30), "batch-30"), 0);
+    }
+
+    /// @dev Lazy install where the FIRST session-key UserOp is a batch.
+    function test_lazy_install_first_userop_is_batch() public {
+        _etchDataEdge();
+        TotalReclawAccount.PermissionGrant memory grant =
+            _buildGrant(signer, DATA_EDGE, _twoSelectors(), 1);
+        bytes32 h = keccak256("lazy-batch");
+        bytes memory sig = abi.encode(grant, _signWithKey(signerPriv, h));
+        PackedUserOperation memory op = _makePackedOp(_batchOf(5), sig);
+        vm.prank(ENTRY_POINT);
+        assertEq(account.validateUserOp(op, h, 0), 0, "lazy install + batch validates");
+        assertTrue(account.isSessionKeyActive(signer), "grant installed");
+    }
+
+    function test_batch_after_revoke_fails() public {
+        _installGrant(1);
+        assertEq(_validate(_batchOf(2), "pre-revoke"), 0);
+        vm.prank(owner);
+        account.revokeSessionKey(signer);
+        assertEq(_validate(_batchOf(2), "post-revoke"), 1);
     }
 
     /// @dev Gas-budget assertion (cred-6 acceptance criteria, moved here from
@@ -803,14 +1196,25 @@ contract TotalReclawAccountTest is Test {
         return abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
     }
 
-    function _batchWithSingleInner(bytes4 innerSel) internal pure returns (bytes memory) {
-        address[] memory targets = new address[](1);
-        uint256[] memory values = new uint256[](1);
-        bytes[] memory datas = new bytes[](1);
-        targets[0] = DATA_EDGE;
-        values[0] = 0;
-        datas[0] = abi.encodePacked(innerSel, uint256(0));
+    function _rawProtobufBatch(uint256 n) internal pure returns (bytes memory) {
+        address[] memory targets = new address[](n);
+        uint256[] memory values = new uint256[](n);
+        bytes[] memory datas = new bytes[](n);
+        for (uint256 i = 0; i < n; i++) {
+            targets[i] = DATA_EDGE;
+            // Selector-less payload (first byte is a protobuf field tag).
+            datas[i] = abi.encodePacked(hex"0a20", keccak256(abi.encode(i)));
+        }
         return abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+    }
+
+    function _assertBatchValidates(bytes memory cd, string memory label, uint256 expected)
+        internal
+    {
+        bytes32 h = keccak256(bytes(label));
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+        vm.prank(ENTRY_POINT);
+        assertEq(account.validateUserOp(op, h, 0), expected, label);
     }
 
     function _makePackedOp(bytes memory callData, bytes memory sig)
