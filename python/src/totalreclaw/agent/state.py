@@ -215,6 +215,10 @@ class AgentState:
         server_url: Optional[str] = None,
     ):
         self._client = None
+        # (#618) Fingerprint of credentials.json as last loaded/written by
+        # THIS process; a change made by someone else (a replace-mode pair
+        # completed by the sidecar) triggers an in-process reload.
+        self._creds_fingerprint: Optional[tuple] = None
         self._turn_count = 0
         self._messages: list[dict] = []
         self._last_processed_idx = 0
@@ -541,6 +545,7 @@ class AgentState:
         # `resolve_address()` has run, and `configure()` is synchronous. The
         # EOA is what we have at this point; the Smart Account address is
         # resolved lazily on the first remember/recall call.
+        self._record_credentials_fingerprint()
         logger.info("TotalReclaw configured: eoa=%s", self._client.eoa_address)
 
     def configure_from_bundle(self, bundle) -> None:
@@ -568,6 +573,8 @@ class AgentState:
             except AttributeError:
                 pass
 
+        self._record_credentials_fingerprint()
+
         # Unlike configure(), the Smart Account address IS already known
         # here (bundle mode resolves it at construction — see
         # TotalReclaw.from_bundle) — safe to log immediately.
@@ -581,8 +588,63 @@ class AgentState:
         return self._client is not None
 
     def get_client(self):
-        """Return the TotalReclaw client, or None if not configured."""
+        """Return the TotalReclaw client, or None if not configured.
+
+        If ``credentials.json`` was replaced on disk since this process last
+        loaded it (a confirmed replace-mode pairing finished by the
+        completion sidecar), the client is rebuilt from the new file first,
+        so the running gateway never keeps serving the previous account.
+        """
+        self._reload_if_credentials_replaced()
         return self._client
+
+    @staticmethod
+    def _credentials_fingerprint() -> Optional[tuple]:
+        """(inode, mtime_ns, size) of the file-mode credentials, or None
+        (external provider mode, env-phrase mode, or no file)."""
+        if os.environ.get("TOTALRECLAW_RECOVERY_PHRASE"):
+            return None
+        try:
+            from totalreclaw.credential_provider import (
+                _resolve_credentials_path,
+                get_credential_provider,
+            )
+
+            if get_credential_provider().mode != "file":
+                return None
+            st = os.stat(_resolve_credentials_path())
+        except Exception:  # noqa: BLE001 — never break a tool call on a stat
+            return None
+        return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+    def _record_credentials_fingerprint(self) -> None:
+        self._creds_fingerprint = self._credentials_fingerprint()
+
+    def _reload_if_credentials_replaced(self) -> None:
+        recorded = self._creds_fingerprint
+        if recorded is None or self._client is None:
+            return
+        current = self._credentials_fingerprint()
+        if current is None or current == recorded:
+            return
+        # Record first: a failed reload must not retry on every call.
+        self._creds_fingerprint = current
+        try:
+            old_client = self._client
+            self._try_auto_configure()
+            if self._client is not old_client:
+                self._billing_cache = None
+                self._billing_cache_time = 0.0
+                logger.info(
+                    "TotalReclaw: credentials.json changed on disk; reloaded "
+                    "the in-process client."
+                )
+        except Exception:  # noqa: BLE001 — keep serving the previous client
+            logger.warning(
+                "TotalReclaw: credentials.json changed on disk but reloading "
+                "it failed; keeping the previous account until restart.",
+                exc_info=True,
+            )
 
     # Session id (memq-3)
     #

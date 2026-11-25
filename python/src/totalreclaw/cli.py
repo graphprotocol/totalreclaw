@@ -176,8 +176,20 @@ def run_doctor(credentials_path: Optional[Path] = None, relay_url: Optional[str]
 
     mnemonic = ""
     keychain_resolve_failed = False
+    # Derived-bundle credentials (version 2, schema derived-bundle-v1) hold
+    # no phrase by design: the phrase never reaches this host. Accept the
+    # shape instead of reporting a missing mnemonic.
+    is_bundle = (
+        isinstance(data, dict)
+        and data.get("version") == 2
+        and data.get("schema") == "derived-bundle-v1"
+    )
+    if is_bundle:
+        print(_ok("credentials.json is a derived bundle (recovery phrase not stored on this host)"))
     try:
-        mnemonic = resolve_mnemonic(data) if isinstance(data, dict) else ""
+        mnemonic = (
+            resolve_mnemonic(data) if isinstance(data, dict) and not is_bundle else ""
+        )
     except KeychainEntryMissing as err:
         print(_fail(str(err)))
         keychain_resolve_failed = True
@@ -186,7 +198,7 @@ def run_doctor(credentials_path: Optional[Path] = None, relay_url: Optional[str]
     # --------------------------------------------------------------------
     # Check 2 — mnemonic is a valid BIP-39 phrase
     # --------------------------------------------------------------------
-    if not keychain_resolve_failed:
+    if not keychain_resolve_failed and not is_bundle:
         if not isinstance(mnemonic, str) or not mnemonic.strip():
             print(_fail("credentials.json has no mnemonic field"))
             issues += 1
@@ -208,6 +220,9 @@ def run_doctor(credentials_path: Optional[Path] = None, relay_url: Optional[str]
     # Check 3 — Smart Account address
     # --------------------------------------------------------------------
     cached_sa = data.get("scope_address") or data.get("wallet_address")
+    if not cached_sa and is_bundle:
+        account = data.get("account")
+        cached_sa = account.get("smart_account") if isinstance(account, dict) else None
     if cached_sa and isinstance(cached_sa, str):
         print(_ok(f"Smart Account address cached: {cached_sa}"))
     elif isinstance(mnemonic, str) and mnemonic.strip():
