@@ -346,7 +346,7 @@ Internal: see `~/.claude/skills/qa-totalreclaw.md` (TotalReclaw team only). Runs
 
 **Cause:** the env var is missing or empty in the runtime that needs it (typically MCP).
 
-**Fix:** OpenClaw + Hermes prefer credentials at `~/.totalreclaw/credentials.json` from the browser account-setup flow — re-run setup. MCP need the env var in your host config.
+**Fix:** OpenClaw + Hermes prefer credentials at `~/.totalreclaw/credentials.json` from the browser account-setup flow — re-run setup. MCP needs the env var in your host config.
 
 ### Memories aren't appearing in new conversations
 

@@ -13,7 +13,6 @@ Probably not directly. If you want encrypted memory for an AI agent, install the
 | OpenClaw | [`@totalreclaw/totalreclaw`](https://www.npmjs.com/package/@totalreclaw/totalreclaw) | [OpenClaw setup](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/openclaw-setup.md) |
 | Claude Code, Claude Desktop, Cursor, other MCP hosts | [`@totalreclaw/mcp-server`](https://www.npmjs.com/package/@totalreclaw/mcp-server) | [Claude Code setup](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/claude-code-setup.md) |
 | Hermes | [`totalreclaw`](https://pypi.org/project/totalreclaw/) on PyPI | [Hermes setup](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md) |
-| NanoClaw | [`@totalreclaw/skill-nanoclaw`](https://www.npmjs.com/package/@totalreclaw/skill-nanoclaw) | [NanoClaw guide](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/nanoclaw-getting-started.md) |
 
 Install `@totalreclaw/core` yourself only if you are building a TotalReclaw client or tool and need the same primitives.
 

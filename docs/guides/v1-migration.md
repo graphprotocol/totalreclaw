@@ -67,7 +67,7 @@ All clients do the v0 → v1 mapping automatically when reading existing memorie
 
 ### 3. New MCP tools
 
-Four new tools (on `@totalreclaw/mcp-server@3.0.0` + inherited by NanoClaw + IronClaw):
+Four new tools (on `@totalreclaw/mcp-server@3.0.0` + inherited by IronClaw):
 
 - `totalreclaw_pin` — lock a memory against auto-supersession.
 - `totalreclaw_unpin` — release a pin so a memory can be superseded again.
@@ -131,8 +131,7 @@ openclaw skills update totalreclaw
 # Claude Desktop / Cursor / Windsurf (MCP)
 # The npx invocation pulls the latest automatically
 
-# NanoClaw
-# Your deployment pins @totalreclaw/skill-nanoclaw — bump to ^3.0.0
+# NanoClaw is not supported.
 
 # Python / Hermes
 pip install -U totalreclaw
