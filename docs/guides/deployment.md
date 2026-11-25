@@ -250,35 +250,6 @@ admin dashboard's "Sync now".
 
 ---
 
-## 6.7 Enclave allowances (relay env vars)
-
-The relay can give a verified enclave host its own rate-limit buckets and a usage-ingest
-endpoint. A request counts as the enclave only when all three hold: it carries
-`X-TotalReclaw-Origin-Auth` equal to `CF_ORIGIN_AUTH_SECRET` (injected by a Cloudflare
-Request Header Transform Rule, "Set static", on the relay hostname); its `CF-Connecting-IP`
-is in `ENCLAVE_EGRESS_IPS`; and its `X-TotalReclaw-Client` is `enclave:<host>[/<version>]`.
-If `ENCLAVE_EGRESS_IPS` or `CF_ORIGIN_AUTH_SECRET` is empty or invalid, the allowances are off.
-Set these in Railway only. Never put the secret in a file, log or issue.
-
-| Variable | Meaning | Default |
-|---|---|---|
-| `ENCLAVE_EGRESS_IPS` | Comma-separated single IPv4/IPv6 addresses (no CIDR) of the enclave's egress | unset (allowances off) |
-| `CF_ORIGIN_AUTH_SECRET` | 32-256 chars of `[A-Za-z0-9_-]`; generate with `openssl rand -hex 32`. Must match the Cloudflare rule's header value | unset (allowances off) |
-| `ENCLAVE_BUNDLER_RATE_PER_HOUR` | The enclave's own bucket on the per-IP `/v1/bundler` limiter (> 0) | 20000 |
-| `ENCLAVE_SUBGRAPH_RATE_PER_HOUR` | The enclave's own bucket on the per-IP `/v1/subgraph` limiter (> 0) | 100000 |
-| `ENCLAVE_ENABLED` | Billing-status flag `features.enclave_enabled`; only the exact string `true` enables. Keep `false` on production until launch | `false` |
-| `INGEST_ENABLED` | Billing-status flag `features.ingest_enabled` and `POST /v1/usage/ingest` (503 `ingest_disabled` when off, or when `ENCLAVE_ENABLED` is not `true`) | `false` |
-| `INGEST_CAP_FREE`, `INGEST_CAP_PRO` | Monthly `totalreclaw_ingest` calls per user for each tier; `0` disables ingest for that tier. Placeholder values until the launch limits are published | 200, 2000 |
-
-> **Order matters.** Make the Cloudflare Transform Rule live on **every** proxied hostname
-> (staging and production) **before** setting `CF_ORIGIN_AUTH_SECRET` on that service. Once
-> the secret is set, the relay trusts `CF-Connecting-IP` only on requests that carry a valid
-> origin-auth header. Without the rule every per-IP limiter (registration, admin auth, usage
-> ingest, ...) keys on the TCP peer, so all clients share one bucket and the enclave fails
-> verification. With the secret unset, `CF-Connecting-IP` is trusted as before.
-> (This caveat is documented in the relay's `.env.example` from relay PR #82; confirm that
-> PR is merged before relying on the new behaviour.)
-
 ## 7. Rollback
 ```bash
 cd <totalreclaw-relay checkout>

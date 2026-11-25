@@ -26,7 +26,7 @@ To see what the channels currently resolve to: `npm view @totalreclaw/totalrecla
 Install TotalReclaw RC <version>. See https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/openclaw-setup.md
 ```
 
-`<version>` is a semver RC string the user picks (e.g. `3.4.2-rc.2`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs the **newest release candidate** via `openclaw plugins install @totalreclaw/totalreclaw@rc` (no pin — always the latest cut).
+`<version>` is a semver RC string the user picks (for example the `rc` value from `npm view @totalreclaw/totalreclaw dist-tags`). When the user omits `<version>` and writes only `Install TotalReclaw RC`, the agent installs the **newest release candidate** via `openclaw plugins install @totalreclaw/totalreclaw@rc` (no pin — always the latest cut).
 
 ### RC against the staging relay (QA only)
 
@@ -167,7 +167,7 @@ Run this right after the install commands, always. On a **clean** install OpenCl
 > **If the plugin lands `Status: disabled` (memory slot stuck at `memory-core`).** This is the reinstall failure mode the Step 1 `openclaw plugins enable totalreclaw` step prevents. If you skipped it, or `openclaw plugins inspect totalreclaw` shows `Status: disabled` / `Error: memory slot set to "memory-core"`, run `openclaw plugins enable totalreclaw` once — it re-runs OpenClaw's exclusive slot-selection and flips the slot to `totalreclaw`. The plugin is already on disk; only the slot binding needs fixing. Symptom if left unfixed: `openclaw totalreclaw status` reports `unknown command`, the boot log shows only 2 plugins (no totalreclaw), and pairing fails with a 502 because the plugin's pair HTTP routes never registered.
 
 Notes:
-- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@3.4.2-rc.2`.
+- For an RC build, replace the first command with `openclaw plugins install @totalreclaw/totalreclaw@rc` (latest release candidate) or pin a version like `openclaw plugins install @totalreclaw/totalreclaw@<rc-version>` (find it with `npm view @totalreclaw/totalreclaw dist-tags`).
 - **OpenClaw 2026.9.x gates a fresh npm install behind TWO consent checks** (observed on 2026.9.2; absent on 2026.7.1): (1) npm-source trust — the install stops at *"This source is outside ClawHub review and trust metadata"* — and (2) per-plugin capability consent. An interactive user confirms each prompt. A **non-interactive shell (script, agent, CI) auto-cancels both** and the install fails — the capability gate only after the package has already landed, with `Could not start the CLI. Reason: Plugin "totalreclaw" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry.` The scripted form that clears both gates is:
 
   ```bash
@@ -310,7 +310,7 @@ openclaw plugins install @totalreclaw/totalreclaw            # stable
 
 Then in chat: *"Set up TotalReclaw"* — the agent will run `tr pair --json` and hand you the URL + PIN. Open the URL in your browser to enter or generate your phrase.
 
-> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@3.4.2-rc.2`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`.
+> Pin a specific RC with `openclaw plugins install @totalreclaw/totalreclaw@<rc-version>`. Find it with `npm view @totalreclaw/totalreclaw dist-tags`. Check what each tag resolves to: `npm view @totalreclaw/totalreclaw dist-tags`.
 
 <details>
 <summary>From-source install (for plugin development — self-host only)</summary>
