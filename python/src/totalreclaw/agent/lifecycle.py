@@ -48,7 +48,7 @@ from .write_quota import (
     lookup_write_quota_details,
 )
 from ..forget_guard import ForgetLedger, is_forget_request
-from ..pii import auto_storable, drop_sensitive_facts
+from ..pii import check as pii_check, drop_sensitive_facts
 from ..client import per_fact_results
 from ..relay import (
     ReadBlockState,
@@ -1576,13 +1576,22 @@ def session_debrief(
     stored_fact_ids: list[str] = []
     try:
         crystal = run_sync(generate_crystal(all_messages, stored_fact_texts, host_type=host_type))
-        if crystal and not all(
-            auto_storable(t)
-            for t in [crystal.narrative, *crystal.key_outcomes, *crystal.open_threads, *crystal.lessons]
-        ):
+        blocked = None
+        if crystal:
+            for part in [crystal.narrative, *crystal.key_outcomes, *crystal.open_threads, *crystal.lessons]:
+                res = pii_check(part)
+                if not res.is_allow:
+                    blocked = res
+                    break
+        if crystal and blocked is not None:
             # PRD-04 DEP-4: the Crystal is written automatically, so it follows
             # the auto-extraction rule — skip it if any part is not ``allow``.
-            logger.info("Session Crystal skipped: sensitive content (see pii log)")
+            # Log the decision + category only, never the text (#731).
+            logger.info(
+                "Session Crystal skipped: sensitive content (decision=%s category=%s)",
+                blocked.decision,
+                blocked.category,
+            )
             crystal = None
         if crystal:
             # The Crystal reads the whole conversation, including a fact the

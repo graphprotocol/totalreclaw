@@ -511,6 +511,13 @@ def on_session_start(state: "PluginState", **kwargs) -> None:
     logger.debug("TotalReclaw on_session_start: %s", session_id)
 
     state.reset_turn_counter()
+    # internal#645 — drop stale plaintext export dumps once per process.
+    try:
+        from totalreclaw.hermes.tools import prune_exports_once_per_process
+
+        prune_exports_once_per_process()
+    except Exception:  # noqa: BLE001 — housekeeping must never break session start
+        logger.debug("export prune at session start failed", exc_info=True)
     # 2.4.4rc2 (F7) — reset the pending-auto-extract buffer + the
     # suppressed-writes counter at session boundaries. A previous
     # session's pending entries are stale + would suppress legitimate

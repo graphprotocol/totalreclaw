@@ -292,3 +292,138 @@ class TestExportSchema:
         assert "provenance" in desc
         assert "file" in desc or "path" in desc
         assert "summary" in desc
+
+
+# ---------------------------------------------------------------------------
+# internal#645 — stale export dumps are pruned, and only inside the exports dir
+# ---------------------------------------------------------------------------
+
+
+class TestExportPruning:
+    def _age(self, path: Path, hours: float) -> None:
+        import time
+
+        t = time.time() - hours * 3600
+        os.utime(path, (t, t))
+
+    def test_prunes_only_old_export_files_in_exports_dir(self, tmp_path):
+        exports = tmp_path / "exports"
+        exports.mkdir()
+        old = exports / "totalreclaw-export-20200101T000000Z.json"
+        fresh = exports / "totalreclaw-export-20990101T000000Z.json"
+        other = exports / "notes.txt"
+        for p in (old, fresh, other):
+            p.write_text("x")
+        self._age(old, 25)
+        self._age(other, 100)
+        outside = tmp_path / "totalreclaw-export-20200101T000000Z.json"
+        outside.write_text("x")
+        self._age(outside, 100)
+
+        assert tools._prune_old_exports(exports) == 1
+
+        assert not old.exists()
+        assert fresh.exists()
+        assert other.exists()      # non-export name in the dir is untouched
+        assert outside.exists()    # nothing outside the exports dir is touched
+
+    def test_does_not_follow_symlinks(self, tmp_path):
+        exports = tmp_path / "exports"
+        exports.mkdir()
+        target = tmp_path / "precious.json"
+        target.write_text("x")
+        self._age(target, 100)
+        link = exports / "totalreclaw-export-20200101T000000Z.json"
+        link.symlink_to(target)
+        tools._prune_old_exports(exports)
+        assert target.exists() and link.is_symlink()
+
+    def test_missing_dir_is_a_noop(self, tmp_path):
+        assert tools._prune_old_exports(tmp_path / "nope") == 0
+
+    @pytest.mark.asyncio
+    async def test_export_run_prunes_stale_dump_and_keeps_new_0600(self, tmp_path, monkeypatch):
+        import stat as _stat
+
+        monkeypatch.setattr(tools, "EXPORT_INLINE_MAX_BYTES", 4)
+        monkeypatch.setenv("TOTALRECLAW_STATE_DIR", str(tmp_path))
+        exports = tmp_path / "exports"
+        exports.mkdir(mode=0o755)
+        stale = exports / "totalreclaw-export-20200101T000000Z.json"
+        stale.write_text("{}")
+        self._age(stale, 48)
+
+        state = _make_state_with_facts([_fact("1"), _fact("2")])
+        result = json.loads(await tools.export_all({}, state))
+
+        assert not stale.exists()
+        new = Path(result["export_path"])
+        assert new.exists()
+        assert _stat.S_IMODE(os.stat(new).st_mode) == 0o600
+        assert _stat.S_IMODE(os.stat(exports).st_mode) == 0o700
+
+    def test_prunes_stale_tmp_files(self, tmp_path):
+        exports = tmp_path / "exports"
+        exports.mkdir()
+        tmp = exports / "totalreclaw-export-20200101T000000Z.json.tmp"
+        tmp.write_text("x")
+        self._age(tmp, 30)
+        assert tools._prune_old_exports(exports) == 1
+        assert not tmp.exists()
+
+    def test_prune_warns_when_listing_fails(self, tmp_path, caplog):
+        with caplog.at_level("WARNING"):
+            assert tools._prune_old_exports(tmp_path / "nope") == 0
+        assert any("could not list exports dir" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_prune_error_never_breaks_export(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tools, "EXPORT_INLINE_MAX_BYTES", 4)
+        monkeypatch.setenv("TOTALRECLAW_STATE_DIR", str(tmp_path))
+        exports = tmp_path / "exports"
+        exports.mkdir()
+        stale = exports / "totalreclaw-export-20200101T000000Z.json"
+        stale.write_text("{}")
+        self._age(stale, 48)
+
+        def _boom(self, *a, **k):
+            raise PermissionError("nope")
+
+        monkeypatch.setattr(Path, "unlink", _boom)
+        state = _make_state_with_facts([_fact("1"), _fact("2")])
+        result = json.loads(await tools.export_all({}, state))
+        assert "error" not in result
+        assert Path(result["export_path"]).exists()
+
+    def test_startup_prune_runs_once_and_never_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TOTALRECLAW_STATE_DIR", str(tmp_path))
+        monkeypatch.setattr(tools, "_startup_prune_done", False)
+        exports = tmp_path / "exports"
+        exports.mkdir()
+        stale = exports / "totalreclaw-export-20200101T000000Z.json"
+        stale.write_text("{}")
+        self._age(stale, 48)
+        tools.prune_exports_once_per_process()
+        assert not stale.exists()
+        # second call is a no-op (flag set)
+        stale.write_text("{}")
+        self._age(stale, 48)
+        tools.prune_exports_once_per_process()
+        assert stale.exists()
+        # an internal failure is swallowed
+        monkeypatch.setattr(tools, "_startup_prune_done", False)
+        monkeypatch.setattr(tools, "_prune_old_exports", lambda *_a, **_k: 1 / 0)
+        tools.prune_exports_once_per_process()
+
+    def test_session_start_hook_prunes(self, tmp_path, monkeypatch):
+        from totalreclaw.hermes import hooks
+
+        monkeypatch.setenv("TOTALRECLAW_STATE_DIR", str(tmp_path))
+        monkeypatch.setattr(tools, "_startup_prune_done", False)
+        called = []
+        monkeypatch.setattr(tools, "prune_exports_once_per_process", lambda: called.append(1))
+        try:
+            hooks.on_session_start(MagicMock(), session_id="s1")
+        except Exception:
+            pass  # rest of the hook is not under test; the prune runs first
+        assert called == [1]
