@@ -43,6 +43,10 @@ def _hash_vec(text: str) -> list[float]:
 
 # Hand-placed vectors: a paraphrase pair at cosine ~0.97 and an unrelated
 # fact far from both.
+_TIDE = (
+    "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small "
+    "climate-tech startup, where they are building the company's carbon-accounting dashboard."
+)
 _VEG = _unit([1, 0, 0, 0, 0, 0, 0, 0])
 _VEG_PARA = _unit([1, 0.25, 0, 0, 0, 0, 0, 0])
 _TEA = _unit([0, 0, 1, 0, 0, 0, 0, 0])
@@ -50,6 +54,10 @@ _FIXED = {
     "user is vegetarian": _VEG,
     "the user follows a vegetarian diet": _VEG_PARA,
     "user prefers green tea": _TEA,
+    # #777: the H15 original, a short rewording of it (cosine 0.713) and a new city (0.613).
+    _TIDE.lower().strip().rstrip(".!"): _unit([0, 0, 0, 1, 0, 0, 0, 0]),
+    "user lives in porto and works at tidewater": _unit([0, 0, 0, 0.713, 0.70116, 0, 0, 0]),
+    "user moved to braga": _unit([0, 0, 0, 0.613, 0, 0.79009, 0, 0]),
 }
 
 
@@ -304,6 +312,39 @@ def test_explicit_remember_of_different_fact_is_stored():
 
     assert _remember(state, "User prefers green tea")["stored"] is True
     assert client.writes == ["User prefers green tea"]
+
+
+def test_777_explicit_remember_of_short_rewording_asks_to_confirm():
+    client = LaggyClient()
+    client.seed(_TIDE)
+    state = _plugin_state(client)
+
+    out = _remember(state, "User lives in Porto and works at Tidewater.")
+    assert out["stored"] is False
+    assert out["possible_duplicate"] is True
+    assert out["match"] == "contained"
+    assert out["existing_text"] == _TIDE
+    assert client.writes == []
+
+    forced = _remember(state, "User lives in Porto and works at Tidewater.", force=True)
+    assert forced["stored"] is True
+
+
+def test_777_explicit_remember_of_new_city_is_stored():
+    client = LaggyClient()
+    client.seed(_TIDE)
+    state = _plugin_state(client)
+
+    assert _remember(state, "User moved to Braga.")["stored"] is True
+
+
+def test_777_auto_extraction_does_not_use_contained():
+    client = LaggyClient()
+    client.seed(_TIDE)
+    state = _plugin_state(client)
+
+    _auto_extract_once(state, ["User lives in Porto and works at Tidewater."])
+    assert client.writes == ["User lives in Porto and works at Tidewater."]
 
 
 # -- pins, forget, edits ---------------------------------------------------------

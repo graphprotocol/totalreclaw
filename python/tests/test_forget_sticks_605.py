@@ -330,6 +330,67 @@ def test_h13_padded_restatement_is_skipped_as_clause(env, caplog):
     assert not any("vegetarian" in t.lower() for t in vault.active_texts())
 
 
+def _at(c, axis):
+    """Embedding at cosine ``c`` from the VEG vector, orthogonal remainder on ``axis``."""
+    base = fake_embedding(VEG)
+    side = [0.0] * 640
+    side[axis] = 1.0
+    return [c * a + math.sqrt(1 - c * c) * b for a, b in zip(base, side)]
+
+
+def _embed_from(table):
+    return lambda text: table.get(text) or fake_embedding(text)
+
+
+def test_715_disjoint_paraphrase_of_forgotten_fact_is_skipped(env, caplog):
+    import logging
+
+    from totalreclaw.agent.lifecycle import auto_extract
+
+    state, client, vault = env
+    _forget(state, "f2")
+    text = "User doesn't eat meat."
+    state.add_message("user", "No meat for me, thanks.")
+    state.add_message("assistant", "Understood.")
+    with caplog.at_level(logging.INFO), \
+         patch("totalreclaw.embedding.get_embedding", new=_embed_from({text: _at(0.83, 100)})), \
+         _extract_returning([(text, "preference")]):
+        assert auto_extract(state) == []
+    assert any("Skipping extracted ADD: restates forgotten fact f2 (paraphrase)" in r.getMessage() for r in caplog.records)
+    assert vault.active_texts() == [PGB]
+
+
+def test_715_new_value_and_other_subject_still_store(env):
+    from totalreclaw.agent.lifecycle import auto_extract
+
+    state, client, vault = env
+    _forget(state, "f2")
+    vegan, sister = "User is vegan.", "User's sister is vegetarian."
+    state.add_message("user", "I went vegan, and my sister is vegetarian.")
+    state.add_message("assistant", "Noted.")
+    table = {vegan: _at(0.93, 100), sister: _at(0.87, 101)}
+    with patch("totalreclaw.embedding.get_embedding", new=_embed_from(table)), \
+         _extract_returning([(vegan, "claim"), (sister, "claim")]):
+        stored = auto_extract(state)
+    assert sorted(stored) == sorted([vegan, sister])
+
+
+def test_715_explicit_remember_of_paraphrase_keeps_ledger_entry(env, caplog):
+    import logging
+
+    from totalreclaw.hermes import tools
+
+    state, client, vault = env
+    _forget(state, "f2")
+    text = "User doesn't eat meat."
+    with caplog.at_level(logging.INFO), \
+         patch("totalreclaw.embedding.get_embedding", new=_embed_from({text: _at(0.83, 100)})):
+        out = json.loads(run_sync(tools.remember({"text": text}, state)))
+    assert out["stored"] is True
+    assert _remember_logs(caplog) == ["forget ledger: explicit remember released 0 of 1 entries"]
+    assert len(client.forget_ledger) == 1
+
+
 def _two_entry_ledger(env_tuple):
     state, client, vault = env_tuple
     _forget(state, "f1")
