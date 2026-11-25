@@ -247,3 +247,21 @@ class TestUpgradeAlreadyPro:
 
         result = json.loads(await upgrade({}, state))
         assert result["checkout_url"] == "https://checkout.stripe.com/c/pay/x"
+
+    @pytest.mark.asyncio
+    async def test_free_tier_still_gets_checkout(self) -> None:
+        from totalreclaw.hermes.tools import upgrade
+
+        state = _make_state()
+        mock_client = MagicMock()
+        mock_client.ensure_address = AsyncMock()
+        mock_client.status = AsyncMock(return_value=MagicMock(tier="free"))
+        mock_client.relay = MagicMock()
+        mock_client.relay.create_checkout = AsyncMock(
+            return_value=CheckoutResponse(checkout_url="https://checkout.stripe.com/c/pay/y")
+        )
+        state._client = mock_client
+
+        result = json.loads(await upgrade({}, state))
+        assert result["checkout_url"] == "https://checkout.stripe.com/c/pay/y"
+        assert mock_client.relay.create_checkout.await_count == 1

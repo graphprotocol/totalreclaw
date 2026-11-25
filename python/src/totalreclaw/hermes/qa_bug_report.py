@@ -359,7 +359,11 @@ def _save_local_draft(args: dict) -> Optional[str]:
         override = os.environ.get("TOTALRECLAW_STATE_DIR")
         base = Path(override) if override else Path.home() / ".totalreclaw"
         out_dir = base / "qa-reports"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            os.chmod(out_dir, 0o700)
+        except OSError:
+            pass
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         path = out_dir / f"draft-{stamp}.md"
         safe = {

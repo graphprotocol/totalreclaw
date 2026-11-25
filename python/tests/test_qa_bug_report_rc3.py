@@ -434,7 +434,9 @@ class TestFilingFailureIsLoud:
         monkeypatch.setenv("TOTALRECLAW_STATE_DIR", str(tmp_path))
         monkeypatch.delenv("TOTALRECLAW_QA_GITHUB_TOKEN", raising=False)
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        out = _json.loads(await report_qa_bug(dict(VALID_ARGS), None))
+        args = dict(VALID_ARGS)
+        args["logs"] = "Authorization: Bearer abcdefghijklmnop1234567890abcdef"
+        out = _json.loads(await report_qa_bug(args, None))
         assert out["filed"] is False
         assert "NOT filed" in out["instruction"] and "word for word" in out["instruction"]
         assert out["error"].startswith("No GitHub token found")
@@ -442,7 +444,10 @@ class TestFilingFailureIsLoud:
         files = list(draft.glob("draft-*.md"))
         assert len(files) == 1 and out["draft_path"] == str(files[0])
         assert VALID_ARGS["title"] in files[0].read_text()
-        assert "credentials.json" not in str(files[0])
+        text = files[0].read_text()
+        assert "abcdefghijklmnop1234567890abcdef" not in text
+        assert "<REDACTED>" in text
+        assert (draft.stat().st_mode & 0o777) == 0o700
 
     @pytest.mark.asyncio
     async def test_github_failure_returns_instruction_and_draft(self, tmp_path, monkeypatch) -> None:

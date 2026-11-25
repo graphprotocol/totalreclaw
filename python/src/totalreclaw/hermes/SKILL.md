@@ -35,7 +35,7 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
 
 **Don't double-call.** If auto-extraction just fired (recent log lines show extraction), skip the manual `totalreclaw_remember` — embedding dedup will silently drop the duplicate, but you waste a write against quota.
 
-**Hermes' built-in `memory` tool** keeps the short profile (`USER.md` / `MEMORY.md`) Hermes loads every session. It runs alongside TotalReclaw. For "remember X", use `totalreclaw_remember`, not the built-in tool. The exception is when the user names the built-in store ("write this to USER.md", "MEMORY.md", "built-in memory"): then use the built-in `memory` tool as asked. It is copied into the vault by itself. Entries you add or edit there are copied into the vault by themselves, so don't repeat them with `totalreclaw_remember`. Removing an entry there only frees room in the profile and does NOT forget it in TotalReclaw.
+**Hermes' built-in `memory` tool** keeps the short profile (`USER.md` / `MEMORY.md`) Hermes loads every session. It runs alongside TotalReclaw. For "remember X", use `totalreclaw_remember`, not the built-in tool. The exception is when the user names the built-in store ("write this to USER.md", "MEMORY.md", "built-in memory"): then use the built-in `memory` tool as asked. Entries you add or edit there are copied into the vault by themselves, so don't repeat them with `totalreclaw_remember`. Removing an entry there only frees room in the profile and does NOT forget it in TotalReclaw.
 
 **Don't store transient noise.** Skip `totalreclaw_remember` for:
 - Casual greetings, banter, acknowledgements
