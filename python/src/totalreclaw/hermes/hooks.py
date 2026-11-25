@@ -25,6 +25,8 @@ from totalreclaw.agent.lifecycle import (
     _owner_address,
     _owner_addresses,
     _enqueue_unprocessed,
+    requeue_batch_after_outage,
+    _outage_streak,
     STORE_DEDUP_THRESHOLD,
 )
 from totalreclaw.agent.loop_runner import run_sync
@@ -729,7 +731,7 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
     full-mode auto-extract to land the facts.
 
     Each ``batches`` element is a ``{"messages": [...], "session_id": <str
-    -or-None>}`` dict from ``drain_pending(..., with_meta=True)``. Batches
+    -or-None>, "attempts": <int>}`` dict from ``drain_pending(..., with_meta=True)``. Batches
     are extracted ONE AT A TIME so each batch's facts are stamped with the
     ORIGINAL session's id (issue #494) via ``auto_extract``'s
     ``session_id_override`` — a single combined extraction could only carry
@@ -738,11 +740,15 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
     id, the prior behavior).
 
     Returns the total number of messages recovered (batches queued again because
-    relay reads are still paused are not counted). Errors during the
-    extraction call are logged and swallowed — drain is best-effort.
-    Whether the drain landed facts or not, the messages are consumed
-    from the queue (already done by ``drain_pending``) so we don't
-    re-attempt indefinitely on a persistent failure.
+    relay reads are still paused or the LLM is in an outage are not counted).
+    Errors during the extraction call are logged and swallowed — drain is
+    best-effort. Whether the drain landed facts or not, the messages are
+    consumed from the queue (already done by ``drain_pending``) so we don't
+    re-attempt indefinitely on a persistent failure. The exception is an LLM
+    upstream outage (internal #604): the batch goes back on the queue with its
+    attempt count raised by one, and the batches after it are re-queued without
+    an LLM call (one call per session start during an outage, not N). A batch
+    that has failed 5 attempts is dropped with a WARNING.
     """
     if not batches:
         return 0
@@ -757,7 +763,9 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
     # then shares the extraction with the live messages).
     live = state.get_unprocessed_messages() if state.has_unprocessed_messages() else []
     if live:
-        if _enqueue_unprocessed(state, state.get_client(), live):
+        if _enqueue_unprocessed(
+            state, state.get_client(), live, attempts=_outage_streak(state),
+        ):
             state.mark_messages_processed()
         else:
             logger.warning(
@@ -768,15 +776,32 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
         state.mark_messages_processed()
 
     total = 0
-    for batch in batches:
+    try:
+        total = _drain_batches(state, batches)
+    finally:
+        try:
+            state._extraction_outage_streak = 0
+            state._extraction_llm_outage = False
+        except Exception:
+            pass
+    return total
+
+
+def _drain_batches(state: "PluginState", batches: list) -> int:
+    total = 0
+    for idx, batch in enumerate(batches):
         # Tolerate both the meta-dict shape and a bare message-list (older
         # callers) so this stays robust to the ``with_meta`` flag.
         if isinstance(batch, dict):
             msgs = batch.get("messages") or []
             session_id = batch.get("session_id") or None
+            attempts = batch.get("attempts")
+            if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 0:
+                attempts = 0
         else:
             msgs = batch
             session_id = None
+            attempts = 0
 
         added = 0
         for msg in msgs:
@@ -791,6 +816,8 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
 
         try:
             state._extraction_requeued = False
+            state._extraction_llm_outage = False
+            state._extraction_outage_streak = attempts
         except Exception:
             pass
         try:
@@ -803,9 +830,26 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
         except Exception as exc:
             logger.warning("TotalReclaw: drain-side auto_extract failed: %s", exc)
 
-        # A batch that was queued again (reads still paused) has not landed.
-        if getattr(state, "_extraction_requeued", False) is not True:
+        outage = getattr(state, "_extraction_llm_outage", False) is True
+        # A batch that was queued again (reads still paused, LLM outage) has not landed.
+        if getattr(state, "_extraction_requeued", False) is not True and not outage:
             total += added
+
+        if outage:
+            # The LLM is down: do not spend its retry budget on every remaining
+            # batch. Age them one attempt each and put them back (bounded).
+            for rest in batches[idx + 1:]:
+                if isinstance(rest, dict):
+                    r_msgs = rest.get("messages") or []
+                    r_sid = rest.get("session_id") or None
+                    r_att = rest.get("attempts")
+                    if not isinstance(r_att, int) or isinstance(r_att, bool) or r_att < 0:
+                        r_att = 0
+                else:
+                    r_msgs, r_sid, r_att = rest, None, 0
+                if r_msgs:
+                    requeue_batch_after_outage(state, r_msgs, r_sid, r_att)
+            break
 
     return total
 

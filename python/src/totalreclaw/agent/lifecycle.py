@@ -468,6 +468,15 @@ ON_PAUSED_QUEUE = "queue"  # persist to the #148 pending queue (buffer is about 
 ON_PAUSED_BLIND = "blind"  # extract anyway, WARNING (messages may be lost otherwise)
 
 
+#: LLM upstream outage policy (internal #604 / product #553). A window whose
+#: extraction call stayed rate-limited or down through its whole retry budget
+#: is kept: first in the live buffer for ``LLM_OUTAGE_LIVE_RETRIES`` more
+#: cycles, then in the pending queue for the next session(s). After
+#: ``LLM_OUTAGE_MAX_ATTEMPTS`` failed cycles it is dropped with a WARNING.
+LLM_OUTAGE_MAX_ATTEMPTS = 5
+LLM_OUTAGE_LIVE_RETRIES = 2
+
+
 _ON_PAUSED_POLICY: contextvars.ContextVar[str] = contextvars.ContextVar(
     "totalreclaw_on_paused_policy", default=ON_PAUSED_DEFER
 )
@@ -505,8 +514,13 @@ def _paused_until_text(client, errors: Optional[list] = None) -> str:
     return "unknown"
 
 
-def _enqueue_unprocessed(state: "AgentState", client, messages: list[dict]) -> bool:
-    """Persist ``messages`` to the #148 pending queue. ``False`` on failure."""
+def _enqueue_unprocessed(
+    state: "AgentState", client, messages: list[dict], attempts: int = 0,
+) -> bool:
+    """Persist ``messages`` to the #148 pending queue. ``False`` on failure.
+
+    ``attempts`` is the count of LLM-outage extraction cycles the window has
+    already failed (internal #604); it travels with the queued batch."""
     owner = _owner_address(state)
     if not owner:
         return False
@@ -515,10 +529,109 @@ def _enqueue_unprocessed(state: "AgentState", client, messages: list[dict]) -> b
     if not isinstance(session_id, str):
         session_id = None
     try:
-        return bool(enqueue_messages(owner, list(messages), session_id=session_id))
+        return bool(
+            enqueue_messages(owner, list(messages), session_id=session_id, attempts=attempts)
+        )
     except Exception as exc:
         logger.warning("TotalReclaw: enqueue of deferred messages failed: %s", exc)
         return False
+
+
+def _outage_streak(state) -> int:
+    """Consecutive LLM-outage cycles of the active slot (0 when unset or not a
+    plain non-negative int, so a ``MagicMock`` state stays safe)."""
+    v = getattr(state, "_extraction_outage_streak", 0)
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
+
+
+def _set_flag(state, name: str, value) -> None:
+    try:
+        setattr(state, name, value)
+    except Exception:
+        pass
+
+
+def _requeue_after_llm_outage(
+    state: "AgentState", client, messages: list[dict], on_paused: str,
+) -> None:
+    """Keep, queue or drop a window whose extraction hit an LLM upstream outage.
+
+    Bounded: ``LLM_OUTAGE_MAX_ATTEMPTS`` failed cycles in a row drop the window
+    (WARNING). Before that, the live buffer keeps it for
+    ``LLM_OUTAGE_LIVE_RETRIES`` cycles (policy permitting), then the #148
+    pending queue carries it, with its attempt count, to the next session.
+    """
+    attempt = _outage_streak(state) + 1
+    n = len(messages)
+    _set_flag(state, "_extraction_llm_outage", True)
+    _set_flag(state, "_extraction_requeued", False)
+    if attempt >= LLM_OUTAGE_MAX_ATTEMPTS:
+        logger.warning(
+            "auto-extraction gave up: LLM upstream outage on %d attempts in a row; "
+            "%d messages not extracted", attempt, n,
+        )
+        state.mark_messages_processed()
+        streak = 0
+    elif (
+        on_paused != ON_PAUSED_QUEUE
+        and attempt <= LLM_OUTAGE_LIVE_RETRIES
+        and n <= DEFER_MAX_MESSAGES
+    ):
+        logger.info(
+            "auto-extraction deferred: LLM upstream outage (attempt %d/%d, %d messages kept "
+            "for the next cycle)", attempt, LLM_OUTAGE_MAX_ATTEMPTS, n,
+        )
+        streak = attempt
+        _set_flag(state, "_extraction_deferred", True)  # next cycle reads the whole buffer
+    elif _enqueue_unprocessed(state, client, messages, attempts=attempt):
+        logger.info(
+            "auto-extraction deferred: LLM upstream outage (attempt %d/%d, %d messages queued "
+            "for the next session)", attempt, LLM_OUTAGE_MAX_ATTEMPTS, n,
+        )
+        state.mark_messages_processed()
+        streak = 0
+        _set_flag(state, "_extraction_deferred", False)
+        _set_flag(state, "_extraction_requeued", True)
+    else:
+        logger.warning(
+            "auto-extraction dropped %d messages: LLM upstream outage and the pending "
+            "queue write failed", n,
+        )
+        state.mark_messages_processed()
+        streak = 0
+    _set_flag(state, "_extraction_outage_streak", streak)
+
+
+def requeue_batch_after_outage(
+    state: "AgentState", messages: list[dict], session_id: Optional[str], prior_attempts: int,
+) -> bool:
+    """Count one failed attempt for a drained batch the session-start drain did
+    not try (the LLM was just down) and put it back on the pending queue.
+
+    Returns ``False`` when the batch was dropped instead: the attempt limit was
+    reached, there is no owner, or the queue write failed (each logged WARNING).
+    """
+    attempt = prior_attempts + 1
+    n = len(messages)
+    if attempt >= LLM_OUTAGE_MAX_ATTEMPTS:
+        logger.warning(
+            "auto-extraction gave up: LLM upstream outage on %d attempts in a row; "
+            "%d queued messages not extracted", attempt, n,
+        )
+        return False
+    owner = _owner_address(state)
+    if not owner:
+        logger.warning(
+            "auto-extraction gave up: LLM upstream outage and no owner to queue %d messages for", n,
+        )
+        return False
+    ok = enqueue_messages(owner, list(messages), session_id=session_id, attempts=attempt)
+    if not ok:
+        logger.warning(
+            "auto-extraction dropped %d queued messages: LLM upstream outage and the "
+            "pending queue write failed", n,
+        )
+    return bool(ok)
 
 
 def _defer_for_paused_reads(
@@ -549,7 +662,9 @@ def _defer_for_paused_reads(
         except Exception:
             pass
         return True
-    if on_paused == ON_PAUSED_QUEUE and _enqueue_unprocessed(state, client, messages):
+    if on_paused == ON_PAUSED_QUEUE and _enqueue_unprocessed(
+        state, client, messages, attempts=_outage_streak(state),
+    ):
         logger.info(
             "auto-extraction deferred: reads paused until %s UTC (%d messages kept, "
             "queued for the next session)", until, n,
@@ -601,6 +716,13 @@ def auto_extract(
             session (use when the buffer is about to be cleared); ``"blind"``
             extracts anyway and logs a WARNING. ``"defer"`` also falls back to
             blind past ``DEFER_MAX_MESSAGES`` waiting messages.
+
+    An LLM upstream outage (the extraction call stayed rate-limited or down
+    through its retry budget) never marks the window processed: it is kept
+    for up to ``LLM_OUTAGE_LIVE_RETRIES`` more cycles, then queued with an
+    attempt count, and dropped with a WARNING after
+    ``LLM_OUTAGE_MAX_ATTEMPTS`` failed cycles (internal #604). A zero-facts
+    answer or a non-retryable error still marks the window processed.
 
     Returns:
         List of stored fact texts (for debrief context).
@@ -654,7 +776,10 @@ def auto_extract(
         owner = _owner_address(state)
         source_session_id = getattr(relay, "_session_id", None) if relay is not None else None
         if owner:
-            persisted = enqueue_messages(owner, list(messages), session_id=source_session_id)
+            persisted = enqueue_messages(
+                owner, list(messages), session_id=source_session_id,
+                attempts=_outage_streak(state),
+            )
         else:
             persisted = False
         if persisted:
@@ -697,6 +822,7 @@ def _auto_extract_inner(
     """Inner auto_extract body — kept separate so the outer wrapper can
     catch ``InterpreterShutdownError`` from any nested ``run_sync``."""
     on_paused = _ON_PAUSED_POLICY.get()
+    _set_flag(state, "_extraction_llm_outage", False)
 
     # Existing memories for the LLM dedup context (PRD-04 DEP-3) and the
     # store-time write gate: topical + just-written (ledger) + newest.
@@ -754,6 +880,13 @@ def _auto_extract_inner(
             type(e).__name__,
         )
         logger.debug("auto-extract: LLM extraction failed: %s", e)
+
+    # LLM upstream outage (internal #604): the window was NOT looked at, so it
+    # must not be marked processed like a real zero-facts answer.
+    if outcome.get("llm") == "outage":
+        _requeue_after_llm_outage(state, client, messages, on_paused)
+        return []
+    _set_flag(state, "_extraction_outage_streak", 0)
 
     if not facts and outcome.get("llm") == "unavailable":
         facts = heuristic_fallback_facts(messages, max_facts, existing_memories)

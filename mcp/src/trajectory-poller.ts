@@ -21,6 +21,17 @@
  *   existing extraction pipeline. Per-file byte-offset is tracked in
  *   ~/.totalreclaw/extract-state.json so we never re-process lines.
  *
+ *   Offset rule (one rule for deferral and outage): the stored offset is
+ *   the start of the first message that has NOT been consumed. It moves
+ *   only when an extraction attempt consumed the window (success, or a
+ *   genuine zero-facts answer) or the window was finally given up on
+ *   (OUTAGE_MAX_RETRIES failed attempts). Below the turn threshold, or
+ *   when the one-extraction-per-poll cap skips a file, nothing is stored:
+ *   the next poll re-reads from the same offset and recounts turns, so
+ *   earlier turns still reach extraction. When extraction throws (the
+ *   extractor re-throws an LLM upstream outage), the offset stays and the
+ *   file is retried after a backoff (2, 4, 8, 16 min) with `retryAt`.
+ *
  *   When the upstream OpenClaw bug is fixed, the agent_end hook starts
  *   firing again — both paths can coexist with offset-based dedup.
  *
@@ -114,10 +125,57 @@ export type ExtractedFactLike = {
 
 /**
  * Persistent per-file offset tracker. The keys are absolute paths to
- * trajectory files; values are last byte-offset processed and the
- * accumulated turn count since the last extraction pass.
+ * trajectory files; values are the byte offset of the first unconsumed
+ * message. `turnsAccum` is kept for state-file compatibility and is
+ * always written as 0 now: turns are recounted from `offset` on every
+ * poll, so an old file with a non-zero value still loads (and the value
+ * is ignored). `outageRetries` / `retryAt` (epoch ms) are set while a
+ * window waits for an LLM outage to clear.
  */
-export type PollerState = Record<string, { offset: number; turnsAccum: number }>;
+export type PollerState = Record<
+  string,
+  { offset: number; turnsAccum: number; outageRetries?: number; retryAt?: number }
+>;
+
+/** Failed extraction attempts on one window before it is given up on. */
+export const OUTAGE_MAX_RETRIES = 5;
+
+/** Wait before outage retry number `retries` (1-based): 2, 4, 8, 16 min, capped at 30. */
+export function outageBackoffMs(retries: number): number {
+  return Math.min(120_000 * 2 ** (retries - 1), 1_800_000);
+}
+
+/** extractFacts keeps about this many prompt characters (see truncateMessages there). */
+const PROMPT_CHAR_BUDGET = 12_000;
+
+/**
+ * Length of the longest message prefix that fits one extraction prompt
+ * (lines are `[role]: content` joined by a blank line, as the extractor builds
+ * them). Ends on an assistant message when possible so a turn is not cut in
+ * half; always at least 1.
+ */
+export function sliceToPromptBudget(
+  messages: Array<{ role: string; content: string }>,
+  budget: number = PROMPT_CHAR_BUDGET,
+): number {
+  let total = 0;
+  let n = 0;
+  for (const m of messages) {
+    const len = `[${m.role}]: ${m.content}`.length;
+    if (total + len > budget) break;
+    total += len;
+    n++;
+  }
+  if (n >= messages.length) return messages.length;
+  if (n === 0) return 1;
+  for (let k = n; k > 0; k--) {
+    if (messages[k - 1].role === 'assistant') return k;
+  }
+  return n;
+}
+
+/** A window longer than the turn-mode cut-off (6 messages) is read in full. */
+const TURN_MODE_MAX_MESSAGES = 6;
 
 export interface TrajectoryPollerHandle {
   /** Stop the poller. Idempotent. */
@@ -149,8 +207,24 @@ export function startTrajectoryPoller(
 ): TrajectoryPollerHandle {
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const stateFile = opts.stateFile ?? STATE_FILE;
+  // Reentrancy guard: a poll can outlast the interval (an LLM attempt takes up
+  // to ~97 s), and state is saved only at the end of an iteration.
+  let polling = false;
+  // Newest end offset already logged as "deferred" per file (log-noise guard only).
+  const lastSeen = new Map<string, number>();
 
   const pollAndExtract = async (): Promise<void> => {
+    if (polling) return;
+    polling = true;
+    try {
+      await pollBody();
+    } finally {
+      polling = false;
+    }
+  };
+
+  const pollBody = async (): Promise<void> => {
+    let inFlight: string | null = null; // file whose extraction is mid-pipeline
     try {
       await deps.ensureInitialized();
       if (deps.isPairingPending()) return;
@@ -167,8 +241,8 @@ export function startTrajectoryPoller(
       // crossing the extract threshold in the same poll → N back-to-back
       // LLM calls trip the rate-limiter (especially on free tiers).
       // With cap=1, extra files defer to the next poll iteration
-      // (60 s later by default). Their turnsAccum is preserved across
-      // polls so they don't lose progress.
+      // (60 s later by default). Their offset is not advanced, so their
+      // messages are re-read and extracted on a later poll.
       let extractionsThisPoll = 0;
       const MAX_EXTRACTIONS_PER_POLL = 1;
 
@@ -197,55 +271,135 @@ export function startTrajectoryPoller(
         }
 
         const lastEntry = state[file] ?? { offset: 0, turnsAccum: 0 };
-        const { messages, newOffset } = parseNewMessages(file, lastEntry.offset);
-        if (newOffset === lastEntry.offset) continue; // nothing new
+        // The file shrank below the stored offset (truncated or recreated).
+        // Reset to 0: unconsumed content is never skipped; the worst case is
+        // re-extracting old text that survived a truncation, which store-time
+        // dedup absorbs. (Resetting to the current size would silently skip
+        // everything written to a recreated file before this poll.)
+        try {
+          if (fs.statSync(file).size < lastEntry.offset) {
+            state[file] = { offset: 0, turnsAccum: 0 };
+            stateChanged = true;
+            deps.logger.warn(`extractd: ${path.basename(file)}: file shrank below the stored offset; restarting from 0`);
+            continue;
+          }
+        } catch {
+          continue;
+        }
+        // A window waiting out an LLM outage is not touched until its backoff elapsed.
+        if (lastEntry.retryAt !== undefined && Date.now() < lastEntry.retryAt) continue;
 
-        const turnsAdded = countTurns(messages);
-        const turnsAccum = lastEntry.turnsAccum + turnsAdded;
+        // Everything since the last CONSUMED offset: turns are recounted from
+        // there each poll, so deferred turns are not lost.
+        const { messages: windowMessages, newOffset: windowEnd, endOffsets } = parseNewMessages(file, lastEntry.offset);
+        const messages = windowMessages;
+        const newOffset = windowEnd;
+        if (newOffset === lastEntry.offset) continue; // nothing unconsumed
+
+        const turns = countTurns(messages);
         const shouldExtract =
-          turnsAccum >= extractInterval &&
+          turns >= extractInterval &&
           messages.length >= 2 &&
           extractionsThisPoll < MAX_EXTRACTIONS_PER_POLL;
 
-        if (shouldExtract) {
-          extractionsThisPoll++;
-
-          deps.logger.info(
-            `extractd: ${path.basename(file)} -> ${turnsAccum}/${extractInterval} turns; running extraction (${messages.length} messages)`,
-          );
-          const existing = deps.isDedupEnabled() ? await deps.getDedupCandidates(20, messages) : [];
-          const rawFacts = await deps.runExtraction(messages, 'turn', existing, undefined);
-          deps.logger.info(`extractd: extraction returned ${rawFacts.length} raw facts`);
-          const { kept, dropped } = deps.filterByImportance(rawFacts);
-          deps.logger.info(`extractd: importance-filter kept=${kept.length} dropped=${dropped}`);
-          const maxFacts = deps.getMaxFactsPerExtraction();
-          // PRD-04 DEP-4: automatic writes store only `allow` verdicts.
-          // `block` and `flag` facts are dropped here (never stored, never
-          // logged by text); only an explicit remember with a confirmation
-          // token may store a sensitive value.
-          const facts = filterForAutoExtraction(kept.slice(0, maxFacts)).kept;
-          if (facts.length > 0) {
-            const stored = await deps.persistFacts(facts);
-            deps.logger.info(`extractd: stored ${stored} facts to encrypted vault`);
-          } else {
-            deps.logger.info('extractd: 0 storable facts after filter');
-          }
-          state[file] = { offset: newOffset, turnsAccum: 0 };
-        } else {
-          state[file] = { offset: newOffset, turnsAccum };
-          if (turnsAdded > 0) {
+        if (!shouldExtract) {
+          // Deferred (below the turn threshold or per-poll cap): keep the offset.
+          if (newOffset > (lastSeen.get(file) ?? -1)) {
+            lastSeen.set(file, newOffset);
             deps.logger.info(
-              `extractd: ${path.basename(file)} -> +${turnsAdded} turns (total ${turnsAccum}/${extractInterval}, deferred)`,
+              `extractd: ${path.basename(file)} -> ${turns}/${extractInterval} turns (deferred, ${messages.length} messages kept)`,
             );
           }
+          continue;
         }
+
+        extractionsThisPoll++;
+        const priorRetries = lastEntry.outageRetries ?? 0;
+
+        // Take a slice that fits ONE extraction prompt (extractFacts keeps only
+        // ~12k chars and drops the rest). The offset moves only past the
+        // messages actually sent; the rest stays for the next poll.
+        const sliceLen = sliceToPromptBudget(messages);
+        const batch = messages.slice(0, sliceLen);
+        const batchEnd = sliceLen < messages.length ? endOffsets[sliceLen - 1] : newOffset;
+        if (sliceLen === 1 && `[${batch[0].role}]: ${batch[0].content}`.length > PROMPT_CHAR_BUDGET) {
+          deps.logger.warn(
+            `extractd: ${path.basename(file)}: one message of ${batch[0].content.length} chars exceeds the ${PROMPT_CHAR_BUDGET}-char prompt; only its first part is extracted`,
+          );
+        }
+        inFlight = path.basename(file);
+        if (sliceLen < messages.length) {
+          deps.logger.info(
+            `extractd: ${path.basename(file)}: window of ${messages.length} messages split; extracting the first ${sliceLen}, the rest stays for the next poll`,
+          );
+        }
+        deps.logger.info(
+          `extractd: ${path.basename(file)} -> ${turns}/${extractInterval} turns; running extraction (${batch.length} messages)`,
+        );
+        const existing = deps.isDedupEnabled() ? await deps.getDedupCandidates(20, batch) : [];
+        const mode = priorRetries > 0 || batch.length > TURN_MODE_MAX_MESSAGES ? 'full' : 'turn';
+        let rawFacts: ExtractedFactLike[];
+        try {
+          rawFacts = await deps.runExtraction(batch, mode, existing, undefined);
+        } catch (err) {
+          // The extraction attempt failed (an LLM outage that outlasted the
+          // client's own retries). Do not consume the window: keep the offset
+          // and retry after a backoff, up to OUTAGE_MAX_RETRIES attempts.
+          // Only runExtraction is covered: dedup / filter / persist failures
+          // go to the poll-level catch and neither consume nor count a retry.
+          const errName = err instanceof Error ? err.name : 'Error';
+          const base = path.basename(file);
+          const retries = priorRetries + 1;
+          if (retries >= OUTAGE_MAX_RETRIES) {
+            deps.logger.warn(
+              `extractd: ${base}: extraction failed ${retries} times in a row (${errName}); giving up on ${batch.length} messages`,
+            );
+            state[file] = { offset: batchEnd, turnsAccum: 0 };
+          } else {
+            const waitMs = outageBackoffMs(retries);
+            deps.logger.warn(
+              `extractd: ${base}: extraction failed (${errName}, attempt ${retries}/${OUTAGE_MAX_RETRIES}); keeping ${messages.length} messages, retry in ${Math.round(waitMs / 1000)}s`,
+            );
+            state[file] = {
+              offset: lastEntry.offset,
+              turnsAccum: 0,
+              outageRetries: retries,
+              retryAt: Date.now() + waitMs,
+            };
+          }
+          stateChanged = true;
+          inFlight = null;
+          continue;
+        }
+        deps.logger.info(`extractd: extraction returned ${rawFacts.length} raw facts`);
+        const { kept, dropped } = deps.filterByImportance(rawFacts);
+        deps.logger.info(`extractd: importance-filter kept=${kept.length} dropped=${dropped}`);
+        const maxFacts = deps.getMaxFactsPerExtraction();
+        // PRD-04 DEP-4: automatic writes store only `allow` verdicts.
+        // `block` and `flag` facts are dropped here (never stored, never
+        // logged by text); only an explicit remember with a confirmation
+        // token may store a sensitive value.
+        const facts = filterForAutoExtraction(kept.slice(0, maxFacts)).kept;
+        if (facts.length > 0) {
+          const stored = await deps.persistFacts(facts);
+          deps.logger.info(`extractd: stored ${stored} facts to encrypted vault`);
+        } else {
+          deps.logger.info('extractd: 0 storable facts after filter');
+        }
+        // Consumed (stored, or a genuine zero-facts answer): advance past the
+        // slice that was sent and clear the outage fields.
+        state[file] = { offset: batchEnd, turnsAccum: 0 };
         stateChanged = true;
+        inFlight = null;
       }
 
       if (stateChanged) saveState(stateFile, state, deps.logger);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       deps.logger.error(`extractd: poll iteration failed: ${msg}`);
+      if (inFlight) {
+        deps.logger.warn(`extractd: ${inFlight}: window kept for the next poll`);
+      }
     }
   };
 
@@ -315,10 +469,12 @@ export function parseNewMessages(
 ): {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   newOffset: number;
+  /** Byte offset just past the line that produced each message (same order). */
+  endOffsets: number[];
 } {
   const stat = fs.statSync(file);
   if (stat.size <= lastOffset) {
-    return { messages: [], newOffset: stat.size };
+    return { messages: [], newOffset: stat.size, endOffsets: [] };
   }
   const fd = fs.openSync(file, 'r');
   let text: string;
@@ -335,8 +491,13 @@ export function parseNewMessages(
   const newOffset = lastNl === -1 ? lastOffset : lastOffset + Buffer.byteLength(completeText, 'utf-8') + 1;
 
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  const endOffsets: number[] = [];
+  let lineStart = lastOffset;
   for (const line of completeText.split('\n')) {
+    const lineEnd = lineStart + Buffer.byteLength(line, 'utf-8') + 1;
+    lineStart = lineEnd;
     if (!line.trim()) continue;
+    const before = messages.length;
     try {
       const evt = JSON.parse(line) as {
         type?: string;
@@ -357,8 +518,9 @@ export function parseNewMessages(
     } catch {
       // Skip malformed line; offset still advances.
     }
+    if (messages.length > before) endOffsets.push(lineEnd);
   }
-  return { messages, newOffset };
+  return { messages, newOffset, endOffsets };
 }
 
 /**

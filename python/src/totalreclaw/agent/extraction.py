@@ -31,6 +31,7 @@ import totalreclaw_core
 
 from .llm_client import (
     LLMConfig,
+    LLMUpstreamOutageError,
     chat_completion,
     complete_with_extraction_fallback,
     detect_llm_config,
@@ -1149,8 +1150,11 @@ async def extract_facts_llm(
 
     ``[]`` is ambiguous (no LLM vs. the LLM correctly found nothing new), so
     callers that must tell them apart pass ``outcome``: a dict that gets
-    ``outcome["llm"]`` set to ``"unavailable"`` (no LLM config), ``"error"``
-    (the call raised), ``"empty"`` (every candidate answered empty), ``"ok"``
+    ``outcome["llm"]`` set to ``"unavailable"`` (no LLM config), ``"outage"``
+    (the LLM stayed rate-limited or down through its whole retry budget, e.g.
+    z.ai 1302, 429, 5xx, timeouts; the caller should keep the window),
+    ``"error"`` (the call raised anything else, e.g. a deterministic HTTP
+    400), ``"empty"`` (every candidate answered empty), ``"ok"``
     (a response arrived, whatever it parsed to) or ``"skipped"`` (nothing to
     process).
 
@@ -1234,6 +1238,10 @@ async def extract_facts_llm(
             chat_config, EXTRACTION_SYSTEM_PROMPT, user_prompt,
             completion=chat_completion,
         )
+    except LLMUpstreamOutageError as e:
+        logger.warning("extract_facts_llm: chat_completion threw: %s", e)
+        _set("outage")
+        return []
     except Exception as e:
         logger.warning("extract_facts_llm: chat_completion threw: %s", e)
         _set("error")

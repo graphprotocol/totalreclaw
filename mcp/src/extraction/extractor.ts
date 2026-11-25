@@ -18,7 +18,7 @@
  * `role` and `content` fields.
  */
 
-import { chatCompletion, resolveLLMConfig } from './llm-client.js';
+import { chatCompletion, resolveLLMConfig, LLMUpstreamOutageError } from './llm-client.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -297,7 +297,12 @@ function truncateMessages(messages: Array<{ role: string; content: string }>, ma
 
   for (const msg of messages) {
     const line = `[${msg.role}]: ${msg.content}`;
-    if (totalChars + line.length > maxChars) break;
+    if (totalChars + line.length > maxChars) {
+      // A first message longer than the whole budget is hard-cut, not dropped:
+      // extraction sees its first maxChars rather than an empty prompt.
+      if (lines.length === 0) lines.push(line.slice(0, maxChars));
+      break;
+    }
     lines.push(line);
     totalChars += line.length;
   }
@@ -1399,6 +1404,13 @@ export async function comparativeRescoreV1(
  * Produces v1-shaped facts with `type`, `source`, `scope`, `volatility`,
  * and optional `reasoning` fields populated. The caller should hand the
  * result to `storeExtractedFacts` which emits a v1 canonical claim blob.
+ *
+ * Resolves `[]` for a zero-facts answer and for non-retryable errors. An LLM
+ * upstream outage (rate limit, 5xx or timeout that outlasted the client's own
+ * retries) REJECTS with `LLMUpstreamOutageError`, so the caller can keep the
+ * window and retry later instead of treating it as "nothing to extract". The
+ * only caller is the trajectory poller (via the dep in index.ts), which
+ * handles the throw.
  */
 export async function extractFacts(
   rawMessages: unknown[],
@@ -1463,6 +1475,10 @@ export async function extractFacts(
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (err instanceof LLMUpstreamOutageError) {
+      logger?.warn?.(`extractFacts: LLM upstream outage, window kept for retry: ${msg}`);
+      throw err;
+    }
     logger?.warn?.(`extractFacts: chatCompletion threw: ${msg}`);
     return [];
   }
