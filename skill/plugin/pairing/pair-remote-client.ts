@@ -93,6 +93,22 @@ export interface RemotePairSession {
   mode: PairRelayMode;
   /** Live WebSocket. Internal — the caller does not interact with it. */
   _ws: WebSocket;
+  /**
+   * Replace-mode session: the relay's page makes the user confirm that this
+   * pairing replaces the account already on this machine, and
+   * `awaitPhraseUpload` refuses the upload unless the relay forwards that
+   * confirmation (`replace_confirmed: true`). Mirrors the Python client.
+   */
+  replace?: boolean;
+}
+
+/** The relay did not acknowledge a replace-mode session (an older relay
+ *  whose page cannot ask the user to confirm a replacement). */
+export class ReplaceNotSupportedError extends Error {
+  constructor(message = 'pair-remote-client: this relay does not support confirmed account replacement yet') {
+    super(message);
+    this.name = 'ReplaceNotSupportedError';
+  }
 }
 
 /** Outcome of the caller-supplied completion handler. */
@@ -178,6 +194,9 @@ export interface OpenRemotePairOptions {
   clientId?: string;
   /** Pair mode advertised in the open frame. Defaults to 'either'. */
   mode?: PairRelayMode;
+  /** Open the session in replace mode. Throws `ReplaceNotSupportedError`
+   *  when the relay's `opened` reply does not echo `replace: true`. */
+  replace?: boolean;
   /** Override the random keypair generator (tests). */
   keypair?: GatewayKeypair;
   /** Override the WebSocket constructor (tests inject a stub). */
@@ -217,6 +236,7 @@ export async function openRemotePairSession(
   const pin = opts.pin ?? defaultPin();
   const clientId = opts.clientId ?? defaultClientId();
   const mode: PairRelayMode = opts.mode ?? 'either';
+  const replace = opts.replace === true;
 
   const ws: WebSocket = new WebSocketImpl(wsUrl, {
     handshakeTimeout: OPEN_TIMEOUT_MS,
@@ -239,6 +259,7 @@ export async function openRemotePairSession(
         pin,
         client_id: clientId,
         mode,
+        ...(replace ? { replace: true } : {}),
       }),
     );
   } catch (err) {
@@ -282,6 +303,13 @@ export async function openRemotePairSession(
     throw new Error('pair-remote-client: opened frame missing token or expires_at');
   }
 
+  // An older relay ignores `replace` and its page would not ask the user to
+  // confirm. Abort rather than pair unconfirmed.
+  if (replace && msg.replace !== true) {
+    safeClose(ws);
+    throw new ReplaceNotSupportedError();
+  }
+
   const url = buildUserUrl(relayBase, token, keypair.pkB64);
 
   return {
@@ -292,6 +320,7 @@ export async function openRemotePairSession(
     keypair,
     mode,
     _ws: ws,
+    ...(replace ? { replace: true } : {}),
   };
 }
 
@@ -341,6 +370,14 @@ export async function awaitPhraseUpload(
     safeSend(ws, { type: 'nack', error: 'expected_forward' });
     safeClose(ws);
     throw new Error(`pair-remote-client: unexpected frame '${String(msg.type)}'`);
+  }
+
+  // Replace-mode sessions only proceed on the user's confirmation from the
+  // pairing page, forwarded by the relay. Checked before decrypting.
+  if (session.replace === true && msg.replace_confirmed !== true) {
+    safeSend(ws, { type: 'nack', error: 'replace_not_confirmed' });
+    safeClose(ws);
+    throw new Error('pair-remote-client: replacement was not confirmed on the pairing page');
   }
 
   const clientPubkey = typeof msg.client_pubkey === 'string' ? msg.client_pubkey : '';

@@ -467,6 +467,8 @@ export function registerPairCli(
      * back to local-mode and warns.
      */
     runRelayPairCli?: (mode: PairCliMode, opts: RelayPairCliOpts) => Promise<PairCliOutcome>;
+    /** True when an account already exists on this machine (guards `--local`). */
+    hasExistingAccount?: () => boolean;
   },
 ): void {
   // If the onboarding-cli already attached `totalreclaw`, reuse it.
@@ -489,6 +491,7 @@ export function registerPairCli(
     .option('--json', 'Emit a single JSON payload (url/pin/qr_ascii) instead of the human-readable banner. Enables agent-driven pairing.')
     .option('--url-pin-only', 'Emit ONLY {v,url,pin,expires_at_ms} — no QR ASCII, no SID, no mode echo. Headless fallback for container-based agents (issue #87; the legacy totalreclaw_pair agent tool was retired in Phase 3.2, so this is now the canonical agent-driven pair surface). Zero phrase exposure on stdout.')
     .option('--local', '(3.3.4-rc.1) Use the loopback / LAN URL flow instead of the relay. URLs point at this gateway\'s bound interface (e.g. http://localhost:18789/…) and require the user\'s browser to be on a reachable network. Default since rc.6 was relay; this flag preserves the air-gapped path.')
+    .option('--replace', 'Replace the account already on this machine. Without it, pairing over an existing account is refused. Needs relay mode: you confirm the replacement on the pairing page, and the old credentials file is kept as credentials.json.replaced-<time>.')
     .option('--timeout <sec>', 'Session TTL in seconds (default: 900 = 15 min, matches pair-session-store default)')
     .action(async (...args: unknown[]) => {
       // commander passes: [modeArg, options, cmd]
@@ -497,6 +500,7 @@ export function registerPairCli(
         json?: boolean;
         urlPinOnly?: boolean;
         local?: boolean;
+        replace?: boolean;
         timeout?: string | number;
       };
       const mode: PairCliMode =
@@ -532,8 +536,24 @@ export function registerPairCli(
             io,
             outputMode,
             ttlSeconds,
+            replace: opts.replace === true,
           });
         } else {
+          if (opts.replace === true) {
+            // The local page has no replace confirmation, so the user could
+            // not confirm there. Refuse rather than replace unconfirmed.
+            io.stderr.write(
+              '\n--replace needs relay mode (the pairing page asks you to confirm the replacement). ' +
+                'Run it without --local.\n',
+            );
+            process.exit(1);
+          }
+          if (opts.local && deps.hasExistingAccount?.()) {
+            io.stderr.write(
+              '\nThis machine already has a TotalReclaw account. Pairing would replace it, so it was not started.\n',
+            );
+            process.exit(1);
+          }
           if (opts.local) {
             // Tell the operator they explicitly opted in. Suppress in
             // JSON modes — the JSON contract must stay stdout-clean.
@@ -587,6 +607,8 @@ export interface RelayPairCliOpts {
   io: PairCliIo;
   outputMode?: PairCliOutputMode;
   ttlSeconds?: number;
+  /** Operator passed `--replace`. */
+  replace?: boolean;
 }
 
 /**

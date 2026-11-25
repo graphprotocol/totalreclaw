@@ -44,17 +44,24 @@
  * `CONFIG`. See `index.ts` wire-up.
  */
 
+import type WebSocket from 'ws';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
 import {
+  discardReplaceCopy,
+  existingAccountGuard,
+  hasExistingAccount,
   loadCredentialsJson,
+  preserveCredentialsBeforeReplace,
+  stripAccountFields,
   writeCredentialsJson,
   writeOnboardingState,
 } from '../fs-helpers.js';
 import {
   awaitPhraseUpload,
   openRemotePairSession,
+  ReplaceNotSupportedError,
 } from './pair-remote-client.js';
 import { setRecoveryPhraseOverride } from '../config.js';
 import { encodePng, encodeUnicode } from './pair-qr.js';
@@ -77,6 +84,8 @@ export interface RelayPairCliRunnerOpts {
   credentialsPath: string;
   /** Where onboarding-state.json lives — flipped to `active` on success. */
   onboardingStatePath: string;
+  /** Test seam: WebSocket constructor for the relay session. */
+  webSocketImpl?: typeof WebSocket;
   /** Plugin version stamped into onboarding-state.json. */
   pluginVersion: string;
   /** Scope-address derivation. Best-effort — null on failure. */
@@ -96,6 +105,13 @@ export interface RelayPairCliRunnerOpts {
    * authoritative for session expiry.
    */
   ttlSeconds?: number;
+  /**
+   * Operator asked (`--replace`) to replace the account already on this
+   * machine. Opens a replace-mode relay session: the pairing page warns and
+   * the user confirms there. Without it, pairing over an existing account
+   * is refused.
+   */
+  replace?: boolean;
 }
 
 /**
@@ -114,6 +130,21 @@ export async function runRelayPairCli(
   const outputMode: PairCliOutputMode = opts.outputMode ?? 'human';
   const stdout = opts.io.stdout;
 
+  // 0. Existing-account guard (#610). Never pair over an account that is
+  //    already on this machine unless the operator explicitly asked to
+  //    replace it; a replace additionally needs the user's confirmation on
+  //    the relay's pairing page.
+  const accountExists = hasExistingAccount(opts.credentialsPath);
+  if (accountExists && opts.replace !== true) {
+    opts.io.stderr.write(
+      '\nThis machine already has a TotalReclaw account. Pairing would replace it, so it was not started.\n' +
+        'To replace it on purpose, run the command again with --replace (you then confirm the\n' +
+        'replacement on the pairing page; the old credentials file is kept as credentials.json.replaced-<time>).\n',
+    );
+    return { status: 'error', error: 'existing_account' };
+  }
+  const replace = accountExists && opts.replace === true;
+
   // 1. Open the relay session. The relay returns the user-facing URL +
   //    PIN + token + expiresAt. The keypair stays in-process.
   let session: Awaited<ReturnType<typeof openRemotePairSession>>;
@@ -121,9 +152,17 @@ export async function runRelayPairCli(
     session = await openRemotePairSession({
       relayBaseUrl: opts.relayBaseUrl,
       mode: mode === 'generate' ? 'generate' : 'import',
+      replace,
+      webSocketImpl: opts.webSocketImpl,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (err instanceof ReplaceNotSupportedError) {
+      opts.io.stderr.write(
+        '\nThe relay cannot ask you to confirm a replacement yet, so no pairing was started.\n',
+      );
+      return { status: 'error', error: 'replace_not_supported' };
+    }
     opts.io.stderr.write(
       `\nFailed to open relay pairing session: ${msg}\n` +
         `If the relay is unreachable from this gateway, retry with --local for the loopback URL flow.\n`,
@@ -329,11 +368,24 @@ export async function runRelayPairCli(
               }`,
             );
           }
+          // Re-check at completion: an account may have appeared since the
+          // session opened. A non-replace pairing never overwrites one.
+          const guardError = existingAccountGuard(opts.credentialsPath, { replace });
+          if (guardError) return { state: 'error', error: guardError };
+          let keptCopy: string | null = null;
+          if (replace) {
+            // Copy first; the original is untouched until the atomic rename.
+            keptCopy = preserveCredentialsBeforeReplace(opts.credentialsPath);
+          }
           const creds = loadCredentialsJson(opts.credentialsPath) ?? {};
-          const next: typeof creds = { ...creds, mnemonic, salt: saltB64 };
+          // A replace starts from a clean slate: nothing of the outgoing
+          // account (its userId, salt, address) may sit next to the new phrase.
+          const base = replace ? stripAccountFields(creds) : creds;
+          const next: typeof creds = { ...base, mnemonic, salt: saltB64 };
           if (registeredUserId) next.userId = registeredUserId;
           if (scopeAddress) next.scope_address = scopeAddress;
           if (!writeCredentialsJson(opts.credentialsPath, next)) {
+            discardReplaceCopy(opts.credentialsPath, keptCopy);
             return { state: 'error', error: 'credentials_write_failed' };
           }
           setRecoveryPhraseOverride(mnemonic);
