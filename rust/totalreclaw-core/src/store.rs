@@ -423,7 +423,10 @@ pub fn prepare_fact_v1_keyed(
 
     let content_fp = fingerprint::generate_content_fingerprint_v2(text_for_blind_indices, dedup_key)?;
     let encrypted_embedding = encrypt_embedding(embedding, encryption_key)?;
-    let decay_score = (importance / 10.0).clamp(0.0, 1.0);
+    // decayScore is a liveness flag, not importance (#789). Importance is
+    // carried in the encrypted envelope only, as in `prepare_fact_v1`.
+    let _ = importance;
+    let decay_score = live_decay_score();
 
     let payload = FactPayload {
         id: fact_id.clone(),
