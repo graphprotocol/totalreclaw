@@ -115,6 +115,48 @@ def _truncate_message(message: Optional[str]) -> Optional[str]:
     return message[:200]
 
 
+class SubgraphQueryError(RuntimeError):
+    """A subgraph query came back HTTP 2xx but its body is not usable.
+
+    GraphQL reports indexer errors as HTTP 200 with ``{"errors": [...]}``
+    and a missing or null ``data``. ``RelayClient.query_subgraph`` returns
+    that body untouched, so a ``.get("data", {})`` chain would read it as
+    "no results". ``parse_subgraph_data`` raises this instead (internal#559).
+
+    The message carries only the first error message, truncated. It never
+    carries the query variables or the rest of the body.
+    """
+
+
+_SUBGRAPH_ERROR_MSG_MAX = 200
+
+
+def parse_subgraph_data(body: Any) -> dict[str, Any]:
+    """Return ``body["data"]`` or raise ``SubgraphQueryError``.
+
+    Raises when ``errors`` is non-empty (even if partial ``data`` is
+    present: a partial page must not pass as complete) or when ``data`` is
+    missing, null or not an object.
+    """
+    if not isinstance(body, dict):
+        raise SubgraphQueryError(
+            f"subgraph response is not an object (body type {type(body).__name__})"
+        )
+    errors = body.get("errors")
+    if errors:
+        first = errors[0] if isinstance(errors, list) else errors
+        msg = first.get("message") if isinstance(first, dict) else first
+        msg = str(msg)[:_SUBGRAPH_ERROR_MSG_MAX]
+        count = len(errors) if isinstance(errors, list) else 1
+        raise SubgraphQueryError(
+            f"subgraph query returned errors ({count} item(s)): {msg}"
+        )
+    data = body.get("data")
+    if not isinstance(data, dict):
+        raise SubgraphQueryError("subgraph response has no data")
+    return data
+
+
 class RelayReadError(httpx.HTTPStatusError):
     """Non-2xx from ``POST /v1/subgraph``."""
 

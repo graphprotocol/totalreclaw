@@ -77,7 +77,7 @@ from .crypto import (
 from .embedding import get_embedding
 from .lsh import LSHHasher
 from .protobuf import FactPayload, encode_fact_protobuf, encode_tombstone_protobuf
-from .relay import RelayClient
+from .relay import RelayClient, parse_subgraph_data
 from .userop import build_and_send_userop_batch
 
 logger = logging.getLogger(__name__)
@@ -353,7 +353,8 @@ async def _rewrite_with_mutation(
 
     # 1. Fetch existing fact.
     data = await relay.query_subgraph(_FACT_BY_ID_QUERY, {"id": fact_id})
-    fact = data.get("data", {}).get("fact")
+    # An indexer error body must not read as "Fact not found" (internal#559).
+    fact = parse_subgraph_data(data).get("fact")
     if not fact:
         return {
             "success": False,
