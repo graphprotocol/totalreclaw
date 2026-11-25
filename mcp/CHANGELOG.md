@@ -10,6 +10,8 @@
 ### Changed
 - A window of more than 6 messages is now extracted in `full` mode, not only outage retries (`turn` mode keeps only the last 6 messages, which would drop earlier turns of a deferred window). Prompt framing differs for those windows.
 
+- **`totalreclaw_import_from` no longer claims `idempotentHint: true`.** In self-hosted (HTTP) mode `@totalreclaw/client`'s `remember()` sends no content fingerprint, so the server's exact-duplicate check never runs and importing the same file twice stores every fact twice ([#784](https://github.com/graphprotocol/totalreclaw/issues/784)). The hint is now `false`. Sending the fingerprint needs a change in the `@totalreclaw/client` package and is tracked in #784.
+
 ## [3.6.3] - 2026-11-24
 
 ### Fixed
