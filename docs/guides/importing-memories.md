@@ -39,7 +39,7 @@ Source System (e.g., Mem0)
 Key properties:
 
 - **End-to-end encrypted** — Source data is fetched and processed entirely on your device. The TotalReclaw server never sees plaintext.
-- **Idempotent** — Content fingerprint dedup means running the same import twice won't create duplicates.
+- **Idempotent** — Content fingerprint dedup means running the same import twice won't create duplicates, except imports through the MCP server in self-hosted mode, which currently store duplicates ([#784](https://github.com/graphprotocol/totalreclaw/issues/784)).
 - **Searchable immediately** — Imported memories get the same blind indices and embeddings as natively stored ones. They appear in recall results right away.
 
 ---
@@ -74,7 +74,7 @@ The agent calls the `totalreclaw_import_from` tool with:
 1. The tool fetches all memories from the Mem0 REST API (`GET /v1/memories/?user_id=...`), paginating automatically.
 2. Each memory's text is encrypted with your TotalReclaw encryption key (XChaCha20-Poly1305).
 3. Blind search indices (LSH buckets + word trapdoors) are generated so the encrypted memories are searchable.
-4. A content fingerprint (HMAC-SHA256) is generated to prevent future duplicates.
+4. A content fingerprint (HMAC-SHA256) is generated to prevent future duplicates (not sent by the MCP server in self-hosted mode, #784).
 5. Each encrypted memory is stored on the TotalReclaw server (or on-chain if using the managed service).
 
 ### Expected Output
@@ -161,7 +161,7 @@ The `totalreclaw_import_from` tool is available in:
 | "No memories found" (Mem0) | Check your `source_user_id`. The default is `"user"` but you may have used a different ID. |
 | Import succeeded but recall doesn't find them | Wait a few seconds for indexing, then try an explicit recall: "Use totalreclaw_recall to search for [topic]." |
 | "File not found" (MCP Memory) | Provide the full absolute path to the JSONL file. |
-| Duplicates after re-import | This shouldn't happen — content fingerprint dedup prevents it. If it does, run the import again; existing duplicates won't be re-created. |
+| Duplicates after re-import | Content fingerprint dedup prevents this, except imports through the MCP server in self-hosted mode, which currently store duplicates ([#784](https://github.com/graphprotocol/totalreclaw/issues/784)). In that mode don't re-run the import; delete the duplicates. |
 
 ---
 

@@ -202,7 +202,8 @@ export const debriefToolDefinition = {
   annotations: {
     readOnlyHint: false,
     destructiveHint: false,
-    idempotentHint: true,
+    // Self-hosted debrief stores via client.remember(), which sends no content fingerprint (#784).
+    idempotentHint: false,
   },
 };
 

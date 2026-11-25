@@ -110,7 +110,10 @@ export const importFromToolDefinition = {
   annotations: {
     readOnlyHint: false,
     destructiveHint: false,
-    idempotentHint: true, // content fingerprint dedup makes it idempotent
+    // Not idempotent: in self-hosted (HTTP) mode client.remember() sends no
+    // content fingerprint, so re-importing the same file stores every fact
+    // again (#784). Managed-mode writes dedup on the fingerprint (this tool refuses in managed mode); self-hosted does not.
+    idempotentHint: false,
   },
 };
 
