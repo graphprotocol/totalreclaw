@@ -119,7 +119,7 @@ def encode_fact_protobuf(fact: FactPayload) -> bytes:
     """Encode a :class:`FactPayload` as minimal protobuf wire format.
 
     The output is byte-compatible with the TypeScript ``encodeFactProtobuf``
-    in ``mcp/src/subgraph/store.ts`` and can be decoded by any standard
+    in ``mcp/src/subgraph/protobuf.ts`` and can be decoded by any standard
     protobuf parser using ``server/proto/totalreclaw.proto``.
     """
     parts: list[bytes] = []
