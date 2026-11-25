@@ -312,9 +312,8 @@ function encodeFactProtobuf(fact: FactPayload): Buffer {
   writeDouble(6, fact.decayScore);
   writeVarintField(7, 1); // is_active
   writeVarintField(8, 2); // version
-  writeString(9, fact.source);
+  // Fields 9 (source) and 11 (agent_id) left the wire in v3; only content_fp (10) is written.
   writeString(10, fact.contentFp);
-  writeString(11, fact.agentId);
   if (fact.encryptedEmbedding) writeString(13, fact.encryptedEmbedding);
   return Buffer.concat(parts);
 }

@@ -7,7 +7,10 @@
  * re-exports everything here, so imports from `./subgraph/store.js` are
  * unchanged.
  *
- * Wire layout is byte-identical to the canonical encoders for the same input:
+ * Wire layout is byte-identical to the canonical encoders for the same well-formed
+ * input (hex fields are valid, even-length hex). On odd-length or non-hex input the
+ * encoders differ: MCP writes an empty field 4, Rust skips the field and Python
+ * throws. No real call site produces such input.
  *   - Rust:   rust/totalreclaw-core/src/protobuf.rs  encode_fact_protobuf
  *   - Python: python/src/totalreclaw/protobuf.py     encode_fact_protobuf
  *

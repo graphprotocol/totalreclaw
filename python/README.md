@@ -100,11 +100,7 @@ The embedding model (~600 MB) downloads automatically on first use.
 
 ## Hermes Agent Plugin
 
-```bash
-pip install totalreclaw[hermes]
-```
-
-The plugin registers automatically with Hermes Agent v0.5.0+. See the [Hermes setup guide](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md).
+The Hermes plugin ships in this package (there is no `hermes` extra). Install it into the Hermes environment's own Python, verify that the Hermes interpreter imports the new version, enable the plugin and restart the gateway, then set up the account by pairing. Follow the install and verify steps in the [Hermes setup guide](https://github.com/graphprotocol/totalreclaw/blob/main/docs/guides/hermes-setup.md); a plain `pip install totalreclaw` can land where Hermes never looks.
 
 ## Architecture
 
