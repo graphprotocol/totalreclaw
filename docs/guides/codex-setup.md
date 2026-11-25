@@ -17,7 +17,7 @@ Codex reads this page and runs the install commands. It asks you to approve them
 **You need:**
 
 - Codex: the CLI, the IDE extension, or the ChatGPT desktop app.
-- [Node.js](https://nodejs.org) 20 or later. TotalReclaw starts with `npx`, which comes with Node.js.
+- [Node.js](https://nodejs.org) 20 or later. TotalReclaw starts with `npx`, which comes with Node.js. On a Mac, use an Apple silicon (arm64) build of Node.js; Intel Macs, and x64 Node under Rosetta, are not supported.
 - A browser on this computer or your phone, for the one-time setup page. You don't need a recovery phrase beforehand. Setup creates one, or takes the one you already have.
 
 ---

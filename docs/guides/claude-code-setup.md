@@ -115,7 +115,7 @@ First real interaction downloads a ~600 MB embedding model (cached locally, one-
 
 ## Prerequisites
 
-- **Node.js 20+** (22 recommended)
+- **Node.js 20+** (22 recommended). On a Mac, use an Apple silicon (arm64) build of Node.js: Intel Macs, and x64 Node under Rosetta, are not supported.
 - **An MCP-capable coding tool:** Claude Code, Cursor, Windsurf, IronClaw, or similar (for Claude Desktop, see [`claude-desktop-setup.md`](./claude-desktop-setup.md))
 - **A browser** on this computer or your phone, for the one-time pairing step. You don't need a recovery phrase beforehand: pairing creates one, or takes the one you already have.
 

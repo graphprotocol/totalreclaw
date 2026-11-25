@@ -26,7 +26,7 @@ End-to-end encrypted memory vault as an MCP server. Your memories are encrypted 
 
 **v3.0.0 ships Memory Taxonomy v1** — 6 speech-act types + source / scope / volatility axes on every memory. Four new tools (`totalreclaw_pin`, `totalreclaw_unpin`, `totalreclaw_retype`, `totalreclaw_set_scope`) let agents override categorization via natural language. Source-weighted reranking ranks user-authored claims above assistant-regurgitated noise. See [memory types guide](../docs/guides/memory-types-guide.md).
 
-**Requirements:** Node.js 20+. Intel Macs (darwin-x64) are not supported: the embedding runtime (`onnxruntime-node`) ships no binary for them, so the server exits at startup with a message saying so. Use Apple silicon, Linux or Windows.
+**Requirements:** Node.js 20+. Intel Macs (darwin-x64) are not supported: the embedding runtime (`onnxruntime-node`) ships no binary for them, so the server exits at startup with a message saying so. Use Apple silicon, Linux or Windows. On Apple silicon, use an arm64 build of Node.js (an x64 Node under Rosetta also fails).
 
 ## Quick Start
 
