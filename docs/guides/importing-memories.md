@@ -146,7 +146,6 @@ The `totalreclaw_import_from` tool is available in:
 |----------|-----------|-------|
 | **OpenClaw plugin** | Yes | Ask your agent or use the tool directly |
 | **MCP server** | Yes | Tool is registered and callable by any MCP client |
-| **NanoClaw** | Yes | Via the MCP server spawned by the agent-runner |
 | **Hermes Agent** | Yes | Native Python adapters + import engine |
 
 **Storage mode support:** Import works in both **self-hosted (HTTP) mode** and **managed service mode**. In managed service mode, each imported memory is submitted on-chain via the relay. Large imports (1,000+ memories) may take longer in managed service mode due to per-transaction gas sponsorship.

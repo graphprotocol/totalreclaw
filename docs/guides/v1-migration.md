@@ -1,6 +1,6 @@
 # Upgrading to TotalReclaw v1
 
-**Target audience:** existing TotalReclaw users on any client (OpenClaw, MCP, NanoClaw, Hermes, ZeroClaw).
+**Target audience:** existing TotalReclaw users on any client (OpenClaw, MCP, Hermes, ZeroClaw).
 **Version landing in:** core 2.0.0, plugin 3.0.0, mcp-server 3.0.0, nanoclaw 3.0.0, python 2.0.0, ZeroClaw (`totalreclaw-memory`) 2.0.0.
 **TL;DR:** v1 is a bigger + cleaner memory model. Your wallet, recovery phrase, memories, and privacy model do not change. Upgrade the package and you are done.
 

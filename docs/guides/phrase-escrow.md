@@ -4,7 +4,7 @@ TotalReclaw's vault SPA (`app.totalreclaw.xyz`) unlocks with a passkey (Face ID 
 
 Phrase escrow closes that gap: your recovery phrase can be **encrypted under your passkey** and either stored with TotalReclaw (so a synced passkey recovers it on any device) or downloaded as a file you keep yourself. TotalReclaw cannot decrypt either copy — only the passkey that sealed it can.
 
-This is a **SPA-only** feature. Agent clients (Hermes, the MCP server, NanoClaw, the OpenClaw plugin, ZeroClaw) don't use it — they hold credentials via their own device-bound storage (macOS Keychain / Linux Secret Service, see `docs/guides/headless-deployment.md`) and your recovery phrase, and neither read nor write escrow records.
+This is a **SPA-only** feature. Agent clients (Hermes, the MCP server, the OpenClaw plugin, ZeroClaw) don't use it — they hold credentials via their own device-bound storage (macOS Keychain / Linux Secret Service, see `docs/guides/headless-deployment.md`) and your recovery phrase, and neither read nor write escrow records.
 
 ## Your three recovery options
 

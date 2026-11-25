@@ -1,6 +1,6 @@
 # Client Setup — v1
 
-**Applies to:** TotalReclaw v1, all clients. Current stable versions: core 2.5.6 (npm; 2.5.5 on PyPI/crates.io), plugin 3.3.13, mcp-server 3.4.0, nanoclaw 3.0.0, python 2.4.6.
+**Applies to:** TotalReclaw v1, all clients. Current stable versions: core 2.5.6 (npm; 2.5.5 on PyPI/crates.io), plugin 3.3.13, mcp-server 3.4.0, python 2.4.6.
 
 One setup page per client. v1 is the default on every client — no env toggles, no feature flags to flip. Pick your platform.
 
@@ -12,10 +12,11 @@ One setup page per client. v1 is the default on every client — no env toggles,
 |---|---|
 | OpenClaw | [OpenClaw plugin](#openclaw-plugin) |
 | Claude Desktop, Cursor, Windsurf, or any MCP-compatible agent | [MCP server](#mcp-server) |
-| NanoClaw (OpenClaw's lightweight variant) | [NanoClaw skill](#nanoclaw-skill) |
 | Python / Hermes Agent | [Python client](#python-client) |
 | Native Rust app / ZeroClaw (NEAR AI) | [ZeroClaw](#zeroclaw-rust-crate) |
 | IronClaw (NEAR AI) | [MCP server via IronClaw](#mcp-server) (integration paused) |
+
+NanoClaw is not supported.
 
 All clients write to the same vault. If you use multiple clients, use the same 12-word recovery phrase everywhere.
 
@@ -98,25 +99,6 @@ The IronClaw agent config references the MCP server via the same JSON shape. See
 Ask the agent: *"What TotalReclaw tools do you have?"* — you should see 18 tools including `totalreclaw_pin`, `totalreclaw_retype`, `totalreclaw_set_scope`.
 
 **Full guides:** [claude-desktop-setup.md](./claude-desktop-setup.md) (Claude Desktop) · [claude-code-setup.md](./claude-code-setup.md) (Claude Code, Cursor, Windsurf)
-
----
-
-## NanoClaw skill
-
-**Package:** `@totalreclaw/skill-nanoclaw@^3.0.0` (npm, via NanoClaw).
-**Features:** automatic memory, same hooks as OpenClaw. Shares the MCP server as a background agent-runner.
-
-### Install
-
-```bash
-TOTALRECLAW_RECOVERY_PHRASE="your twelve word recovery phrase here"
-```
-
-Add this to your NanoClaw deployment (Docker env, `.env`, or platform config). The NanoClaw agent-runner auto-spawns `@totalreclaw/mcp-server` with this env.
-
-If you need to generate a recovery phrase first, run `npx @totalreclaw/mcp-server setup` on any machine with Node 20+.
-
-**Full guide:** [nanoclaw-getting-started.md](./nanoclaw-getting-started.md)
 
 ---
 

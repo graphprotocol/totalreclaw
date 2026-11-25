@@ -16,7 +16,7 @@ The two patterns compose — typical production stack uses encrypted volume **pl
 ### When to use
 
 - Self-hosted VPS where you own the host kernel (Hetzner Cloud, OVH, bare-metal, any IaaS that lets you `cryptsetup`).
-- You're already running a Docker / Podman container for the plugin host (OpenClaw, Hermes, NanoClaw).
+- You're already running a Docker / Podman container for the plugin host (OpenClaw, Hermes).
 - You're willing to unlock the volume manually (or via a keyfile on a separate KMS-protected volume) on each host reboot.
 
 ### One-time host setup
