@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Forget guard: a paraphrase that shares no content word with a forgotten fact now matches (`paraphrase`), and relation words stop a new subject from matching (internal #715).** `match_forgotten` skipped every entry that shared no content token with the candidate, so "User doesn't eat meat." was stored again after "User is vegetarian." was forgotten. New last rule `paraphrase`: no shared content token, cosine >= `PARAPHRASE_MIN_COSINE` (0.80), and none of: the forgotten text has an anchor (a name, place or number), both token sets have the same size (a one-for-one swap such as "vegetarian" -> "vegan"), the candidate adds a relation word. New sorted `RELATION_WORDS` ("sister", "brother", "boss", ...) and `adds_relation_word`: a candidate that adds one the forgotten text lacks no longer matches `superset` or `anchor` either ("User's sister is vegetarian." after "User is vegetarian."; "User's brother lives in Porto..." after "User lives in Porto..."). `forget_release_ids` does not release on a `paraphrase` match: an unprompted agent remember must not un-forget a fact on meaning alone. `ForgottenMatch.reason` can now be `"paraphrase"`; no signature change.
+- **Write gate: an explicit remember of a short rewording of a longer stored fact now returns `confirm` (new match kind `contained`) (internal #777).** A short rewording of a long fact scores 0.63 to 0.77, below the 0.85 floor, so `decide_write` stored a second copy. In `explicit` mode only, when no cosine match reaches the threshold, a candidate matches as `contained` when its cosine is >= `CONTAINED_MIN_COSINE` (0.65), the new text is shorter, every name in it appears in the stored fact, every content word does too (or the text has a name), and no relation word is on only one side. Best cosine wins, the earlier candidate on a tie; a near duplicate at >= 0.85 still wins over `contained`. `auto` and `exact_only` are unchanged: an auto match is a silent skip, and a changed value in the same slot scores in the same band. The decision JSON gains match kind `"contained"` (additive; same shape otherwise).
+
+  Measured on the labelled fixture `tests/parity/fixtures/paraphrase-labels-v1.json` (Harrier q4 cosines, 53 pairs):
+
+  | Set | Before | After |
+  |---|---|---|
+  | forget guard, 34 pairs | TP 2, FP 2, FN 15, TN 15 (P 0.50, R 0.12) | TP 13, FP 0, FN 4, TN 17 (P 1.00, R 0.76) |
+  | explicit write gate, 19 pairs | TP 1, FP 0, FN 8, TN 10 (P 1.00, R 0.11) | TP 7, FP 1, FN 2, TN 9 (P 0.88, R 0.78) |
+  | combined, 53 pairs | P 0.60, R 0.12 | P 0.95, R 0.77 |
+
+  Known limits: partial-overlap paraphrases ("has black coffee each morning", 0.940) are not caught, since they sit in the value-swap zone; padded agent text with a diluted cosine (below 0.65) is not caught; "User moved back to Lisbon." confirms against the H15 fact although it is a change (the agent can force); a sentence-initial capital counts as an anchor. Fixtures: `paraphrase-labels-v1.json` (new), `forget-guard-v1.json` (`paraphrase_min_cosine`, new cases; `paraphrase_without_shared_tokens` now expects a `paraphrase` match) and `write-gate-v1.json` (`contained_min_cosine`, 11 new decide cases; the 18 existing cases are unchanged).
+
 ## [2.7.0] - unreleased
 
 ### Changed
