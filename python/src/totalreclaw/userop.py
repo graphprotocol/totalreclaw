@@ -1662,7 +1662,15 @@ async def _submit_userop(
                     _park(sender, in_flight, facts, on_lost)
                     return local_hash
 
-                fate = await _await_fate(http, ctx, in_flight, deadline)
+                try:
+                    fate = await _await_fate(http, ctx, in_flight, deadline)
+                except BaseException:
+                    # Cancelled, interpreter shutdown, quota refusal on a status
+                    # call...: the op is in the bundler and nobody has seen its
+                    # fate. Track it so the NEXT write resolves it by hash.
+                    if not gone_confirmed:
+                        _park(sender, in_flight, facts, on_lost)
+                    raise
                 if fate.kind == "executed":
                     att_ex = next((a for a in in_flight if a.hash.lower() == (fate.hash or "").lower()), in_flight[-1])
                     _apply_executed(sender, att_ex.nonce, att_ex.carried_factory, fate.success)

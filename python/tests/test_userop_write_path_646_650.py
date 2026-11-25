@@ -840,3 +840,21 @@ async def test_u34_randomized_fault_schedule(monkeypatch, seed):
     w.assert_invariants()
     # invariant 3: a send happens at most _MAX_NONCE_RETRIES times per logical write
     assert w.send_count <= n_writes * userop._MAX_NONCE_RETRIES + 4 * n_writes
+
+
+@pytest.mark.asyncio
+async def test_cancel_while_waiting_for_own_fate_tracks_the_op(monkeypatch):
+    """A cancelled receipt-mode write already has an op in the bundler: the next
+    write must find it as a pending record and resolve it by hash."""
+    w = make(monkeypatch, mine_delay=100_000)
+    deploy(w)
+    task = asyncio.create_task(one(b"cancel-a", confirm="receipt", fact_ids=["a"]))
+    for _ in range(40):
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    recs = userop.pending_records(S)
+    assert len(recs) == 1 and recs[0].fact_ids == ["a"]
+    lock = await userop._get_sender_lock(S)
+    assert not lock.locked()
