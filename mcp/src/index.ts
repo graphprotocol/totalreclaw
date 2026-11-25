@@ -94,6 +94,7 @@ import {
 import type { UnusableCredentials } from './dispatch.js';
 import { bundleVaultToBuffers, redactedBundleSummary, type DerivedBundleV1 } from './subgraph/bundle.js';
 import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, lookupFactById, fetchFactForForget } from './subgraph/search.js';
+import { liveDecayScore } from './subgraph/decay.js';
 import { RecentWrites, recordSubmittedPayloads, TOMBSTONE_BLOB_HEX } from './subgraph/recent-writes.js';
 import { createRewriteLookup, createForgetLookup } from './subgraph/fact-lookup.js';
 import { confirmIndexed } from './subgraph/confirm-indexed.js';
@@ -1250,7 +1251,7 @@ async function handleRememberSubgraph(
         owner: state.smartAccountAddress,
         encryptedBlob: Buffer.from(encryptedBlob, 'base64').toString('hex'),
         blindIndices: allIndices,
-        decayScore: effectiveImportance / 10,
+        decayScore: liveDecayScore(effectiveImportance), // floored, #789
         source: 'mcp_remember',
         contentFp,
         agentId: 'mcp-server',
@@ -1377,7 +1378,7 @@ async function handleDebriefSubgraph(
         owner: state.smartAccountAddress,
         encryptedBlob: Buffer.from(encryptedBlob, 'base64').toString('hex'),
         blindIndices: allIndices,
-        decayScore: importance / 10,
+        decayScore: liveDecayScore(importance), // floored, #789
         source: 'mcp_debrief',
         contentFp,
         agentId: 'mcp-server',
@@ -1445,7 +1446,7 @@ async function handleDebriefSubgraph(
         owner: state.smartAccountAddress,
         encryptedBlob: Buffer.from(encryptedBlob, 'base64').toString('hex'),
         blindIndices: allIndices,
-        decayScore: item.importance / 10,
+        decayScore: liveDecayScore(item.importance), // floored, #789
         source: 'mcp_debrief',
         contentFp,
         agentId: 'mcp-server',

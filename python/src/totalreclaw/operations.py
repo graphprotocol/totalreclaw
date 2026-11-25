@@ -247,6 +247,52 @@ class ForgetResult(dict):
         return bool(self.get("success", False))
 
 
+#: Subgraph active threshold: a fact whose on-chain ``decayScore`` is below this
+#: is marked inactive and disappears from every client (``subgraph/src/mapping.ts``
+#: ``INACTIVE_THRESHOLD``). Live-fact writes are floored here (#789, interim).
+#: NEVER apply to tombstones: decay 0 is how forget/supersede delete a fact.
+ACTIVE_DECAY_THRESHOLD = 0.3
+
+
+def live_decay_floor(importance) -> float:
+    """Floor a LIVE single-fact decayScore at :data:`ACTIVE_DECAY_THRESHOLD` (#789).
+
+    Raw scale kept (no rescale): values >= 1 (int 1-10 writes) are unchanged,
+    so those payloads stay byte-identical; only < 0.3 values (legacy floats such
+    as 0.2, the Crystal's ``importance / 10.0``) are raised. Non-numeric /
+    non-finite input falls back to 5. Never use for tombstones (decay 0 deletes).
+    """
+    if (
+        isinstance(importance, bool)
+        or not isinstance(importance, (int, float))
+        or not math.isfinite(importance)
+    ):
+        importance = 5
+    return max(importance, ACTIVE_DECAY_THRESHOLD)
+
+
+def live_batch_decay_score(importance_raw) -> float:
+    """On-chain decayScore for a LIVE fact written by the batch path (#789).
+
+    Scale note: TS ``liveDecayScore`` divides every value by 10 (importance 1 ->
+    0.3 after the floor); this path takes values <= 1 as already 0-1 (int 1 ->
+    1.0). The divergence is pre-existing. No upper clamp on purpose. The
+    canonical rule lands in the core helper per the #789 plan.
+
+    Same scale rule as before (``<= 1`` is taken as-is, otherwise ``/ 10``),
+    floored at :data:`ACTIVE_DECAY_THRESHOLD` so the fact stays visible.
+    Non-numeric / non-finite input falls back to 5 (0.5).
+    """
+    if (
+        isinstance(importance_raw, bool)
+        or not isinstance(importance_raw, (int, float))
+        or not math.isfinite(importance_raw)
+    ):
+        importance_raw = 5
+    value = importance_raw if importance_raw <= 1 else importance_raw / 10.0
+    return max(value, ACTIVE_DECAY_THRESHOLD)
+
+
 def normalize_importance(value) -> int:
     """Normalise an importance value to the canonical 1-10 integer.
 
@@ -393,8 +439,8 @@ async def store_fact(
         encrypted_blob=encrypted_hex,
         blind_indices=all_indices,
         # decayScore < 0.3 marks a fact inactive in the subgraph (mapping.ts
-        # INACTIVE_THRESHOLD), so it must not be rescaled here.
-        decay_score=importance,
+        # INACTIVE_THRESHOLD): not rescaled, but floored (#789).
+        decay_score=live_decay_floor(importance),
         source=source,
         content_fp=content_fp,
         agent_id=agent_id,
@@ -811,7 +857,7 @@ async def store_fact_batch(
             owner=owner,
             encrypted_blob=encrypted_hex,
             blind_indices=all_indices,
-            decay_score=importance_raw if importance_raw <= 1 else importance_raw / 10.0,
+            decay_score=live_batch_decay_score(importance_raw),  # floored, #789
             source=source,
             content_fp=content_fp,
             agent_id=agent_id,
