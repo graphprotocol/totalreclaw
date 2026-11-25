@@ -269,6 +269,22 @@ async def remember(
     if not kwargs.get("_from_mirror"):
         embedding = _embed_for_remember(text, pii_result)
         embedding_ready = True
+        # internal#715: a restatement of a forgotten fact needs the user's
+        # confirmation (a token from an earlier turn) before it is stored.
+        if not kwargs.get("_skip_confirm"):
+            from totalreclaw.forgotten_confirm import forgotten_notice
+
+            forgotten = forgotten_notice(
+                client,
+                text,
+                embedding,
+                _confirm_token if isinstance(_confirm_token, str) else None,
+                conversation_id=(
+                    kwargs.get("session_id") if isinstance(kwargs.get("session_id"), str) else None
+                ),
+            )
+            if forgotten is not None:
+                return json.dumps(forgotten)
         _release_forgotten(client, text, embedding)
 
     if not force_write and state.manual_remember_is_dup_of_pending(text):

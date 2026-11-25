@@ -273,6 +273,7 @@ async def _persist_import_memory(state: "PluginState", text: str, importance: in
         await _dispatch_module().remember(
             {"text": text, "importance": importance, "force": True},
             state,
+            _skip_confirm=True,
         )
     except Exception as e:  # never block the import over a bookkeeping write
         logger.info("import-memory persist skipped: %s", e)

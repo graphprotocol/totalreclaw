@@ -109,7 +109,12 @@ REMEMBER = {
                 "type": "string",
                 "description": (
                     "The confirm_token from a previous blocked result. "
-                    "Required with allow_sensitive=true."
+                    "Required with allow_sensitive=true. Also required to "
+                    "store text the result flagged with "
+                    "confirmation_required='restates_forgotten': that text "
+                    "restates something the user asked to forget. Ask the "
+                    "user first, and pass the token only in a later turn "
+                    "after they said yes."
                 ),
             },
         },
