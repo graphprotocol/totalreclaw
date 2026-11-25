@@ -61,10 +61,11 @@ interface Run {
   warns: string[];
   calls: Array<{ messages: Msg[]; mode: string }>;
   persisted: number;
+  persistImpl?: () => void;
   extractor: (messages: Msg[], mode: string) => Promise<ExtractedFactLike[]>;
 }
 
-function setup(interval = 2): Run & { poll: () => Promise<void> } {
+function setup(interval = 2): Run & { poll: (concurrent?: number) => Promise<void> } {
   const home = TMP;
   const stateFile = path.join(home, '.totalreclaw', 'extract-state.json');
   const run: Run = {
@@ -75,7 +76,7 @@ function setup(interval = 2): Run & { poll: () => Promise<void> } {
     persisted: 0,
     extractor: async () => [{ text: 'a fact', importance: 0.8 }],
   };
-  const poll = async (): Promise<void> => {
+  const poll = async (concurrent = 1): Promise<void> => {
     const origHomedir = os.homedir;
     (os as unknown as { homedir: () => string }).homedir = () => home;
     try {
@@ -94,13 +95,14 @@ function setup(interval = 2): Run & { poll: () => Promise<void> } {
         },
         filterByImportance: (facts) => ({ kept: facts, dropped: 0 }),
         persistFacts: async (facts) => {
+          run.persistImpl?.();
           run.persisted += facts.length;
           return facts.length;
         },
       };
       const h = startTrajectoryPoller(deps, { pollIntervalMs: 3_600_000, stateFile });
       try {
-        await h.pollOnce();
+        await Promise.all(Array.from({ length: concurrent }, () => h.pollOnce()));
       } finally {
         h.stop();
       }
@@ -238,5 +240,65 @@ describe('deferred turns are kept (#781)', () => {
     await r.poll();
     expect(r.calls.length).toBe(1);
     expect(readState(r.stateFile)[file]).toEqual({ offset: fs.statSync(file).size, turnsAccum: 0 });
+  });
+});
+
+
+describe('window slicing, stage isolation, reentrancy, truncation', () => {
+  it('a window larger than one prompt is fully extracted across polls, nothing skipped', async () => {
+    const r = setup();
+    const file = path.join(sessionsDir(r.home), 'big.trajectory.jsonl');
+    fs.writeFileSync(file, '');
+    const big = 'x'.repeat(2500);
+    const lines: string[] = [];
+    for (let i = 1; i <= 10; i++) {
+      lines.push(JSON.stringify({ type: 'prompt.submitted', data: { prompt: `u${i} ${big}` } }));
+      lines.push(JSON.stringify({ type: 'model.completed', data: { assistantTexts: [`a${i} ${big}`] } }));
+    }
+    fs.appendFileSync(file, lines.join('\n') + '\n');
+    for (let i = 0; i < 12; i++) await r.poll();
+    const sent = r.calls.flatMap((c) => c.messages.map((m) => m.content.split(' ')[0]));
+    const expected = Array.from({ length: 10 }, (_, i) => [`u${i + 1}`, `a${i + 1}`]).flat();
+    expect(sent).toEqual(expected);
+    expect(r.calls.length).toBeGreaterThan(1);
+    for (const c of r.calls) {
+      const chars = c.messages.reduce((n, m) => n + `[${m.role}]: ${m.content}`.length + 2, 0);
+      expect(chars).toBeLessThanOrEqual(12_002);
+    }
+    expect(readState(r.stateFile)[file].offset).toBe(fs.statSync(file).size);
+  });
+
+  it('a persist failure neither advances the offset nor counts as an outage retry', async () => {
+    const r = setup();
+    const file = writeFile(r.home, 's1', 2);
+    r.persistImpl = () => { throw new Error('disk full'); };
+    await r.poll();
+    expect(r.calls.length).toBe(1);
+    const st = fs.existsSync(r.stateFile) ? readState(r.stateFile)[file] : undefined;
+    expect(st === undefined || (st.offset === 0 && st.outageRetries === undefined)).toBe(true);
+  });
+
+  it('overlapping polls do not double-extract', async () => {
+    const r = setup();
+    writeFile(r.home, 's1', 2);
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    r.extractor = async () => { await gate; return [{ text: 'f', importance: 0.8 }]; };
+    const p = r.poll(2);
+    await new Promise((res) => setTimeout(res, 50));
+    release();
+    await p;
+    expect(r.calls.length).toBe(1);
+  });
+
+  it('a file that shrank below the stored offset restarts from 0', async () => {
+    const r = setup();
+    const file = writeFile(r.home, 's1', 2);
+    presetState(r.stateFile, { [file]: { offset: 999_999, turnsAccum: 0, outageRetries: 2, retryAt: 1 } });
+    await r.poll();
+    expect(r.calls.length).toBe(0);
+    expect(readState(r.stateFile)[file]).toEqual({ offset: 0, turnsAccum: 0 });
+    await r.poll();
+    expect(r.calls.length).toBe(1);
   });
 });

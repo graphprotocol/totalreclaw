@@ -26,6 +26,7 @@ from totalreclaw.agent.lifecycle import (
     _owner_addresses,
     _enqueue_unprocessed,
     requeue_batch_after_outage,
+    _outage_streak,
     STORE_DEDUP_THRESHOLD,
 )
 from totalreclaw.agent.loop_runner import run_sync
@@ -762,7 +763,9 @@ def _drain_into_state(state: "PluginState", batches: list) -> int:
     # then shares the extraction with the live messages).
     live = state.get_unprocessed_messages() if state.has_unprocessed_messages() else []
     if live:
-        if _enqueue_unprocessed(state, state.get_client(), live):
+        if _enqueue_unprocessed(
+            state, state.get_client(), live, attempts=_outage_streak(state),
+        ):
             state.mark_messages_processed()
         else:
             logger.warning(

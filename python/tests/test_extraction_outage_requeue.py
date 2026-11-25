@@ -313,3 +313,14 @@ def test_drain_success_resets_streak(pending_path):
     assert _drain(env, [_batch(attempts=3)]) == 2
     assert env.state._extraction_outage_streak == 0
     assert not pending_path.exists()
+
+
+def test_drain_isolation_keeps_live_outage_streak(pending_path):
+    env = _OutageEnv()
+    env.outage = True
+    env.turn()
+    env.run()  # live window kept, streak 1
+    assert env.state._extraction_outage_streak == 1
+    _drain(env, [_batch(0)])
+    attempts = sorted(b["attempts"] for b in _drained(pending_path))
+    assert attempts == [1, 1]  # the queued live window kept its count; the drained batch aged once

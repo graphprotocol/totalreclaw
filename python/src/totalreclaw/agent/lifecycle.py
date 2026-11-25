@@ -776,7 +776,10 @@ def auto_extract(
         owner = _owner_address(state)
         source_session_id = getattr(relay, "_session_id", None) if relay is not None else None
         if owner:
-            persisted = enqueue_messages(owner, list(messages), session_id=source_session_id)
+            persisted = enqueue_messages(
+                owner, list(messages), session_id=source_session_id,
+                attempts=_outage_streak(state),
+            )
         else:
             persisted = False
         if persisted:
