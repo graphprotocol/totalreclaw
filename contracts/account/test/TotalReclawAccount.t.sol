@@ -1,13 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {
     PackedUserOperation
 } from "account-abstraction/contracts/interfaces/PackedUserOperation.sol";
 import {SimpleAccount} from "account-abstraction/contracts/samples/SimpleAccount.sol";
 import {TotalReclawAccount} from "../contracts/TotalReclawAccount.sol";
+
+/// @dev Verbatim copy of the Log-emitting parts of
+///      `contracts/EventfulDataEdge.sol` (fallback emits `Log(msg.data)`).
+///      Copied rather than imported because this Foundry project's root is
+///      `contracts/account/` and forge cannot resolve sources outside it.
+contract EventfulDataEdge {
+    event Log(bytes data);
+
+    fallback() external payable {
+        emit Log(msg.data);
+    }
+
+    receive() external payable {}
+}
 
 /**
  * @title TotalReclawAccountTest
@@ -679,6 +693,226 @@ contract TotalReclawAccountTest is Test {
         vm.prank(ENTRY_POINT);
         uint256 vd = account.validateUserOp(op, h, 0);
         assertEq(vd, 1, "empty executeBatch must SIG_VALIDATION_FAILED");
+    }
+
+    // ============================================================
+    // internal#542 review follow-ups: execute-what-was-validated,
+    // non-canonical encodings, caps, lazy install, revoke.
+    // ============================================================
+
+    /// @dev Put the REAL EventfulDataEdge runtime code at the grant target.
+    function _etchDataEdge() internal {
+        vm.etch(DATA_EDGE, address(new EventfulDataEdge()).code);
+    }
+
+    function _payload(uint256 i) internal pure returns (bytes memory) {
+        return abi.encodePacked(hex"0a20", keccak256(abi.encode("fact", i)), hex"1001");
+    }
+
+    function _batchOf(uint256 n) internal pure returns (bytes memory) {
+        address[] memory targets = new address[](n);
+        uint256[] memory values = new uint256[](n);
+        bytes[] memory datas = new bytes[](n);
+        for (uint256 i = 0; i < n; i++) {
+            targets[i] = DATA_EDGE;
+            datas[i] = _payload(i);
+        }
+        return abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+    }
+
+    function _validate(bytes memory cd, string memory label) internal returns (uint256) {
+        bytes32 h = keccak256(bytes(label));
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+        vm.prank(ENTRY_POINT);
+        return account.validateUserOp(op, h, 0);
+    }
+
+    /// @dev Execute the SAME calldata that validated, as the EntryPoint,
+    ///      against a real EventfulDataEdge; assert n Log events with the
+    ///      exact payloads, all emitted by the grant target.
+    function _assertExecutesAsValidated(uint256 n) internal {
+        _etchDataEdge();
+        _installGrant(1);
+        bytes memory cd = _batchOf(n);
+        assertEq(_validate(cd, "exec-validated"), 0, "must validate");
+
+        vm.recordLogs();
+        vm.prank(ENTRY_POINT);
+        (bool ok,) = address(account).call(cd);
+        assertTrue(ok, "execution must succeed");
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, n, "exactly n Log events");
+        for (uint256 i = 0; i < n; i++) {
+            assertEq(logs[i].emitter, DATA_EDGE, "emitted by grant target");
+            assertEq(logs[i].topics[0], keccak256("Log(bytes)"));
+            assertEq(abi.decode(logs[i].data, (bytes)), _payload(i), "exact payload");
+        }
+        assertEq(DATA_EDGE.balance, 0, "no value moved");
+    }
+
+    function test_batch_validated_calldata_executes_exactly_n_logs_2() public {
+        _assertExecutesAsValidated(2);
+    }
+
+    function test_batch_validated_calldata_executes_exactly_n_logs_15() public {
+        _assertExecutesAsValidated(15);
+    }
+
+    function test_batch_validated_calldata_executes_exactly_n_logs_30() public {
+        _assertExecutesAsValidated(30);
+    }
+
+    /// @dev SimpleAccount.executeBatch accepts an empty `values[]`; the
+    ///      validator must NOT (pins the stricter behaviour).
+    function test_batch_rejects_empty_values_array_with_n_targets() public {
+        _installGrant(1);
+        address[] memory targets = new address[](2);
+        uint256[] memory values = new uint256[](0);
+        bytes[] memory datas = new bytes[](2);
+        targets[0] = DATA_EDGE;
+        targets[1] = DATA_EDGE;
+        bytes memory cd = abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+        assertEq(_validate(cd, "empty-values"), 1);
+    }
+
+    function _word(bytes memory cd, uint256 idx) internal pure returns (uint256 w) {
+        assembly {
+            w := mload(add(add(cd, 0x24), mul(idx, 0x20)))
+        }
+    }
+
+    function _setWord(bytes memory cd, uint256 idx, uint256 w) internal pure {
+        assembly {
+            mstore(add(add(cd, 0x24), mul(idx, 0x20)), w)
+        }
+    }
+
+    // Layout of abi.encode(targets, values, datas) after the selector:
+    // word 0..2 head offsets; targets array starts at word 3 (len), elems 4..
+
+    function test_batch_rejects_dirty_target_upper_bits() public {
+        _installGrant(1);
+        bytes memory cd = _batchOf(2);
+        _setWord(cd, 4, _word(cd, 4) | (uint256(1) << 200));
+        assertEq(_validate(cd, "dirty-target"), 1);
+    }
+
+    function test_batch_accepts_trailing_bytes_and_executes_identically() public {
+        _etchDataEdge();
+        _installGrant(1);
+        bytes memory cd = bytes.concat(_batchOf(2), hex"deadbeefdeadbeef");
+        assertEq(_validate(cd, "trailing"), 0);
+        vm.recordLogs();
+        vm.prank(ENTRY_POINT);
+        (bool ok,) = address(account).call(cd);
+        assertTrue(ok);
+        assertEq(vm.getRecordedLogs().length, 2, "trailing bytes change nothing");
+    }
+
+    function test_batch_rejects_values_offset_aliased_onto_targets() public {
+        _installGrant(1);
+        bytes memory cd = _batchOf(2);
+        _setWord(cd, 1, _word(cd, 0)); // values := targets region (non-zero words)
+        assertEq(_validate(cd, "alias-values"), 1);
+    }
+
+    function test_batch_rejects_oversized_length_word() public {
+        _installGrant(1);
+        bytes memory cd = _batchOf(2);
+        _setWord(cd, 3, uint256(1) << 64);
+        assertEq(_validate(cd, "oversized-len"), 1);
+    }
+
+    function test_batch_rejects_datas_offset_out_of_bounds() public {
+        _installGrant(1);
+        bytes memory cd = _batchOf(2);
+        _setWord(cd, 2, cd.length + 0x1000);
+        assertEq(_validate(cd, "datas-oob"), 1);
+    }
+
+    /// @dev Differential fuzz: mutate one word of a valid batch (and
+    ///      optionally truncate). Whenever validation returns 0, executing
+    ///      the same calldata must make exactly as many calls as the
+    ///      decoded batch has entries, all to the grant target, none with
+    ///      value, and must not revert.
+    function testFuzz_validated_batch_executes_only_in_scope(
+        uint256 idx,
+        uint256 xorMask,
+        uint8 trunc,
+        bool zeroWord
+    ) public {
+        _etchDataEdge();
+        _installGrant(1);
+        vm.deal(address(account), 1 ether);
+
+        bytes memory cd = _batchOf(3);
+        idx = bound(idx, 0, (cd.length - 4) / 32 - 1);
+        _setWord(cd, idx, zeroWord ? 0 : _word(cd, idx) ^ xorMask);
+        uint256 cut = trunc % 40;
+        if (cut > 0 && cut < cd.length) {
+            assembly {
+                mstore(cd, sub(mload(cd), cut))
+            }
+        }
+
+        if (_validate(cd, "fuzz") != 0) return;
+
+        (address[] memory t, uint256[] memory v, bytes[] memory d) =
+            abi.decode(_slice(cd), (address[], uint256[], bytes[]));
+        vm.recordLogs();
+        vm.prank(ENTRY_POINT);
+        (bool ok,) = address(account).call(cd);
+        assertTrue(ok, "validated batch must execute");
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(t.length, v.length);
+        assertEq(t.length, d.length);
+        // A call with EMPTY data hits DataEdge's receive() (no Log), so the
+        // expected Log count is the number of non-empty inner payloads.
+        uint256 nonEmpty;
+        for (uint256 i = 0; i < t.length; i++) {
+            assertEq(t[i], DATA_EDGE);
+            assertEq(v[i], 0);
+            if (d[i].length > 0) nonEmpty++;
+        }
+        assertEq(logs.length, nonEmpty, "one Log per non-empty inner call");
+        for (uint256 i = 0; i < logs.length; i++) {
+            assertEq(logs[i].emitter, DATA_EDGE);
+        }
+        assertEq(address(account).balance, 1 ether, "no value left the account");
+    }
+
+    function _slice(bytes memory cd) internal pure returns (bytes memory out) {
+        out = new bytes(cd.length - 4);
+        for (uint256 i = 0; i < out.length; i++) {
+            out[i] = cd[i + 4];
+        }
+    }
+
+    function test_batch_of_30_validates() public {
+        _installGrant(1);
+        assertEq(_validate(_batchOf(30), "batch-30"), 0);
+    }
+
+    /// @dev Lazy install where the FIRST session-key UserOp is a batch.
+    function test_lazy_install_first_userop_is_batch() public {
+        _etchDataEdge();
+        TotalReclawAccount.PermissionGrant memory grant =
+            _buildGrant(signer, DATA_EDGE, _twoSelectors(), 1);
+        bytes32 h = keccak256("lazy-batch");
+        bytes memory sig = abi.encode(grant, _signWithKey(signerPriv, h));
+        PackedUserOperation memory op = _makePackedOp(_batchOf(5), sig);
+        vm.prank(ENTRY_POINT);
+        assertEq(account.validateUserOp(op, h, 0), 0, "lazy install + batch validates");
+        assertTrue(account.isSessionKeyActive(signer), "grant installed");
+    }
+
+    function test_batch_after_revoke_fails() public {
+        _installGrant(1);
+        assertEq(_validate(_batchOf(2), "pre-revoke"), 0);
+        vm.prank(owner);
+        account.revokeSessionKey(signer);
+        assertEq(_validate(_batchOf(2), "post-revoke"), 1);
     }
 
     /// @dev Gas-budget assertion (cred-6 acceptance criteria, moved here from
