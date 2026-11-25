@@ -314,6 +314,7 @@ async def generate_crystal(
     messages: list[dict],
     stored_fact_texts: list[str],
     host_type: str = "chat",
+    skip_depth_gate: bool = False,
 ) -> Optional[Crystal]:
     """Generate a Crystal session summary using LLM.
 
@@ -321,6 +322,10 @@ async def generate_crystal(
         messages: All conversation messages from the session.
         stored_fact_texts: Texts of facts already stored (for dedup context).
         host_type: "chat" (Hermes/NanoClaw) or "coding" (OpenClaw/MCP).
+        skip_depth_gate: skip the 4-7-message / >= 2-facts depth gate. Set when
+            the gate was decided earlier (a deferred Crystal replayed from the
+            pending queue, #657), where ``stored_fact_texts`` only holds the
+            facts that survived store-time dedup. The 4-message floor stays.
 
     Returns:
         A Crystal object, or None if LLM unavailable, session too short,
@@ -335,7 +340,7 @@ async def generate_crystal(
     # (>= 2 stored facts) so a crisp short topical exchange still gets a Crystal.
     if len(messages) < 4:
         return None
-    if len(messages) < 8 and len(stored_fact_texts) < 2:
+    if not skip_depth_gate and len(messages) < 8 and len(stored_fact_texts) < 2:
         return None
 
     conversation_text = _truncate_messages(messages)

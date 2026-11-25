@@ -49,7 +49,20 @@ from .write_quota import (
 )
 from ..forget_guard import ForgetLedger, is_forget_request
 from ..pii import check as pii_check, drop_sensitive_facts
-from ..client import per_fact_results
+
+
+def per_fact_results(*args, **kwargs):
+    """Lazy proxy for ``totalreclaw.client.per_fact_results``.
+
+    ``totalreclaw.client`` drags in the whole write stack (userop, eth_abi,
+    numpy; ~2 s cold). Importing it at module level made the Hermes plugin
+    import overrun Hermes' 10 s load budget (#726), so resolve it on first use.
+    """
+    from ..client import per_fact_results as _impl
+
+    return _impl(*args, **kwargs)
+
+
 from ..relay import (
     ReadBlockState,
     RelayReadBlocked,
@@ -477,6 +490,12 @@ LLM_OUTAGE_MAX_ATTEMPTS = 5
 LLM_OUTAGE_LIVE_RETRIES = 2
 
 
+# Session id to stamp on facts of a drained batch (the ORIGINAL session, #657);
+# unset means "the active session".
+_FACT_SESSION_STAMP: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "totalreclaw_fact_session_stamp", default=None
+)
+
 _ON_PAUSED_POLICY: contextvars.ContextVar[str] = contextvars.ContextVar(
     "totalreclaw_on_paused_policy", default=ON_PAUSED_DEFER
 )
@@ -516,11 +535,17 @@ def _paused_until_text(client, errors: Optional[list] = None) -> str:
 
 def _enqueue_unprocessed(
     state: "AgentState", client, messages: list[dict], attempts: int = 0,
+    crystal: Optional[bool] = None,
 ) -> bool:
     """Persist ``messages`` to the #148 pending queue. ``False`` on failure.
 
     ``attempts`` is the count of LLM-outage extraction cycles the window has
-    already failed (internal #604); it travels with the queued batch."""
+    already failed (internal #604); it travels with the queued batch.
+    ``crystal`` marks a batch whose later drain must also write the session
+    Crystal (#657); ``None`` reads the drain's ``_requeue_crystal`` flag, so a
+    deferred Crystal survives a paused-reads requeue."""
+    if crystal is None:
+        crystal = getattr(state, "_requeue_crystal", False) is True
     owner = _owner_address(state)
     if not owner:
         return False
@@ -530,7 +555,9 @@ def _enqueue_unprocessed(
         session_id = None
     try:
         return bool(
-            enqueue_messages(owner, list(messages), session_id=session_id, attempts=attempts)
+            enqueue_messages(
+                owner, list(messages), session_id=session_id, attempts=attempts, crystal=bool(crystal),
+            )
         )
     except Exception as exc:
         logger.warning("TotalReclaw: enqueue of deferred messages failed: %s", exc)
@@ -604,6 +631,7 @@ def _requeue_after_llm_outage(
 
 def requeue_batch_after_outage(
     state: "AgentState", messages: list[dict], session_id: Optional[str], prior_attempts: int,
+    crystal: bool = False,
 ) -> bool:
     """Count one failed attempt for a drained batch the session-start drain did
     not try (the LLM was just down) and put it back on the pending queue.
@@ -625,7 +653,9 @@ def requeue_batch_after_outage(
             "auto-extraction gave up: LLM upstream outage and no owner to queue %d messages for", n,
         )
         return False
-    ok = enqueue_messages(owner, list(messages), session_id=session_id, attempts=attempt)
+    ok = enqueue_messages(
+        owner, list(messages), session_id=session_id, attempts=attempt, crystal=crystal,
+    )
     if not ok:
         logger.warning(
             "auto-extraction dropped %d queued messages: LLM upstream outage and the "
@@ -759,10 +789,14 @@ def auto_extract(
     stored_texts: list[str] = []
 
     try:
-        with on_paused_policy(on_paused):
-            return _auto_extract_inner(
-                state, mode, llm_config, messages, max_facts, client, stored_texts,
-            )
+        stamp_token = _FACT_SESSION_STAMP.set(session_id_override or None)
+        try:
+            with on_paused_policy(on_paused):
+                return _auto_extract_inner(
+                    state, mode, llm_config, messages, max_facts, client, stored_texts,
+                )
+        finally:
+            _FACT_SESSION_STAMP.reset(stamp_token)
     except InterpreterShutdownError:
         # The host interpreter is shutting down (atexit chain in
         # ``hermes chat -q`` one-shot mode). The persistent sync-loop runner
@@ -974,7 +1008,7 @@ def _auto_extract_inner(
     # carries), so a vault reader (SPA) can group a conversation's facts + its
     # Crystal together. Encrypted-blob-only via ``metadata.session_id``; absent
     # when there's no active conversation (unconfigured / pre-session).
-    active_session_id = state.session_id
+    active_session_id = _FACT_SESSION_STAMP.get() or state.session_id
 
     # Facts the user explicitly forgot (#605).
     forget_ledger = _forget_ledger(client)
@@ -1543,6 +1577,8 @@ def session_debrief(
     state: "AgentState",
     stored_fact_texts: Optional[list[str]] = None,
     host_type: str = "chat",
+    gate_already_passed: bool = False,
+    session_id: Optional[str] = None,
 ) -> list[str]:
     """Run session debrief: generate one Crystal summary and store it.
 
@@ -1554,6 +1590,11 @@ def session_debrief(
         state: The AgentState instance (must be configured).
         stored_fact_texts: Optional list of already-stored fact texts for dedup.
         host_type: "chat" (Hermes/NanoClaw) or "coding" (OpenClaw/MCP).
+        gate_already_passed: the length gate was decided earlier (a deferred
+            Crystal re-run from the pending queue, #657); skip re-checking it
+            against this run's possibly smaller fact list.
+        session_id: tag the Crystal with this (original) session id instead of
+            the active session's.
 
     Returns:
         List containing the Crystal fact id, or empty list on failure.
@@ -1566,7 +1607,7 @@ def session_debrief(
     if stored_fact_texts is None:
         stored_fact_texts = []
 
-    if not crystal_gate_passes(len(all_messages), len(stored_fact_texts)):
+    if not gate_already_passed and not crystal_gate_passes(len(all_messages), len(stored_fact_texts)):
         return []
 
     client = state.get_client()
@@ -1575,7 +1616,10 @@ def session_debrief(
 
     stored_fact_ids: list[str] = []
     try:
-        crystal = run_sync(generate_crystal(all_messages, stored_fact_texts, host_type=host_type))
+        crystal = run_sync(generate_crystal(
+            all_messages, stored_fact_texts, host_type=host_type,
+            skip_depth_gate=gate_already_passed,
+        ))
         blocked = None
         if crystal:
             for part in [crystal.narrative, *crystal.key_outcomes, *crystal.open_threads, *crystal.lessons]:
@@ -1602,8 +1646,8 @@ def session_debrief(
             # groups with the same conversation's atomic facts in a vault reader
             # (SPA). ``to_metadata()`` only emits session_id when non-empty, so
             # this is a no-op when there's no active session.
-            if not crystal.session_id and state.session_id:
-                crystal.session_id = state.session_id
+            if not crystal.session_id and (session_id or state.session_id):
+                crystal.session_id = session_id or state.session_id
             fields = {
                 "importance": crystal.importance / 10.0,
                 "fact_type": "summary",

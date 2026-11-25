@@ -94,6 +94,8 @@ def enqueue_messages(
     session_id: Optional[str] = None,
     path: Optional[Path] = None,
     attempts: int = 0,
+    token: Optional[str] = None,
+    crystal: bool = False,
 ) -> bool:
     """Append a batch of unprocessed messages to the pending queue.
 
@@ -109,6 +111,11 @@ def enqueue_messages(
 
     ``attempts`` is the number of failed extraction cycles so far (LLM
     outage retries, issue #604). Written only when > 0.
+
+    ``token`` tags the record so its owner can later remove it with
+    :func:`discard_record` once the work it stands for has landed (the
+    journal-first pattern used by session finalize, #657). ``crystal`` marks a
+    batch whose drain should also write a session Crystal.
 
     Empty ``messages`` is a no-op (returns ``True``).
     """
@@ -126,6 +133,10 @@ def enqueue_messages(
         }
         if isinstance(attempts, int) and not isinstance(attempts, bool) and attempts > 0:
             record["attempts"] = attempts
+        if token:
+            record["token"] = token
+        if crystal:
+            record["crystal"] = True
         with pending.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
         try:
@@ -205,9 +216,12 @@ def drain_pending(
                 rec_att = record.get("attempts")
                 if not isinstance(rec_att, int) or isinstance(rec_att, bool) or rec_att < 0:
                     rec_att = 0
-                drained.append(
-                    {"messages": rec_msgs, "session_id": rec_sid, "attempts": rec_att}
-                )
+                drained.append({
+                    "messages": rec_msgs,
+                    "session_id": rec_sid,
+                    "attempts": rec_att,
+                    "crystal": bool(record.get("crystal")),
+                })
             else:
                 drained.append(rec_msgs)
         else:
@@ -243,6 +257,62 @@ def drain_pending(
         )
 
     return drained
+
+
+def discard_record(token: str, path: Optional[Path] = None) -> bool:
+    """Remove the record(s) tagged ``token`` from the queue.
+
+    Returns ``True`` when something was removed. Never raises: a failure to
+    rewrite leaves the record in place, which costs a harmless re-extraction
+    (the store-time dedup absorbs it) rather than a lost fact.
+    """
+    if not token:
+        return False
+    pending = path or _pending_path()
+    if not pending.exists():
+        return False
+    try:
+        raw = pending.read_text(encoding="utf-8")
+        keep: list[str] = []
+        removed = False
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                rec = json.loads(stripped)
+            except Exception:
+                keep.append(stripped)
+                continue
+            if isinstance(rec, dict) and rec.get("token") == token:
+                removed = True
+                continue
+            keep.append(stripped)
+        if not removed:
+            return False
+        if keep:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8",
+                dir=str(pending.parent), prefix=".pending_extract.", suffix=".tmp",
+                delete=False,
+            )
+            try:
+                tmp.write("\n".join(keep) + "\n")
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            finally:
+                tmp.close()
+            os.replace(tmp.name, str(pending))
+            try:
+                pending.chmod(0o600)
+            except OSError:
+                pass
+        else:
+            pending.unlink()
+        return True
+    except Exception as exc:
+        logger.warning("TotalReclaw: failed to discard pending record: %s", exc)
+        return False
 
 
 def has_pending(owner: OwnerSpec, path: Optional[Path] = None) -> bool:

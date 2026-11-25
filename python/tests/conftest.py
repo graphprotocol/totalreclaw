@@ -23,6 +23,10 @@ import pytest
 # different URL can override locally, but the default is never production.
 _STAGING_URL = "https://api-staging.totalreclaw.xyz"
 os.environ.setdefault("TOTALRECLAW_SERVER_URL", _STAGING_URL)
+# Session finalize defers LLM stages it cannot prove fit the 10 s hook budget
+# (#657). Tests exercising the inline path want the "warm" behavior; the
+# budget tests set their own estimates.
+os.environ.setdefault("TOTALRECLAW_FINALIZE_STAGE_ESTIMATE_SECONDS", "0")
 
 
 def _stub_wallet_privates(client) -> None:
