@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -345,22 +346,78 @@ async def post_qa_bug_issue(
 # ---------------------------------------------------------------------------
 
 
+def _save_local_draft(args: dict) -> Optional[str]:
+    """Save a redacted copy of the report to ``<state_dir>/qa-reports/``.
+
+    Best-effort: returns the file path, or ``None`` when the write fails.
+    Every free-text field goes through :func:`redact_secrets` first, and the
+    file is created owner-only (0600).
+    """
+    try:
+        from datetime import datetime, timezone
+
+        override = os.environ.get("TOTALRECLAW_STATE_DIR")
+        base = Path(override) if override else Path.home() / ".totalreclaw"
+        out_dir = base / "qa-reports"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        path = out_dir / f"draft-{stamp}.md"
+        safe = {
+            k: redact_secrets(v) if isinstance(v, str) else v
+            for k, v in (args if isinstance(args, dict) else {}).items()
+        }
+        lines = ["# " + (safe.get("title") or "QA bug report (draft)"), ""]
+        for key, value in safe.items():
+            if key != "title":
+                lines += [f"## {key}", str(value), ""]
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines))
+        return str(path)
+    except Exception:
+        logger.debug("could not save QA bug draft", exc_info=True)
+        return None
+
+
+def _filing_failed(reason: str, args: dict) -> str:
+    """Error result that the agent cannot reasonably gloss over (#514)."""
+    draft = _save_local_draft(args)
+    saved = (
+        f"A copy of the draft was saved at {draft}."
+        if draft
+        else "Saving a local copy of the draft also failed; include the full report text in your message."
+    )
+    return json.dumps({
+        "error": reason,
+        "filed": False,
+        "instruction": (
+            "The bug report was NOT filed. Tell the user this now, in your "
+            "next message: say that filing failed, quote the error above "
+            "word for word, and say where the draft is saved. Do not say or "
+            "imply that the report was filed."
+        ),
+        "draft_path": draft,
+        "message": f"Bug report NOT filed. {reason} {saved}",
+    })
+
+
 async def report_qa_bug(args: dict, state, **kwargs) -> str:
     """Tool handler — JSON-out, matches the other totalreclaw_* tools.
 
     Gated at registration time in ``__init__.py`` so this handler is only
     reachable from RC builds. Still guards for missing token + invalid
-    args because registration can't prevent runtime-env issues.
+    args because registration can't prevent runtime-env issues. Every
+    filing failure tells the agent to relay it to the user and keeps a
+    local draft (#514).
     """
     token = os.environ.get("TOTALRECLAW_QA_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     if not token:
-        return json.dumps({
-            "error": (
-                "No GitHub token found. The operator must export "
-                "TOTALRECLAW_QA_GITHUB_TOKEN (or GITHUB_TOKEN) with 'repo' "
-                "scope to enable agent-filed bug reports during RC testing."
-            ),
-        })
+        return _filing_failed(
+            "No GitHub token found. The operator must export "
+            "TOTALRECLAW_QA_GITHUB_TOKEN (or GITHUB_TOKEN) with 'repo' "
+            "scope to enable agent-filed bug reports during RC testing.",
+            args,
+        )
     try:
         result = await post_qa_bug_issue(args, github_token=token)
         return json.dumps({
@@ -370,7 +427,7 @@ async def report_qa_bug(args: dict, state, **kwargs) -> str:
         })
     except Exception as e:
         logger.error("totalreclaw_report_qa_bug failed: %s", e)
-        return json.dumps({"error": str(e)})
+        return _filing_failed(str(e), args)
 
 
 # ---------------------------------------------------------------------------

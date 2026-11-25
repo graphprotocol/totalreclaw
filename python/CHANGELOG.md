@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Agent-facing wording (internal#651, #727, #514, #472).**
+  - Hermes SKILL.md and the system-prompt block name `USER.md` / `MEMORY.md` / "built-in memory" as the exception: when the user names the built-in store, the agent uses the built-in `memory` tool (the mirror still copies it into the vault).
+  - Hermes SKILL.md tells the agent to stop its own background work before asking for a gateway restart, and never to write a pair link or relay host from memory.
+  - `totalreclaw_report_qa_bug` failures (no token, GitHub error) now return `filed: false`, an `instruction` telling the agent to relay the failure to the user word for word, and a redacted local draft under `<state_dir>/qa-reports/`.
+  - `totalreclaw_upgrade` checks the tier first: a Pro account gets `already_pro` and a clear message instead of a checkout error. If the status probe fails, the normal checkout path runs.
+  - Tests: `tests/test_upgrade_tool.py`, `tests/test_qa_bug_report_rc3.py`.
+
 - **Batch writes no longer store a fact with an on-chain decayScore below 0.3 (#789, interim).** The subgraph marks any fact under 0.3 inactive, so a batch-written fact with importance 2 (or a legacy 0.2 float) was invisible to every client. `store_fact_batch` (remember_batch, auto-extraction, import, recrystallize) now floors live facts at 0.3 (`ACTIVE_DECAY_THRESHOLD`); tombstones still write 0, and the single-fact `store_fact` (`remember`, Session Crystals scored 1-2) is floored the same way with values >= 1 byte-identical. The canonical-scale decision is separate. Staging check pending: write an importance-1 and an importance-2 fact and confirm `isActive: true`. Tests: `tests/test_decay_floor_789.py`.
 
 - **The Hermes plugin loads fast after `pip install`, and session finalize fits Hermes' 10 s budget without losing work (internal #726, #657).**

@@ -208,3 +208,42 @@ class TestUpgradeRegistration:
 
         tool_names = [call.kwargs["name"] for call in ctx.register_tool.call_args_list]
         assert "totalreclaw_upgrade" in tool_names
+
+
+class TestUpgradeAlreadyPro:
+    """#472: a Pro account gets a clear answer, not a checkout error."""
+
+    @pytest.mark.asyncio
+    async def test_already_pro_skips_checkout(self) -> None:
+        from totalreclaw.hermes.tools import upgrade
+
+        state = _make_state()
+        mock_client = MagicMock()
+        mock_client.ensure_address = AsyncMock()
+        mock_client.status = AsyncMock(return_value=MagicMock(tier="pro"))
+        mock_client.relay = MagicMock()
+        mock_client.relay.create_checkout = AsyncMock(side_effect=RuntimeError("must not be called"))
+        state._client = mock_client
+
+        result = json.loads(await upgrade({}, state))
+        assert result["already_pro"] is True
+        assert "already on Pro" in result["message"]
+        assert "error" not in result
+        assert mock_client.relay.create_checkout.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_status_probe_failure_falls_through_to_checkout(self) -> None:
+        from totalreclaw.hermes.tools import upgrade
+
+        state = _make_state()
+        mock_client = MagicMock()
+        mock_client.ensure_address = AsyncMock()
+        mock_client.status = AsyncMock(side_effect=RuntimeError("status down"))
+        mock_client.relay = MagicMock()
+        mock_client.relay.create_checkout = AsyncMock(
+            return_value=CheckoutResponse(checkout_url="https://checkout.stripe.com/c/pay/x")
+        )
+        state._client = mock_client
+
+        result = json.loads(await upgrade({}, state))
+        assert result["checkout_url"] == "https://checkout.stripe.com/c/pay/x"

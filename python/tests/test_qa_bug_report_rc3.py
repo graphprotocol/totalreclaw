@@ -421,3 +421,38 @@ class TestSchema:
         enum = set(SCHEMA["parameters"]["properties"]["integration"]["enum"])
         assert "plugin" in enum
         assert "hermes" in enum
+
+
+class TestFilingFailureIsLoud:
+    """#514: a failed filing tells the agent to tell the user, and keeps a draft."""
+
+    @pytest.mark.asyncio
+    async def test_no_token_returns_instruction_and_draft(self, tmp_path, monkeypatch) -> None:
+        import json as _json
+        from totalreclaw.hermes.qa_bug_report import report_qa_bug
+
+        monkeypatch.setenv("TOTALRECLAW_STATE_DIR", str(tmp_path))
+        monkeypatch.delenv("TOTALRECLAW_QA_GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        out = _json.loads(await report_qa_bug(dict(VALID_ARGS), None))
+        assert out["filed"] is False
+        assert "NOT filed" in out["instruction"] and "word for word" in out["instruction"]
+        assert out["error"].startswith("No GitHub token found")
+        draft = tmp_path / "qa-reports"
+        files = list(draft.glob("draft-*.md"))
+        assert len(files) == 1 and out["draft_path"] == str(files[0])
+        assert VALID_ARGS["title"] in files[0].read_text()
+        assert "credentials.json" not in str(files[0])
+
+    @pytest.mark.asyncio
+    async def test_github_failure_returns_instruction_and_draft(self, tmp_path, monkeypatch) -> None:
+        import json as _json
+        from unittest.mock import AsyncMock, patch
+        from totalreclaw.hermes import qa_bug_report as m
+
+        monkeypatch.setenv("TOTALRECLAW_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("GITHUB_TOKEN", "gh-test-token")
+        with patch.object(m, "post_qa_bug_issue", AsyncMock(side_effect=RuntimeError("GitHub API 401: bad"))):
+            out = _json.loads(await m.report_qa_bug(dict(VALID_ARGS), None))
+        assert out["filed"] is False and "GitHub API 401" in out["error"]
+        assert list((tmp_path / "qa-reports").glob("draft-*.md"))
