@@ -15,6 +15,7 @@ import {
 import type { ToolContext } from './types.js';
 import { resolveMemoryId } from './helpers.js';
 import {
+  carriedFields,
   executeMetadataOp,
   type MetadataOpDeps,
   type MetadataOpResult,
@@ -122,6 +123,7 @@ export async function executeSetScope(
       confidence: e.confidence,
       createdAt: e.createdAt,
       supersededBy: memoryId,
+      ...carriedFields(e),
     }),
     newScope,
     'set_scope',

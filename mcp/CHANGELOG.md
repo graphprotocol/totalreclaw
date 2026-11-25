@@ -11,6 +11,9 @@
 ### Changed
 - A window of more than 6 messages is now extracted in `full` mode, not only outage retries (`turn` mode keeps only the last 6 messages, which would drop earlier turns of a deferred window). Prompt framing differs for those windows.
 
+- **Pin, unpin, retype, set_scope and forget now work on a memory saved seconds earlier in the same session, before the subgraph indexes it (issue 701).** Before, the id lookup went to the subgraph only, so an agent that pinned right after `totalreclaw_remember` got "not found" for about 15 seconds. The server now keeps an in-memory record of its own writes (encrypted blobs and ids only, never written to disk, cleared when the account changes, 15 minutes / 256 entries). The lookup order is: id replaced or forgotten by this process (not found at once) -> subgraph -> this record -> a re-poll of the subgraph for up to 10 s. After a server restart the record is empty, so only the re-poll covers that case. Tool names, descriptions, schemas and error text are unchanged. Code: `src/subgraph/recent-writes.ts`, `src/subgraph/fact-lookup.ts`. Tests: `tests/recent-writes.test.ts`, `tests/subgraph-lookup-fact.test.ts`, `tests/fact-lookup.test.ts`, `tests/pin-after-remember.test.ts`, `tests/recent-writes-wiring.test.ts`.
+- **Retype and set_scope no longer drop the pin (issue 779).** The rewritten memory now keeps `pin_status`, and also its entities, expiry and provenance metadata, as Hermes does. A pinned memory used to come back unpinned. Tests: `tests/pin-after-remember.test.ts`.
+
 ## [3.6.3] - 2026-11-24
 
 ### Fixed

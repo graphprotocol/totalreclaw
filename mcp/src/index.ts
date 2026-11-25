@@ -93,7 +93,9 @@ import {
 } from './subgraph/credentials.js';
 import type { UnusableCredentials } from './dispatch.js';
 import { bundleVaultToBuffers, redactedBundleSummary, type DerivedBundleV1 } from './subgraph/bundle.js';
-import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, fetchFactById, fetchFactForForget } from './subgraph/search.js';
+import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, lookupFactById, fetchFactForForget } from './subgraph/search.js';
+import { RecentWrites, recordSubmittedPayloads, TOMBSTONE_BLOB_HEX } from './subgraph/recent-writes.js';
+import { createRewriteLookup, createForgetLookup } from './subgraph/fact-lookup.js';
 import { confirmIndexed } from './subgraph/confirm-indexed.js';
 import {
   decodeEmbeddingUniversal,
@@ -295,6 +297,13 @@ let billingFetchInProgress = false;
 let accountGeneration = 0;
 
 /**
+ * What this process wrote (ciphertext + ids only), so pin / retype / set_scope
+ * / forget can act on a fact before the subgraph indexes it (#701). In memory
+ * only, bounded, cleared on account swap. Never persisted.
+ */
+const recentWrites = new RecentWrites();
+
+/**
  * Reset every module-level value tied to the previous account. Called by the
  * credential activator whenever a configured state is replaced or dropped.
  * The per-request caches (store-time dedup, recall candidates) live inside
@@ -303,6 +312,7 @@ let accountGeneration = 0;
  */
 function resetPerAccountState(): void {
   accountGeneration++;
+  recentWrites.clear();
   billingCache = null;
   billingFetchInProgress = false;
   resetLastBillingResponse();
@@ -987,6 +997,7 @@ async function handleRememberSubgraph(
 
   // Collect protobuf payloads for batch submission (tombstones + facts)
   const pendingPayloads: Buffer[] = [];
+  const pendingRecords: FactPayload[] = [];
   const pendingFactMeta: Array<{ factId: string; action: string }> = [];
 
   for (const item of screenedItems) {
@@ -1077,7 +1088,7 @@ async function handleRememberSubgraph(
                 id: dupMatch.existingFact.id,
                 timestamp: new Date().toISOString(),
                 owner: state.smartAccountAddress,
-                encryptedBlob: Buffer.from('tombstone').toString('hex'),
+                encryptedBlob: TOMBSTONE_BLOB_HEX,
                 blindIndices: [],
                 decayScore: 0,
                 source: 'mcp_dedup',
@@ -1085,6 +1096,7 @@ async function handleRememberSubgraph(
                 agentId: 'mcp-server',
               };
               pendingPayloads.push(encodeFactProtobuf(tombstonePayload));
+              pendingRecords.push(tombstonePayload);
               console.error(`Store-time dedup: queued supersede for ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
               dedupSuperseded++;
               itemSuperseded = true;
@@ -1183,7 +1195,7 @@ async function handleRememberSubgraph(
               id: decision.existingFactId,
               timestamp: new Date().toISOString(),
               owner: state.smartAccountAddress,
-              encryptedBlob: Buffer.from('tombstone').toString('hex'),
+              encryptedBlob: TOMBSTONE_BLOB_HEX,
               blindIndices: [],
               decayScore: 0,
               source: 'mcp_contradiction',
@@ -1191,6 +1203,7 @@ async function handleRememberSubgraph(
               agentId: 'mcp-server',
             };
             pendingPayloads.push(encodeFactProtobuf(tombstonePayload));
+            pendingRecords.push(tombstonePayload);
             console.error(
               `Auto-resolve: queued supersede for ${decision.existingFactId.slice(0, 10)}… ` +
                 `(sim=${decision.similarity.toFixed(3)}, entity=${decision.entityId})`,
@@ -1247,6 +1260,7 @@ async function handleRememberSubgraph(
       // 8. Encode as protobuf and queue for batch submission
       const protobuf = encodeFactProtobuf(factPayload);
       pendingPayloads.push(protobuf);
+      pendingRecords.push(factPayload);
       pendingFactMeta.push({ factId, action: itemSuperseded ? 'superseded' : 'created' });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -1260,6 +1274,7 @@ async function handleRememberSubgraph(
     try {
       const batchConfig = await writeConfigFor(state);
       const batchResult = await submitFactBatchOnChain(pendingPayloads, batchConfig);
+      recordSubmittedPayloads(recentWrites, state.smartAccountAddress, pendingRecords, batchResult);
       for (const meta of pendingFactMeta) {
         results.push({
           success: batchResult.success,
@@ -1371,6 +1386,7 @@ async function handleDebriefSubgraph(
 
       const batchConfig = await writeConfigFor(state);
       const batchResult = await submitFactBatchOnChain([encodeFactProtobuf(factPayload)], batchConfig);
+      recordSubmittedPayloads(recentWrites, state.smartAccountAddress, [factPayload], batchResult);
       console.error(`Crystal debrief stored (tx=${batchResult.txHash.slice(0, 10)}...)`);
       return {
         content: [{ type: 'text', text: JSON.stringify({ success: batchResult.success, stored: batchResult.success ? 1 : 0, fact_id: factId, tx_hash: batchResult.txHash, crystal: true }) }],
@@ -1402,6 +1418,7 @@ async function handleDebriefSubgraph(
   }
 
   const pendingPayloads: Buffer[] = [];
+  const pendingRecords: FactPayload[] = [];
   const pendingFactMeta: Array<{ factId: string }> = [];
 
   for (const item of validated) {
@@ -1436,6 +1453,7 @@ async function handleDebriefSubgraph(
       };
 
       pendingPayloads.push(encodeFactProtobuf(factPayload));
+      pendingRecords.push(factPayload);
       pendingFactMeta.push({ factId });
     } catch (error) {
       console.error(`Failed to prepare debrief item: ${error instanceof Error ? error.message : String(error)}`);
@@ -1449,6 +1467,7 @@ async function handleDebriefSubgraph(
     try {
       const batchConfig = await writeConfigFor(state);
       const batchResult = await submitFactBatchOnChain(pendingPayloads, batchConfig);
+      recordSubmittedPayloads(recentWrites, state.smartAccountAddress, pendingRecords, batchResult);
       for (const meta of pendingFactMeta) {
         results.push({ success: batchResult.success, fact_id: meta.factId, tx_hash: batchResult.txHash });
       }
@@ -1736,16 +1755,21 @@ async function handleForgetSubgraph(
     // Existence check first: never tombstone (or report deleted_count: 1 for)
     // an id that isn't an active fact of this owner.
     let lookup: 'exists' | 'missing' | 'inactive';
-    let lookedUpFact: Awaited<ReturnType<typeof fetchFactForForget>> = null;
+    let lookedUpFact: { isActive?: boolean; encryptedBlob?: string | null } | null = null;
+    const forgetLookup = createForgetLookup({
+      owner: state.smartAccountAddress,
+      cache: recentWrites,
+      fetchForForget: (id) => fetchFactForForget(
+        state.smartAccountAddress,
+        id,
+        state.serverUrl,
+        Buffer.from(state.authKey).toString('hex'),
+      ),
+    });
     try {
       lookup = await classifyForgetTarget(
         async () => {
-          lookedUpFact = await fetchFactForForget(
-            state.smartAccountAddress,
-            factId,
-            state.serverUrl,
-            Buffer.from(state.authKey).toString('hex'),
-          );
+          lookedUpFact = await forgetLookup(factId);
           return lookedUpFact;
         },
       );
@@ -1763,7 +1787,7 @@ async function handleForgetSubgraph(
       id: factId,
       timestamp: new Date().toISOString(),
       owner: state.smartAccountAddress,
-      encryptedBlob: Buffer.from('tombstone').toString('hex'),
+      encryptedBlob: TOMBSTONE_BLOB_HEX,
       blindIndices: [],
       decayScore: 0,
       source: 'mcp_forget',
@@ -1775,6 +1799,7 @@ async function handleForgetSubgraph(
     const config = await writeConfigFor(state);
 
     const { txHash, success } = await submitFactOnChain(protobuf, config);
+    if (success) recentWrites.recordTombstone(state.smartAccountAddress, factId);
 
     // Read-after-write: poll the subgraph until the fact is no longer
     // active (forget flips isActive=false). On timeout we still report
@@ -1835,12 +1860,17 @@ function buildPinDepsFromState(state: SubgraphState): PinOpDeps {
   return {
     owner: state.smartAccountAddress,
     sourceAgent: 'mcp-server',
-    fetchFactById: (factId: string) => fetchFactById(
-      state.smartAccountAddress,
-      factId,
-      state.serverUrl,
-      Buffer.from(state.authKey).toString('hex'),
-    ),
+    fetchFactById: createRewriteLookup({
+      owner: state.smartAccountAddress,
+      cache: recentWrites,
+      lookupSubgraph: (factId: string) => lookupFactById(
+        state.smartAccountAddress,
+        factId,
+        state.serverUrl,
+        Buffer.from(state.authKey).toString('hex'),
+      ),
+    }),
+    recordWrites: (records) => recordSubmittedPayloads(recentWrites, state.smartAccountAddress, records, { success: true }),
     decryptBlob: (hexEncryptedBlob: string) => {
       const base64 = Buffer.from(hexEncryptedBlob, 'hex').toString('base64');
       return decrypt(base64, state.encryptionKey);
@@ -1899,6 +1929,7 @@ function buildMetadataOpDepsFromState(state: SubgraphState): MetadataOpDeps {
     submitBatch: pinDeps.submitBatch,
     generateIndices: pinDeps.generateIndices,
     confirmIndexed: pinDeps.confirmIndexed,
+    recordWrites: pinDeps.recordWrites,
   };
 }
 

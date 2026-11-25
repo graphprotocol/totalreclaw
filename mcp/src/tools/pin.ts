@@ -26,7 +26,9 @@ import type {
 } from '../v1-types.js';
 import { LEGACY_TYPE_TO_V1 } from '../v1-types.js';
 import type { SubgraphSearchFact } from '../subgraph/search.js';
+import { TOMBSTONE_BLOB_HEX, type RecentWriteInput } from '../subgraph/recent-writes.js';
 import { encodeFactProtobuf } from '../subgraph/store.js';
+import { carriedFields, extractV1Fields } from './retype.js';
 import { rethrowIfQuota, shortErrorMessage, logWriteError } from './write-errors.js';
 
 // Lazy-load WASM core (same pattern as claims-helper.ts)
@@ -564,6 +566,12 @@ export interface PinOpDeps {
     factId: string,
     expect?: 'active' | 'inactive',
   ) => Promise<boolean>;
+  /**
+   * Called once after submitBatch returned success, with the tombstone and
+   * new payloads, so the process can serve the new id before the subgraph
+   * indexes it. Best-effort: never throws into the op.
+   */
+  recordWrites?: (records: RecentWriteInput[]) => void;
 }
 
 export interface PinOpResult {
@@ -709,6 +717,10 @@ export async function executePinOperation(
       confidence: v1View.confidence,
       createdAt: new Date().toISOString(),
       supersededBy: factId,
+      // Keep expiry, provenance metadata and agent_name across the rewrite (same as retype / set_scope).
+      ...(({ expiresAt, metadata, agentName }) => ({ expiresAt, metadata, agentName }))(
+        carriedFields(extractV1Fields(plaintext)),
+      ),
       pinStatus,
     });
   } catch (err) {
@@ -754,7 +766,7 @@ export async function executePinOperation(
     id: factId,
     timestamp: new Date().toISOString(),
     owner: deps.owner,
-    encryptedBlob: Buffer.from('tombstone').toString('hex'),
+    encryptedBlob: TOMBSTONE_BLOB_HEX,
     blindIndices: [],
     decayScore: 0,
     source: targetStatus === 'pinned' ? 'mcp_pin' : 'mcp_unpin',
@@ -798,6 +810,11 @@ export async function executePinOperation(
         error: 'On-chain batch submission failed',
         tx_hash: txHash,
       };
+    }
+    try {
+      deps.recordWrites?.([tombstonePayload, newPayload]);
+    } catch {
+      // the record is best-effort
     }
     // 8. Read-after-write — wait for the subgraph to index the new fact id
     //    before returning success. On timeout we still claim success (chain
