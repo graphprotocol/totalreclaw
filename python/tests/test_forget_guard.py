@@ -41,6 +41,7 @@ def test_thresholds_match_fixture():
     assert FIXTURE["anchor_min_cosine"] == fg.ANCHOR_MIN_COSINE
     assert FIXTURE["clause_min_cosine"] == fg.CLAUSE_MIN_COSINE
     assert FIXTURE["release_min_cosine"] == fg.RELEASE_MIN_COSINE
+    assert FIXTURE["paraphrase_min_cosine"] == fg.PARAPHRASE_MIN_COSINE
 
 
 def test_stopwords_match_core_source():
@@ -51,6 +52,16 @@ def test_stopwords_match_core_source():
     rust_words = [w.strip().strip('"') for w in block.replace("\n", " ").split(",") if w.strip()]
     assert rust_words == sorted(rust_words)
     assert set(rust_words) == fg.STOPWORDS
+
+
+def test_relation_words_match_core_source():
+    src = (Path(__file__).resolve().parents[2] / "rust" / "totalreclaw-core" / "src" / "forget_guard.rs").read_text(
+        encoding="utf-8"
+    )
+    block = src.split("pub const RELATION_WORDS: &[&str] = &[", 1)[1].split("];", 1)[0]
+    rust_words = [w.strip().strip('"') for w in block.replace("\n", " ").split(",") if w.strip()]
+    assert rust_words == sorted(rust_words)
+    assert set(rust_words) == fg.RELATION_WORDS
 
 
 @pytest.mark.parametrize("case", FIXTURE["match_cases"], ids=[c["name"] for c in FIXTURE["match_cases"]])

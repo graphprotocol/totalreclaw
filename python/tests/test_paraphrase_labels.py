@@ -47,3 +47,66 @@ def test_fixture_cosines_match_real_harrier():
             if abs(real - row["cos"]) > 0.01:
                 bad.append(f"{key}/{row['name']}: fixture {row['cos']} real {real:.4f}")
     assert not bad, "\n".join(bad)
+
+
+# ---------------------------------------------------------------------------
+# Forget guard
+# ---------------------------------------------------------------------------
+
+from totalreclaw import forget_guard as fg  # noqa: E402
+import totalreclaw_core  # noqa: E402
+
+
+def _at(c):
+    return [c, math.sqrt(1 - c * c)]
+
+
+def _count(preds_labels):
+    tp = sum(1 for p, l in preds_labels if p and l)
+    fp = sum(1 for p, l in preds_labels if p and not l)
+    fn = sum(1 for p, l in preds_labels if not p and l)
+    tn = sum(1 for p, l in preds_labels if not p and not l)
+    return {"tp": tp, "fp": fp, "fn": fn, "tn": tn}
+
+
+def _report(title, counts):
+    p = counts["tp"] / max(1, counts["tp"] + counts["fp"])
+    r = counts["tp"] / max(1, counts["tp"] + counts["fn"])
+    print(f"{title}: {counts} P {p:.2f} R {r:.2f}")
+
+
+def _run_forget(match):
+    rows, matched = [], []
+    for row in LABELS["forget"]:
+        entry = {"id": "e", "text": row["entry"], "embedding": [1.0, 0.0]}
+        pred = match(row["text"], _at(row["cos"]), [entry]) is not None
+        rows.append((pred, row["label"]))
+        if pred:
+            matched.append(row["name"])
+    counts = _count(rows)
+    _report("forget guard", counts)
+    assert counts == LABELS["expected_counts"]["forget"]
+    assert not [n for n in matched if n in LABELS["must_store"]]
+
+
+def test_forget_labels_python_port():
+    _run_forget(fg._py_match_forgotten)
+
+
+def _core_has_paraphrase():
+    if not hasattr(totalreclaw_core, "match_forgotten"):
+        return False
+    out = totalreclaw_core.match_forgotten(
+        "User doesn't eat meat.",
+        "[0.83, 0.5578]",
+        '[{"id":"v","text":"User is vegetarian.","embedding":[1,0]}]',
+    )
+    return json.loads(out) is not None
+
+
+@pytest.mark.skipif(not _core_has_paraphrase(), reason="installed totalreclaw_core lacks the paraphrase rule")
+def test_forget_labels_core():
+    def match(text, emb, entries):
+        return json.loads(totalreclaw_core.match_forgotten(text, json.dumps(emb), json.dumps(entries)))
+
+    _run_forget(match)
