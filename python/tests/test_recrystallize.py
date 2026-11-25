@@ -385,6 +385,43 @@ def test_checkpoint_load_tolerates_unknown_keys(monkeypatch, tmp_path):
     assert loaded.sessions["s"].phase == "done"
 
 
+def test_checkpoint_load_pre_753_session_without_new_fact_ids_by_old_id(
+    monkeypatch, tmp_path
+):
+    """#785: a checkpoint written before #753 has no ``new_fact_ids_by_old_id``;
+    it loads with an empty map."""
+    import json
+    import totalreclaw.recrystallize as rec
+
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+    fp = rec.RecrystallizeCheckpoint.fingerprint("0xabc")
+    (tmp_path / f"{fp}.json").write_text(
+        json.dumps(
+            {
+                "owner": "0xabc",
+                "started_at": "t0",
+                "last_updated": "t0",
+                "status": "running",
+                "sessions": {
+                    "s": {
+                        "phase": "written",
+                        "old_fact_ids": ["old-a"],
+                        "new_fact_ids": ["new-a"],
+                        "facts_written": True,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = RecrystallizeCheckpoint.load("0xabc")
+    assert loaded is not None
+    sc = loaded.sessions["s"]
+    assert sc.new_fact_ids_by_old_id == {}
+    assert sc.new_fact_ids == ["new-a"]
+    assert sc.facts_written is True
+
+
 # ── Write-path with a mocked client (mint → confirm → tombstone) ──────────────
 
 
@@ -662,6 +699,61 @@ async def test_each_landed_batch_is_checkpointed_before_the_next(
     )
     run2_texts = [t for c in client2.calls if c[0] == "remember_batch" for t in c[1]]
     assert landed not in run2_texts
+
+
+@pytest.mark.asyncio
+async def test_partial_failure_in_second_batch_keeps_both_batches_landed(
+    monkeypatch, tmp_path, _no_confirm
+):
+    """#785: one session over several batches; batch 1 lands whole, batch 2
+    partly fails. The resume writes only the facts that never landed."""
+    import totalreclaw.recrystallize as rec
+    from totalreclaw.client import BatchStoreError
+
+    monkeypatch.setattr(rec, "RECRYSTALLIZE_STATE_DIR", tmp_path)
+    monkeypatch.setattr(rec, "MAX_BATCH_SIZE", 2)
+
+    def _plan():
+        decrypted = [
+            _fact(f"f{i}", embedding=TOPIC_A, created_at=i * 10,
+                  metadata={"session_id": "old-giant"})
+            for i in range(4)
+        ]
+        return build_plan("0xabc", decrypted, session_id_factory=_counting_id_factory())
+
+    class _SecondBatchPartial(_FakeClient):
+        async def remember_batch(self, facts, source="python-client"):
+            if any(c[0] == "remember_batch" for c in self.calls):
+                self.calls.append(("remember_batch", [f["text"] for f in facts]))
+                self._new_counter += 1
+                raise BatchStoreError(
+                    "remember_batch: 1 store group(s) failed: timed out",
+                    [f"new-{self._new_counter}"] + [None] * (len(facts) - 1),
+                )
+            return await super().remember_batch(facts, source=source)
+
+    client1 = _SecondBatchPartial()
+    with pytest.raises(RuntimeError):
+        await execute_recrystallize(
+            client1, _plan(), write_side_fix_confirmed=True, confirm=True,
+        )
+    batches = [c[1] for c in client1.calls if c[0] == "remember_batch"]
+    assert [len(b) for b in batches] == [2, 2]
+    batch1, (landed2, failed2) = batches
+
+    cp = RecrystallizeCheckpoint.load("0xabc")
+    [sc] = cp.sessions.values()
+    assert len(sc.new_fact_ids_by_old_id) == 3  # batch 1 (2) + landed half of batch 2
+
+    client2 = _FakeClient()
+    cp2 = await execute_recrystallize(
+        client2, _plan(), write_side_fix_confirmed=True, confirm=True, checkpoint=cp,
+    )
+    assert cp2.status == "completed"
+    run2_texts = [t for c in client2.calls if c[0] == "remember_batch" for t in c[1]]
+    assert run2_texts == [failed2]
+    assert not set(batch1) & set(run2_texts)
+    assert landed2 not in run2_texts
 
 
 @pytest.mark.asyncio

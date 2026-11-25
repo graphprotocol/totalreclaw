@@ -379,6 +379,7 @@ class TestStatusToolReadsBlock:
         client = state.get_client()
         blk = _mk_block(_quota_err(), episode=1)
         client.read_block = blk
+        client.read_block_record = blk
         client.read_block_episode = blk.episode
         client.status = AsyncMock(
             return_value=BillingStatus(
@@ -394,6 +395,31 @@ class TestStatusToolReadsBlock:
         assert payload["reads"]["reason"] == "read_quota"
 
     @pytest.mark.asyncio
+    async def test_status_reports_paused_during_reprobe_gap(self):
+        """#666: past the pause deadline ``read_block`` is ``None`` but the
+        episode record remains (still denied until a success clears it), so
+        status keeps reporting ``paused: true``."""
+        from totalreclaw.relay import BillingStatus
+
+        state = _mk_state()
+        client = state.get_client()
+        blk = _mk_block(_quota_err(), episode=1)
+        client.read_block = None  # live window expired
+        client.read_block_episode = blk.episode
+        client.read_block_record = blk
+        client.status = AsyncMock(
+            return_value=BillingStatus(
+                tier="free", free_writes_used=1, free_writes_limit=250
+            )
+        )
+        client.resolved_wallet_address = "0xabc"
+        client.eoa_address = "0xdef"
+
+        payload = json.loads(await tools.status({}, state))
+        assert payload["reads"]["paused"] is True
+        assert payload["reads"]["reason"] == "read_quota"
+
+    @pytest.mark.asyncio
     async def test_status_reports_unpaused_reads(self):
         from totalreclaw.relay import BillingStatus
 
@@ -401,6 +427,7 @@ class TestStatusToolReadsBlock:
         client = state.get_client()
         client.read_block = None
         client.read_block_episode = None
+        client.read_block_record = None
         client.status = AsyncMock(
             return_value=BillingStatus(
                 tier="free", free_writes_used=1, free_writes_limit=250

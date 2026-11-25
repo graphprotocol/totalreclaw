@@ -919,6 +919,13 @@ class TotalReclaw:
         """
         return self._relay.read_block_episode()
 
+    @property
+    def read_block_record(self):
+        """The read-pause episode record, or ``None``. Like
+        :attr:`read_block_episode` it survives the re-probe deadline; see
+        :meth:`totalreclaw.relay.RelayClient.read_block_record`."""
+        return self._relay.read_block_record()
+
     async def ensure_address(self) -> None:
         """Public, best-effort Smart Account resolution.
 

@@ -32,6 +32,7 @@ import asyncio
 import logging
 import math
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -702,6 +703,8 @@ class RelayClient:
         # read-error-surfacing.md).
         self._read_block: Optional[ReadBlockState] = None
         self._read_block_episode_counter: int = 0
+        # Guards the read-modify-write in ``_set_read_block`` only.
+        self._read_block_lock = threading.Lock()
 
     async def _get_http(self) -> httpx.AsyncClient:
         """Return an ``httpx.AsyncClient`` bound to the current event loop.
@@ -808,24 +811,33 @@ class RelayClient:
     # the right place for state that must be visible from every call site
     # that shares one relay connection.
     #
-    # Plain attribute writes, no lock — NOT because this is single-threaded
+    # No lock on ``_read_block`` itself — NOT because this is single-threaded
     # (it isn't: Hermes sync hooks run on the ``loop_runner`` background
     # thread's event loop while async tools run on the host's own loop, so
     # ``self._read_block`` genuinely is read/written from more than one
-    # thread). No lock is needed because every write is a single Python
-    # attribute assignment (atomic under the GIL) of a fully-formed,
-    # immutable-in-practice ``ReadBlockState``, and every race is benign:
+    # thread). Every write to it is a single Python attribute assignment
+    # (atomic under the GIL) of a fully-formed, immutable-in-practice
+    # ``ReadBlockState``, and every race on it is benign:
     #   * A 2xx response on one thread clearing a block (``_clear_read_block``)
     #     that a denial on another thread just set: worst case is one extra
     #     HTTP call gets through during the overlap instead of being
-    #     short-circuited — never a crash, never a stuck state.
+    #     short-circuited — never a crash, never a stuck state. Set and clear
+    #     both take ``_read_block_lock`` so they serialize: whichever runs
+    #     last wins, and a clear can't be undone by a set that read ``prev``
+    #     before it.
     #   * Two threads both finding the deadline passed and both probing
     #     concurrently (``read_block()`` returns ``None`` for both): worst
     #     case is one redundant HTTP call, and whichever response lands last
     #     wins (either both clear it, or both reuse/extend the same episode
     #     via ``_set_read_block``'s ``prev is not None`` branch).
-    # No partial/torn read is possible because nothing here does read-modify-
-    # write across two attribute accesses.
+    # ``_set_read_block`` IS a read-modify-write (it reads ``prev``, then
+    # either reuses its episode or increments ``_read_block_episode_counter``
+    # and assigns a new record). That sequence (and ``_clear_read_block``) runs under
+    # ``_read_block_lock`` so two concurrent first denials cannot both mint
+    # an episode (which would log the once-per-episode WARNING twice or
+    # reuse an id). Readers (``read_block`` / ``read_block_episode`` /
+    # ``read_block_record``) stay lock-free: they read the one attribute
+    # once, so they never see a torn record.
     # ------------------------------------------------------------------
     def read_block(self) -> Optional[ReadBlockState]:
         """The active read-pause episode, or ``None`` once its deadline has
@@ -864,45 +876,63 @@ class RelayClient:
         blk = self._read_block
         return blk.episode if blk is not None else None
 
+    def read_block_record(self) -> Optional[ReadBlockState]:
+        """The read-pause episode record, kept past its re-probe deadline.
+
+        Same record :meth:`read_block_episode` reports the id of: ``None``
+        only when there was never a block or a success cleared it. Use it
+        when the denial details (kind, until, upgrade URL) are needed for an
+        account that is still denied during the re-probe gap.
+        """
+        return self._read_block
+
     def _set_read_block(self, err: RelayReadBlocked) -> None:
-        prev = self._read_block
         now_utc = datetime.now(timezone.utc)
         pause_s = _pause_seconds(err)
         paused_until_utc = now_utc + timedelta(seconds=pause_s)
+        with self._read_block_lock:
+            prev = self._read_block
+            if prev is not None:
+                # Re-block within the same episode (the prior episode was
+                # never cleared by a success).
+                episode = prev.episode
+                since_utc = prev.since_utc
+            else:
+                self._read_block_episode_counter += 1
+                episode = self._read_block_episode_counter
+                since_utc = now_utc
+            self._read_block = ReadBlockState(
+                error=err,
+                paused_until=time.monotonic() + pause_s,
+                paused_until_utc=paused_until_utc,
+                since_utc=since_utc,
+                episode=episode,
+            )
+        # Log after releasing the lock (handler I/O must not stall a
+        # contending thread or an event loop).
+        until_s = paused_until_utc.strftime("%Y-%m-%d %H:%M:%S")
         if prev is not None:
-            # Re-block within the same episode (the prior episode was never
-            # cleared by a success) — log at DEBUG to avoid errors.log spam.
-            episode = prev.episode
-            since_utc = prev.since_utc
+            # DEBUG to avoid errors.log spam on re-blocks.
             logger.debug(
                 "TotalReclaw: relay reads re-blocked (%s) within episode %d, "
                 "until %s UTC",
                 err.kind,
                 episode,
-                paused_until_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                until_s,
             )
         else:
-            self._read_block_episode_counter += 1
-            episode = self._read_block_episode_counter
-            since_utc = now_utc
             logger.warning(
                 "TotalReclaw: relay reads paused (%s) until %s UTC; recall "
                 "will show a notice",
                 err.kind,
-                paused_until_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                until_s,
             )
-        self._read_block = ReadBlockState(
-            error=err,
-            paused_until=time.monotonic() + pause_s,
-            paused_until_utc=paused_until_utc,
-            since_utc=since_utc,
-            episode=episode,
-        )
 
     def _clear_read_block(self) -> None:
         """Called on any 2xx ``/v1/subgraph`` response. The next block (if
         any) starts a new episode."""
-        self._read_block = None
+        with self._read_block_lock:
+            self._read_block = None
 
     def set_wallet_address(self, wallet_address: Optional[str]) -> None:
         """Update the Smart Account address forwarded on writes.
