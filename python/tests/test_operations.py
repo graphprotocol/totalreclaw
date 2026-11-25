@@ -327,7 +327,40 @@ class TestExportFacts:
         results = await export_facts(keys, "0x1234", relay)
         assert len(results) == 1
         assert results[0]["text"] == "Test memory"
-        assert results[0]["importance"] == 0.7
+        # #789: importance comes from the blob (raw text -> default 5), never
+        # from the on-chain decayScore ("0.7" here).
+        assert results[0]["importance"] == 5
+
+    @pytest.mark.asyncio
+    async def test_export_importance_from_blob_not_decay_score(self, keys):
+        from totalreclaw.claims_helper import build_canonical_claim_v1
+
+        blob = build_canonical_claim_v1(
+            {"text": "Blob importance fact", "type": "claim", "source": "user"}, importance=7
+        )
+        encrypted_b64 = encrypt(blob, keys.encryption_key)
+        encrypted_hex = "0x" + base64.b64decode(encrypted_b64).hex()
+        relay = AsyncMock(spec=RelayClient)
+        relay.query_subgraph = AsyncMock(
+            return_value={
+                "data": {
+                    "facts": [
+                        {
+                            "id": "fact-2",
+                            "encryptedBlob": encrypted_hex,
+                            "encryptedEmbedding": None,
+                            "decayScore": "8",
+                            "timestamp": "2026-03-29T10:00:00.000Z",
+                            "isActive": True,
+                            "contentFp": "abc",
+                        }
+                    ]
+                }
+            }
+        )
+        results = await export_facts(keys, "0x1234", relay)
+        assert results[0]["importance"] == 7
+        assert isinstance(results[0]["importance"], int)
 
 
 class TestSourceWeightsDefault:

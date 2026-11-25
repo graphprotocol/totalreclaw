@@ -56,6 +56,29 @@ pub struct PreparedFact {
 }
 
 // ---------------------------------------------------------------------------
+// decayScore rule (graphprotocol/totalreclaw#789)
+// ---------------------------------------------------------------------------
+
+/// On-chain `decayScore` (protobuf field 6) for every LIVE fact: `1.0`.
+///
+/// `decayScore` is a liveness flag, not an importance scale. `0` = tombstone,
+/// `1.0` = live. It carries no importance: readers take importance from the
+/// encrypted blob. Tombstones keep writing exactly `0` and must never go
+/// through this function.
+pub const LIVE_DECAY_SCORE: f64 = 1.0;
+
+/// The subgraph marks a fact inactive when `decayScore < INACTIVE_THRESHOLD`
+/// (`subgraph/src/mapping.ts`, `isActive = decayScore >= 0.3`). Kept here only
+/// so a drift test can assert [`LIVE_DECAY_SCORE`] stays above it.
+pub const SUBGRAPH_INACTIVE_THRESHOLD: f64 = 0.3;
+
+/// The single definition of the live-fact `decayScore` written by every client
+/// (Rust, WASM, PyO3, MCP, plugin). Always [`LIVE_DECAY_SCORE`].
+pub fn live_decay_score() -> f64 {
+    LIVE_DECAY_SCORE
+}
+
+// ---------------------------------------------------------------------------
 // Public API — pure computation, no I/O
 // ---------------------------------------------------------------------------
 
@@ -74,7 +97,8 @@ pub struct PreparedFact {
 /// * `dedup_key` - 32-byte HMAC-SHA256 dedup key.
 /// * `lsh_hasher` - Pre-initialized LSH hasher (seeded from mnemonic).
 /// * `embedding` - Pre-computed embedding vector (f32, e.g. 640d).
-/// * `importance` - Importance score on 1-10 scale. Normalized to 0.0-1.0.
+/// * `importance` - Importance score on 1-10 scale. Stored in the encrypted
+///   blob only; the on-chain `decayScore` is the constant [`live_decay_score`].
 /// * `source` - Source tag (e.g. "auto_extraction", "explicit_remember").
 /// * `owner` - Owner address (Smart Account address for managed service).
 /// * `agent_id` - Agent identifier (e.g. "zeroclaw", "openclaw").
@@ -121,8 +145,11 @@ pub fn prepare_fact(
     // 7. Encrypt embedding (float32 -> LE bytes -> base64 -> XChaCha20-Poly1305)
     let encrypted_embedding = encrypt_embedding(embedding, encryption_key)?;
 
-    // 8. Normalize importance: input 1-10 -> stored 0.0-1.0
-    let decay_score = (importance / 10.0).clamp(0.0, 1.0);
+    // 8. decayScore is a liveness flag, not importance (#789): every live
+    //    fact writes the constant. (This legacy v0 envelope has no importance
+    //    field; v1 callers use `prepare_fact_v1`, whose envelope carries it.)
+    let _ = importance;
+    let decay_score = live_decay_score();
 
     // 9. Build FactPayload and encode protobuf
     let payload = FactPayload {
@@ -309,7 +336,10 @@ pub fn prepare_fact_v1(
     let content_fp = fingerprint::generate_content_fingerprint(text_for_blind_indices, dedup_key);
     let encrypted_embedding = encrypt_embedding(embedding, encryption_key)?;
 
-    let decay_score = (importance / 10.0).clamp(0.0, 1.0);
+    // decayScore is a liveness flag, not importance (#789). Importance is
+    // already inside `envelope_json`.
+    let _ = importance;
+    let decay_score = live_decay_score();
 
     let payload = FactPayload {
         id: fact_id.clone(),
@@ -419,8 +449,8 @@ mod tests {
         assert_eq!(prepared.source, "auto_extraction");
         assert_eq!(prepared.agent_id, "test_agent");
 
-        // Importance normalized: 8.0 / 10.0 = 0.8
-        assert!((prepared.decay_score - 0.8).abs() < 1e-10);
+        // decayScore is the live constant, not importance / 10 (#789)
+        assert!((prepared.decay_score - 1.0).abs() < 1e-10);
 
         // Encrypted blob should be non-empty hex
         assert!(!prepared.encrypted_blob_hex.is_empty());
@@ -446,21 +476,22 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_fact_importance_normalization() {
+    fn test_prepare_fact_decay_score_is_constant() {
         let (keys, lsh_hasher) = test_keys();
         let emb = dummy_embedding();
 
-        // Test various importance values
+        // decayScore carries no importance (#789): every live fact is 1.0.
         let cases = vec![
-            (0.0, 0.0),
-            (1.0, 0.1),
-            (5.0, 0.5),
-            (8.0, 0.8),
+            (0.0, 1.0),
+            (1.0, 1.0),
+            (2.0, 1.0),
+            (5.0, 1.0),
+            (8.0, 1.0),
             (10.0, 1.0),
-            (15.0, 1.0),  // Clamped to 1.0
-            (-5.0, 0.0),  // Clamped to 0.0
+            (15.0, 1.0),
+            (-5.0, 1.0),
+            (f64::NAN, 1.0),
         ];
-
         for (importance, expected_decay) in cases {
             let prepared = prepare_fact(
                 "test",

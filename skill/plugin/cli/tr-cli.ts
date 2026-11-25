@@ -90,6 +90,7 @@ import { generateEmbedding, getEmbeddingDims } from '../embedding/embedding.js';
 import { LSHHasher } from '../embedding/lsh.js';
 import { encodeEmbeddingPayload } from '../embedding/embedding-codec.js';
 import { computeEntityTrapdoor } from '../extraction/claims-helper.js';
+import { liveDecayScore } from '../subgraph/decay-score.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -393,7 +394,7 @@ async function cmdRemember(rawArgs: string[]): Promise<void> {
     owner: ctx.walletAddress,
     encryptedBlob,
     blindIndices,
-    decayScore: 8,
+    decayScore: liveDecayScore(), // live fact = 1.0 (#789)
     source: 'cli:tr-remember',
     contentFp,
     agentId: 'tr-cli',

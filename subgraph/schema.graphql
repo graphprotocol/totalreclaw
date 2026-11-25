@@ -11,7 +11,7 @@ type Fact @entity(immutable: false) {
   encryptedBlob: Bytes!
   "XChaCha20-Poly1305 encrypted embedding vector (640d Harrier). Nullable for v1/v2 facts."
   encryptedEmbedding: String
-  "Decay score (0.0-1.0). Facts below 0.3 are considered inactive."
+  "Liveness flag: 0 = tombstone, 1.0 = live. Carries no importance (importance is inside the encrypted blob). Facts below 0.3 are considered inactive."
   decayScore: BigDecimal!
   "Whether this fact is active (decayScore >= 0.3)"
   isActive: Boolean!

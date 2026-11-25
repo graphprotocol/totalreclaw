@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Every live fact is written with on-chain `decayScore` 1.0 (#789).** `store_fact`, `store_fact_with_importance`, `store_fact_batch` and the contradiction-store path now use `totalreclaw_core::store::live_decay_score()`. Before, `store_fact_with_importance` wrote `importance / 10`, which put importance 1 or 2 (0.1, 0.2) under the subgraph's 0.3 threshold and hid the fact. Needs the next `totalreclaw-core` release (the `^2.7.0` path dependency builds against the in-repo core).
+
 ## [2.1.0] - unreleased
 
 ### Changed

@@ -67,8 +67,8 @@ REMEMBER = {
                 "type": "number",
                 "description": (
                     "Importance score 1-10 (default 8 for explicit remember). Use 8+ for "
-                    "content the user explicitly asked to remember. The 1-10 scale maps "
-                    "to the on-chain decayScore via /10."
+                    "content the user explicitly asked to remember. The 1-10 value is stored "
+                    "inside the encrypted memory."
                 ),
             },
             "force": {

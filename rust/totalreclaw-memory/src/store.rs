@@ -104,7 +104,7 @@ pub async fn store_fact(
         &keys.dedup_key,
         lsh_hasher,
         &embedding,
-        1.0, // default decay_score
+        core_store::live_decay_score(), // live fact = 1.0 (#789)
         source,
         relay.wallet_address(),
         "zeroclaw",
@@ -116,10 +116,11 @@ pub async fn store_fact(
     Ok(prepared.fact_id)
 }
 
-/// Store a fact with a specific importance value (0.0 - 1.0).
+/// Store a fact with a specific importance value (1-10 scale).
 ///
-/// The importance is normalized per spec: `decayScore = importance / 10`.
-/// Input is on a 1-10 scale, stored as 0.0-1.0.
+/// Importance is stored in the encrypted blob only. The on-chain `decayScore`
+/// is the constant live value (1.0; 0 = tombstone), via core
+/// `live_decay_score()` (#789).
 pub async fn store_fact_with_importance(
     content: &str,
     source: &str,
@@ -196,7 +197,7 @@ pub async fn store_fact_batch(
             &keys.dedup_key,
             lsh_hasher,
             &embedding,
-            1.0,
+            core_store::live_decay_score(), // live fact = 1.0 (#789)
             source,
             relay.wallet_address(),
             "zeroclaw",
@@ -767,16 +768,9 @@ mod tests {
 
     #[test]
     fn test_importance_normalization() {
-        // Spec: decayScore = importance / 10
-        // Input 8 on 1-10 scale -> 0.8
-        let importance: f64 = 8.0;
-        let decay_score = (importance / 10.0).clamp(0.0, 1.0);
-        assert!((decay_score - 0.8).abs() < 1e-10);
-
-        // Edge cases
-        assert!((0.0_f64 / 10.0).clamp(0.0, 1.0) == 0.0);
-        assert!((10.0_f64 / 10.0).clamp(0.0, 1.0) == 1.0);
-        assert!((15.0_f64 / 10.0).clamp(0.0, 1.0) == 1.0); // Clamped to 1.0
+        // Spec (#789): decayScore is 1.0 for every live fact, regardless of
+        // importance (0 = tombstone). Importance lives in the encrypted blob.
+        assert_eq!(core_store::live_decay_score(), 1.0);
     }
 
     // -----------------------------------------------------------------------

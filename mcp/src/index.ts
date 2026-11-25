@@ -1060,7 +1060,7 @@ async function handleRememberSubgraph(
                   text,
                   embedding: candEmbedding,
                   importance: doc.importance,
-                  decayScore: parseFloat(c.decayScore) || 0.5,
+                  decayScore: liveDecayScore(), // liveness flag only; importance is doc.importance (#789)
                   createdAt: parseInt(c.timestamp) || 0,
                   version: 1,
                   pinned: candPinned,
@@ -1252,7 +1252,7 @@ async function handleRememberSubgraph(
         owner: state.smartAccountAddress,
         encryptedBlob: Buffer.from(encryptedBlob, 'base64').toString('hex'),
         blindIndices: allIndices,
-        decayScore: liveDecayScore(effectiveImportance), // floored, #789
+        decayScore: liveDecayScore(), // constant 1.0, no importance (#789)
         source: 'mcp_remember',
         contentFp,
         agentId: 'mcp-server',
@@ -1379,7 +1379,7 @@ async function handleDebriefSubgraph(
         owner: state.smartAccountAddress,
         encryptedBlob: Buffer.from(encryptedBlob, 'base64').toString('hex'),
         blindIndices: allIndices,
-        decayScore: liveDecayScore(importance), // floored, #789
+        decayScore: liveDecayScore(), // constant 1.0, no importance (#789)
         source: 'mcp_debrief',
         contentFp,
         agentId: 'mcp-server',
@@ -1447,7 +1447,7 @@ async function handleDebriefSubgraph(
         owner: state.smartAccountAddress,
         encryptedBlob: Buffer.from(encryptedBlob, 'base64').toString('hex'),
         blindIndices: allIndices,
-        decayScore: liveDecayScore(item.importance), // floored, #789
+        decayScore: liveDecayScore(), // constant 1.0, no importance (#789)
         source: 'mcp_debrief',
         contentFp,
         agentId: 'mcp-server',
@@ -1592,7 +1592,6 @@ async function handleRecallSubgraph(
     const categoryMap = new Map<string, string>();
     const sourceMap = new Map<string, string>(); // v1 source, when available
     const scopeMap = new Map<string, string>();
-    const importanceRaw = new Map<string, number>();
     const pinnedIds = new Set<string>(); // PRD-04 DEP-5: user-pinned facts
     for (const c of candidates) {
       try {
@@ -1627,7 +1626,6 @@ async function handleRecallSubgraph(
           sourceMap.set(c.id, doc.v1.source);
           if (doc.v1.scope) scopeMap.set(c.id, doc.v1.scope);
         }
-        importanceRaw.set(c.id, doc.importance);
         const pinned = blobIsPinned(decryptedBlob);
         if (pinned) pinnedIds.add(c.id);
 
@@ -1635,7 +1633,7 @@ async function handleRecallSubgraph(
           id: c.id,
           text,
           embedding,
-          importance: parseFloat(c.decayScore) || 0.5,
+          importance: doc.importance, // blob importance 1-10, not decayScore (#789)
           createdAt: parseInt(c.timestamp) || undefined,
           source: sourceMap.get(c.id),
           pinned,
@@ -1683,7 +1681,7 @@ async function handleRecallSubgraph(
       cosine_similarity: r.cosineSimilarity ?? 0,
       // Key omitted when not pinned, like Hermes.
       ...(pinnedIds.has(r.id) ? { pinned: true } : {}),
-      importance: Math.round((r.importance ?? 0.5) * 10),
+      importance: r.importance ?? 5, // blob importance 1-10 (#789)
       age_days: r.createdAt
         ? Math.floor((Date.now() / 1000 - r.createdAt) / 86400)
         : 0,

@@ -346,9 +346,9 @@ async def detect_and_resolve_contradictions(
                 if not result.embedding or not result.text:
                     continue
                 try:
-                    existing_importance = max(1, min(10, int(round(
-                        result.importance * 10 if result.importance <= 1 else result.importance
-                    ))))
+                    # result.importance is the blob importance (int 1-10) since
+                    # #789; it is no longer a decayScore-derived 0-1 value.
+                    existing_importance = max(1, min(10, int(round(result.importance))))
                     result_entities = getattr(result, "entities", None)
                     existing_short = _short_key_claim_for_resolver(
                         text=result.text,

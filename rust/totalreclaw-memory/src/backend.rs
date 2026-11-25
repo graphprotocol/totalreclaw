@@ -519,8 +519,9 @@ impl TotalReclawMemory {
 
     /// Store a memory entry using native UserOp.
     ///
-    /// Importance defaults to 10 (max) if not specified. Per the client-consistency
-    /// spec, `decayScore = importance / 10`, so importance=10 -> decayScore=1.0.
+    /// Importance defaults to 10 (max) if not specified. Importance is stored in
+    /// the encrypted blob; the on-chain `decayScore` is always 1.0 for a live
+    /// fact (0 = tombstone), per the client-consistency spec.
     ///
     /// Clears the hot cache after storing to avoid stale results.
     pub async fn store(
@@ -536,7 +537,8 @@ impl TotalReclawMemory {
 
     /// Store a memory entry with explicit importance (1-10 scale).
     ///
-    /// Per the client-consistency spec, `decayScore = importance / 10`.
+    /// Importance goes into the encrypted blob; the on-chain `decayScore` is
+    /// always 1.0 for a live fact (0 = tombstone).
     pub async fn store_with_importance(
         &self,
         _key: &str,
