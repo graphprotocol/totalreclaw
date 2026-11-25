@@ -9,8 +9,11 @@ integration (Hermes, LangChain, CrewAI, or custom agents).
 """
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import json
 import logging
+import threading
 import time
 from typing import Optional, TYPE_CHECKING
 
@@ -85,6 +88,74 @@ def _format_recall_context(results) -> str:
     return totalreclaw_core.format_recall_context(json.dumps(items), int(time.time()))
 
 
+# Max seconds the pre-turn hook may spend embedding the query before it
+# falls back to lexical-only recall (#639). The model must already be loaded,
+# so this only ever covers a warm forward pass.
+QUERY_EMBED_TIMEOUT_S = 2.0
+
+_embed_lock = threading.Lock()
+_embed_inflight: Optional[concurrent.futures.Future] = None
+_warmup_started = False
+
+
+def _run_daemon(fn, *args) -> concurrent.futures.Future:
+    """Run ``fn`` on a daemon thread (a wedged load can't delay shutdown)."""
+    fut: concurrent.futures.Future = concurrent.futures.Future()
+
+    def _target():
+        try:
+            fut.set_result(fn(*args))
+        except BaseException as e:  # noqa: BLE001 - surfaced via the future
+            fut.set_exception(e)
+
+    threading.Thread(target=_target, name="tr-recall-embed", daemon=True).start()
+    return fut
+
+
+def _maybe_warm_up(emb) -> None:
+    """Best-effort, non-blocking one-time model load off the turn path.
+
+    Only when the model is already in the local cache; never raises.
+    """
+    global _warmup_started
+    try:
+        with _embed_lock:
+            if _warmup_started:
+                return
+            _warmup_started = True
+        if emb.is_model_available_locally():
+            _run_daemon(emb._ensure_loaded)
+    except Exception as e:
+        logger.debug("auto-recall embedder warm-up skipped: %s", e)
+
+
+def _embed_query_or_none(query: str, timeout: float = QUERY_EMBED_TIMEOUT_S) -> Optional[list]:
+    """Query embedding for auto-recall, or None to fall back to lexical recall.
+
+    Same embedder the ``totalreclaw_recall`` tool uses. Only embeds when the
+    model is already LOADED (no download / network in the hook); otherwise it
+    kicks off a background warm-up and returns None. Never blocks longer than
+    *timeout*, and after a timeout skips embedding until the stuck call ends.
+    Any failure returns None.
+    """
+    global _embed_inflight
+    try:
+        from totalreclaw import embedding as _emb
+
+        if not _emb.is_model_loaded():
+            _maybe_warm_up(_emb)
+            return None
+        with _embed_lock:
+            if _embed_inflight is not None and not _embed_inflight.done():
+                return None  # previous embed still running: don't pay again
+            fut = _run_daemon(_emb.get_embedding, query)
+            _embed_inflight = fut
+        return fut.result(timeout=timeout)
+    except Exception as e:  # incl. concurrent.futures.TimeoutError
+        logger.debug("auto-recall query embedding skipped: %s", e)
+        return None
+
+
 def auto_recall(
     query: str,
     state: "AgentState",
@@ -114,14 +185,17 @@ def auto_recall(
         return None
 
     try:
-        # No query vector here, so candidate vectors would score 0 anyway:
-        # skip downloading them (#647).
+        # With a query vector, candidate vectors are needed for cosine
+        # reranking and the LSH trapdoors catch paraphrases (#639). Without
+        # one they would score 0 anyway: skip downloading them (#647).
+        query_embedding = _embed_query_or_none(query)
         results = run_sync(
             client.recall(
                 query,
                 top_k=top_k,
                 max_candidates=state.get_max_candidate_pool(),
-                include_embeddings=False,
+                include_embeddings=query_embedding is not None,
+                query_embedding=query_embedding,
             )
         )
 
@@ -161,11 +235,15 @@ async def auto_recall_async(
         return None
 
     try:
+        query_embedding = await asyncio.get_running_loop().run_in_executor(
+            None, _embed_query_or_none, query
+        )
         results = await client.recall(
             query,
             top_k=top_k,
             max_candidates=state.get_max_candidate_pool(),
-            include_embeddings=False,
+            include_embeddings=query_embedding is not None,
+            query_embedding=query_embedding,
         )
         if results:
             return _format_recall_context(results)

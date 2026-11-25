@@ -130,7 +130,7 @@ class TestAutoRecallFormat:
         """Build a minimal AgentState mock that returns `results` from recall."""
         mock_client = MagicMock()
 
-        async def _recall(query, top_k=8, max_candidates=250, include_embeddings=True):
+        async def _recall(query, top_k=8, max_candidates=250, include_embeddings=True, query_embedding=None):
             return results
 
         mock_client.recall = _recall
@@ -181,7 +181,7 @@ class TestAutoRecallAsyncFormat:
     def _make_state(self, results):
         mock_client = MagicMock()
 
-        async def _recall(query, top_k=8, max_candidates=250, include_embeddings=True):
+        async def _recall(query, top_k=8, max_candidates=250, include_embeddings=True, query_embedding=None):
             return results
 
         mock_client.recall = _recall

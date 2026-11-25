@@ -507,7 +507,7 @@ class TestHooks:
         mock_result = MagicMock()
         mock_result.text = "User prefers dark mode"
 
-        async def mock_recall(query, top_k=DEFAULT_RECALL_TOP_K, max_candidates=250, include_embeddings=True):
+        async def mock_recall(query, top_k=DEFAULT_RECALL_TOP_K, max_candidates=250, include_embeddings=True, query_embedding=None):
             assert top_k == DEFAULT_RECALL_TOP_K, f"Expected top_k={DEFAULT_RECALL_TOP_K}, got top_k={top_k}"
             return [mock_result]
 
@@ -527,7 +527,7 @@ class TestHooks:
         mock_result = MagicMock()
         mock_result.text = "User likes Python"
 
-        async def mock_recall(query, top_k=16, max_candidates=250, include_embeddings=True):
+        async def mock_recall(query, top_k=16, max_candidates=250, include_embeddings=True, query_embedding=None):
             return [mock_result]
 
         mock_client.recall = mock_recall

@@ -17,6 +17,7 @@ Dimensions: 640
 from __future__ import annotations
 
 import os
+import threading
 import sys
 from pathlib import Path
 
@@ -99,10 +100,21 @@ def _enable_hf_progress_bar() -> None:
         pass
 
 
+_load_lock = threading.Lock()
+
+
 def _ensure_loaded():
-    global _session, _tokenizer
     if _session is not None and _tokenizer is not None:
         return _session, _tokenizer
+    with _load_lock:
+        # Re-check: another thread may have finished loading while we waited.
+        if _session is not None and _tokenizer is not None:
+            return _session, _tokenizer
+        return _load_locked()
+
+
+def _load_locked():
+    global _session, _tokenizer
 
     import onnxruntime as ort
     from transformers import AutoTokenizer
@@ -127,8 +139,11 @@ def _ensure_loaded():
 
     sess_options = ort.SessionOptions()
     sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    _session = ort.InferenceSession(model_path, sess_options)
-    _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, add_eos_token=True)
+    session = ort.InferenceSession(model_path, sess_options)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, add_eos_token=True)
+    # Publish the pair only once both exist (is_model_loaded never sees half).
+    _tokenizer = tokenizer
+    _session = session
 
     if needs_download:
         _emit_download_done()
@@ -140,6 +155,12 @@ def is_model_available_locally() -> bool:
     """True when the model is loaded or already in the local HF cache, so a
     ``get_embedding`` call will not start the one-time download."""
     return (_session is not None and _tokenizer is not None) or _hf_cache_has_model()
+
+
+def is_model_loaded() -> bool:
+    """True only when the ONNX session and tokenizer are already initialised,
+    so ``get_embedding`` is a warm forward pass (no download, no network)."""
+    return _session is not None and _tokenizer is not None
 
 
 def get_embedding(text: str) -> list[float]:
