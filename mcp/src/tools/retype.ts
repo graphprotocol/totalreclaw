@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import type { ToolContext } from './types.js';
 import { resolveMemoryId } from './helpers.js';
 import type { SubgraphSearchFact } from '../subgraph/search.js';
+import type { RecentWriteInput } from '../subgraph/recent-writes.js';
 import { encodeFactProtobuf } from '../subgraph/store.js';
 import {
   MEMORY_CLAIM_V1_SCHEMA_VERSION,
@@ -21,7 +22,8 @@ import {
   type MemoryScope,
   type MemoryVolatility,
 } from '../v1-types.js';
-import { buildV1ClaimBlob } from '../claims-helper.js';
+import { buildV1ClaimBlob, type PinStatus } from '../claims-helper.js';
+import type { MemoryEntityV1 } from '../v1-types.js';
 import { rethrowIfQuota, shortErrorMessage, logWriteError } from './write-errors.js';
 
 // ── Tool definition ──────────────────────────────────────────────────────────
@@ -140,6 +142,12 @@ export interface MetadataOpDeps {
     factId: string,
     expect?: 'active' | 'inactive',
   ) => Promise<boolean>;
+  /**
+   * Called once after submitBatch returned success, with the tombstone and
+   * new payloads, so the process can serve the new id before the subgraph
+   * indexes it. Best-effort: never throws into the op.
+   */
+  recordWrites?: (records: RecentWriteInput[]) => void;
 }
 
 export interface MetadataOpResult {
@@ -182,6 +190,12 @@ export function extractV1Fields(decrypted: string): {
   importance?: number;
   confidence?: number;
   createdAt?: string;
+  /** v1.1 pin state, carried through rewrites so retype / set_scope keep a pin. */
+  pinStatus?: PinStatus;
+  entities?: MemoryEntityV1[];
+  expiresAt?: string;
+  /** Provenance metadata (session_id, import source, Crystal fields). */
+  metadata?: Record<string, unknown>;
 } {
   try {
     const decodedClaim = JSON.parse(decrypted) as Record<string, unknown>;
@@ -209,6 +223,19 @@ export function extractV1Fields(decrypted: string): {
         importance: typeof decodedClaim.importance === 'number' ? decodedClaim.importance : undefined,
         confidence: typeof decodedClaim.confidence === 'number' ? decodedClaim.confidence : undefined,
         createdAt: typeof decodedClaim.created_at === 'string' ? decodedClaim.created_at : undefined,
+        pinStatus:
+          decodedClaim.pin_status === 'pinned' || decodedClaim.pin_status === 'unpinned'
+            ? decodedClaim.pin_status
+            : undefined,
+        entities:
+          Array.isArray(decodedClaim.entities) && decodedClaim.entities.length > 0
+            ? (decodedClaim.entities as MemoryEntityV1[])
+            : undefined,
+        expiresAt: typeof decodedClaim.expires_at === 'string' ? decodedClaim.expires_at : undefined,
+        metadata:
+          decodedClaim.metadata && typeof decodedClaim.metadata === 'object' && !Array.isArray(decodedClaim.metadata)
+            ? (decodedClaim.metadata as Record<string, unknown>)
+            : undefined,
       };
     }
 
@@ -231,6 +258,8 @@ export function extractV1Fields(decrypted: string): {
         source: 'user-inferred',
         importance:
           typeof decodedClaim.i === 'number' ? Math.max(1, Math.min(10, Math.round(decodedClaim.i))) : undefined,
+        // v0 canonical blobs mark a pin with st === 'p' (same as the pin tool's reader).
+        pinStatus: decodedClaim.st === 'p' ? 'pinned' : undefined,
       };
     }
 
@@ -265,6 +294,22 @@ export function extractV1Fields(decrypted: string): {
     text: decrypted,
     type: 'claim',
     source: 'user-inferred',
+  };
+}
+
+/**
+ * Fields a retype / set_scope rewrite must carry over untouched: the pin
+ * state (a pinned fact stays pinned), entities, expiry and provenance
+ * metadata. Mirrors Hermes `retype_setscope.py`.
+ */
+export function carriedFields(
+  e: ReturnType<typeof extractV1Fields>,
+): Pick<Parameters<typeof buildV1ClaimBlob>[0], 'pinStatus' | 'entities' | 'expiresAt' | 'metadata'> {
+  return {
+    pinStatus: e.pinStatus,
+    entities: e.entities,
+    expiresAt: e.expiresAt,
+    metadata: e.metadata,
   };
 }
 
@@ -403,6 +448,11 @@ export async function executeMetadataOp<T>(
         tx_hash: txHash,
       };
     }
+    try {
+      deps.recordWrites?.([tombstonePayload, newPayload]);
+    } catch {
+      // the record is best-effort
+    }
     // 9. Read-after-write — wait until the new fact id is indexed and
     //    active, OR the host's timeout elapses. On timeout, return success
     //    with `partial: true` so the agent surfaces "chain write submitted,
@@ -479,6 +529,7 @@ export async function executeRetype(
       confidence: e.confidence,
       createdAt: e.createdAt,
       supersededBy: memoryId,
+      ...carriedFields(e),
     }),
     newType,
     'retype',

@@ -468,13 +468,23 @@ export async function getOwnerFactCount(
   return total;
 }
 
-/** Fetch a single fact by its ID (the client-generated UUID). Returns null if not found or inactive. */
-export async function fetchFactById(
+/** Result of a by-id lookup: tells "not indexed yet" (absent) from "forgotten" (inactive). */
+export type FactLookup =
+  | { state: 'active'; fact: SubgraphSearchFact }
+  | { state: 'inactive' }
+  | { state: 'absent' };
+
+/**
+ * Look a fact up by its ID (the client-generated UUID). `absent` covers "not
+ * indexed yet", another owner's fact and every relay error (`gqlQuery` never
+ * throws); `inactive` means the owner's fact exists and was forgotten/replaced.
+ */
+export async function lookupFactById(
   owner: string,
   factId: string,
   relayUrl?: string,
   authKeyHex?: string,
-): Promise<SubgraphSearchFact | null> {
+): Promise<FactLookup> {
   const effectiveRelayUrl = relayUrl ?? getSubgraphConfig().relayUrl;
   const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${effectiveRelayUrl}/v1/subgraph`;
 
@@ -504,13 +514,24 @@ export async function fetchFactById(
   );
 
   const fact = factByIdJson?.fact;
-  if (!fact) return null;
-  if (fact.isActive === false) return null;
+  if (!fact) return { state: 'absent' };
   // Owner check (lowercase compare — subgraph stores bytes lowercase)
   if (typeof fact.owner === 'string' && fact.owner.toLowerCase() !== owner.toLowerCase()) {
-    return null;
+    return { state: 'absent' };
   }
-  return fact;
+  if (fact.isActive === false) return { state: 'inactive' };
+  return { state: 'active', fact };
+}
+
+/** Fetch a single fact by its ID (the client-generated UUID). Returns null if not found or inactive. */
+export async function fetchFactById(
+  owner: string,
+  factId: string,
+  relayUrl?: string,
+  authKeyHex?: string,
+): Promise<SubgraphSearchFact | null> {
+  const r = await lookupFactById(owner, factId, relayUrl, authKeyHex);
+  return r.state === 'active' ? r.fact : null;
 }
 
 /**
