@@ -6,11 +6,10 @@
 - **An LLM outage no longer drops the auto-extraction window (internal #604, #553).** `extractFacts` now re-throws `LLMUpstreamOutageError` (rate limit, 5xx or timeout that outlasted its retries). The trajectory poller keeps the offset and retries after 2, 4, 8 and 16 minutes, then gives up with a warn line on the 5th failure. A zero-facts answer still advances the offset.
 - **Deferred turns are no longer lost (internal #781).** Below the turn threshold, or when the one-extraction-per-poll cap skipped a file, the poller advanced its offset and discarded those messages. The offset now moves only when extraction consumed the window, so with interval 3 and one turn per poll, extraction sees all three turns. Turns are recounted from the offset each poll; old state files with `turnsAccum` still load.
 - A window larger than one extraction prompt (about 12k characters) is now consumed in slices across polls instead of silently losing its tail. A single message longer than one prompt is still truncated to its first ~12k characters, now with a warning in the log. A state entry whose file shrank below the stored offset restarts from 0. Overlapping polls are skipped.
+- **`totalreclaw_import_from` no longer claims `idempotentHint: true`.** In self-hosted (HTTP) mode `@totalreclaw/client`'s `remember()` sends no content fingerprint, so the server's exact-duplicate check never runs and importing the same file twice stores every fact twice ([#784](https://github.com/graphprotocol/totalreclaw/issues/784)). The hint is now `false`. Sending the fingerprint needs a change in the `@totalreclaw/client` package and is tracked in #784.
 
 ### Changed
 - A window of more than 6 messages is now extracted in `full` mode, not only outage retries (`turn` mode keeps only the last 6 messages, which would drop earlier turns of a deferred window). Prompt framing differs for those windows.
-
-- **`totalreclaw_import_from` no longer claims `idempotentHint: true`.** In self-hosted (HTTP) mode `@totalreclaw/client`'s `remember()` sends no content fingerprint, so the server's exact-duplicate check never runs and importing the same file twice stores every fact twice ([#784](https://github.com/graphprotocol/totalreclaw/issues/784)). The hint is now `false`. Sending the fingerprint needs a change in the `@totalreclaw/client` package and is tracked in #784.
 
 ## [3.6.3] - 2026-11-24
 
