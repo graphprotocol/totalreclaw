@@ -30,7 +30,7 @@ import json
 import logging
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional
 
 import httpx
@@ -292,6 +292,13 @@ class _PendingRecord:
     fact_ids: list[str]
     accepted_at: float
     on_lost: Optional[Callable[[list[str]], Any]] = None
+    #: The payloads of this write, kept so a write PROVEN replaced (dead) or
+    #: dropped (gone) can be sent again. Only set where nobody else tracks the
+    #: facts (a single write that returned at accept or at its deadline).
+    payloads: list = field(default_factory=list)
+    kind: str = "single"
+    resend_ok: bool = False
+    resends: int = 0
 
 
 _pending: dict[str, list[_PendingRecord]] = {}
@@ -861,6 +868,9 @@ class Fate(NamedTuple):
     kind: str
     success: Optional[bool] = None
     hash: Optional[str] = None
+    #: ``gone`` only: every status was a TERMINAL bundler state (``rejected`` /
+    #: ``failed``), not ``not_found`` (which a lagging status index also says).
+    terminal: bool = False
 
 
 @dataclass
@@ -993,6 +1003,7 @@ async def _fate_once(
         return Fate("dead")
     # 3. The nonce is still free: ask the bundler.
     kinds: list[str] = []
+    all_terminal = True
     for h in hashes:
         try:
             resp = await _relay_rpc(
@@ -1009,11 +1020,13 @@ async def _fate_once(
             kinds.append("pending")
         elif status in _STATUS_GONE:
             kinds.append("gone")
+            if status not in ("rejected", "failed"):
+                all_terminal = False
         else:
             return Fate("unknown")
     if "pending" in kinds:
         return Fate("pending")
-    return Fate("gone")
+    return Fate("gone", terminal=all_terminal)
 
 
 async def resolve_fate(
@@ -1035,6 +1048,8 @@ async def resolve_fate(
     await _sleep(GATE_POLL_S)
     second = await _fate_once(http, ctx, hashes, nonce, sent_block)
     if second.kind == first.kind or second.kind == "executed":
+        if second.kind == "gone":
+            return Fate("gone", terminal=first.terminal and second.terminal)
         return second
     return second if second.kind == "pending" else Fate("unknown")
 
@@ -1071,7 +1086,12 @@ async def _call_on_lost(cb: Optional[Callable[[list[str]], Any]], fact_ids: list
 # ---------------------------------------------------------------------------
 
 
-async def _settle_pending(http: httpx.AsyncClient, ctx: _Ctx, deadline: _Deadline) -> None:
+async def _settle_pending(
+    http: httpx.AsyncClient,
+    ctx: _Ctx,
+    deadline: _Deadline,
+    lost_sink: Optional[list] = None,
+) -> None:
     """Resolve earlier accepted ops of this account BY HASH.
 
     The gate never opens on "nonce advanced" alone. Raises
@@ -1096,6 +1116,7 @@ async def _settle_pending(http: httpx.AsyncClient, ctx: _Ctx, deadline: _Deadlin
                 _drop_record(_pending, key, rec)
                 break
             if fate.kind in ("dead", "gone"):
+                proven = fate.kind == "dead" or fate.terminal
                 if fate.kind == "dead":
                     logger.error(
                         "accepted write %s was replaced by another op at nonce %d; "
@@ -1110,6 +1131,8 @@ async def _settle_pending(http: httpx.AsyncClient, ctx: _Ctx, deadline: _Deadlin
                     )
                 await _call_on_lost(rec.on_lost, rec.fact_ids)
                 _drop_record(_pending, key, rec)
+                if lost_sink is not None and rec.resend_ok and rec.resends < 1 and proven:
+                    lost_sink.append(rec)
                 break
             now = _now()
             if now - rec.accepted_at >= PENDING_MAX_AGE_S:
@@ -1150,6 +1173,10 @@ async def _settle_pending(http: httpx.AsyncClient, ctx: _Ctx, deadline: _Deadlin
             if fate.success is False:
                 await _call_on_lost(rec.on_lost, rec.fact_ids)
             _drop_record(_stale, key, rec)
+            if lost_sink is not None and rec.resend_ok and rec.resends < 1 and (
+                fate.kind == "dead" or fate.terminal
+            ):
+                lost_sink.append(rec)
         elif fate.kind in ("dead", "gone"):
             logger.error(
                 "stale write %s is %s; facts %s were not stored",
@@ -1172,6 +1199,11 @@ def _park(
     in_flight: list[_Attempt],
     fact_ids: list[str],
     on_lost: Optional[Callable[[list[str]], Any]],
+    *,
+    payloads: Optional[list] = None,
+    kind: str = "single",
+    resend_ok: bool = False,
+    resends: int = 0,
 ) -> _PendingRecord:
     """Record an accepted write whose fate is unknown when the call exits."""
     last = in_flight[-1]
@@ -1183,6 +1215,10 @@ def _park(
         fact_ids=list(fact_ids),
         accepted_at=_now(),
         on_lost=on_lost,
+        payloads=list(payloads or []),
+        kind=kind,
+        resend_ok=resend_ok and bool(payloads),
+        resends=resends,
     )
     _pending.setdefault(sender.lower(), []).append(rec)
     return rec
@@ -1198,25 +1234,64 @@ async def settle_pending_writes(
     session_id: Optional[str] = None,
     profile: str = "background",
     deadline_s: Optional[float] = None,
+    *,
+    eoa_address: Optional[str] = None,
+    eoa_private_key: Optional[bytes] = None,
+    data_edge_address: Optional[str] = None,
 ) -> None:
     """Resolve this account's earlier accepted writes (and apply their
-    ``on_lost`` callbacks) WITHOUT sending anything. Callers run this before
-    their own duplicate gate so a ledger entry for a dead op cannot make the
-    gate skip a fact that was never stored. Raises
+    ``on_lost`` callbacks) WITHOUT sending anything of its own. Callers run
+    this before their own duplicate gate so a ledger entry for a dead op
+    cannot make the gate skip a fact that was never stored. Raises
     :class:`PredecessorPendingError` / :class:`AccountBusyError` (nothing
-    sent)."""
+    sent).
+
+    When the signing identity is given (``eoa_address``, ``eoa_private_key``)
+    a write PROVEN replaced or dropped is sent again (once), exactly as the
+    next write would do."""
     relay_url = relay_url.rstrip("/")
     ctx = _make_ctx(sender, relay_url, auth_key_hex, wallet_address, chain_id, client_id, session_id)
     deadline = _Deadline(profile, deadline_s, batch=False)
+    lost: list = []
     lock = await _get_sender_lock(sender)
     await _acquire_sender_lock(lock, deadline)
     try:
         if not pending_records(sender):
             return
         async with httpx.AsyncClient(timeout=30.0) as http:
-            await _settle_pending(http, ctx, deadline)
+            await _settle_pending(http, ctx, deadline, lost)
     finally:
         lock.release()
+    if lost and eoa_private_key is not None and eoa_address is not None:
+        await _resend_lost(lost, dict(
+            sender=sender, eoa_address=eoa_address, eoa_private_key=eoa_private_key,
+            relay_url=relay_url, auth_key_hex=auth_key_hex, wallet_address=wallet_address,
+            chain_id=chain_id, client_id=client_id, session_id=session_id,
+            data_edge_address=data_edge_address, profile=profile,
+        ))
+
+
+async def _resend_lost(lost: list, base: dict) -> None:
+    """Send again (once) the writes a gate PROVED replaced (dead) or dropped
+    (gone): their nonce went to another op, or the bundler dropped them and the
+    nonce is unused, so they can never execute and a second send cannot write
+    them twice. Same payloads, so the same fact ids. Failures are logged; the
+    ledger was already released by ``on_lost``."""
+    for rec in lost:
+        logger.warning(
+            "re-sending write %s (proven %s): facts %s",
+            rec.hashes[-1], "lost", rec.fact_ids,
+        )
+        try:
+            await _submit_userop_once(
+                kind=rec.kind, payloads=list(rec.payloads), confirm="accept",
+                deadline_s=None, fact_ids=list(rec.fact_ids), on_lost=rec.on_lost,
+                lost_sink=None, resends=rec.resends + 1, **base,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.error("re-send of lost write %s failed (facts %s): %s", rec.hashes[-1], rec.fact_ids, str(e)[:200])
 
 
 def _make_ctx(
@@ -1421,7 +1496,26 @@ async def _await_fate(
         await _sleep(_poll_delay(_now() - start))
 
 
-async def _submit_userop(
+async def _submit_userop(**kw) -> str:
+    """:func:`_submit_userop_once`, then a re-send (once) of every earlier write
+    of this account that the gate proved replaced or dropped (#646/#650)."""
+    lost: list = []
+    base = {k: kw[k] for k in (
+        "sender", "eoa_address", "eoa_private_key", "relay_url", "auth_key_hex",
+        "wallet_address", "chain_id", "client_id", "session_id", "data_edge_address", "profile",
+    )}
+    try:
+        result = await _submit_userop_once(**kw, lost_sink=lost, resends=0)
+    except Exception:
+        if lost:
+            await _resend_lost(lost, base)
+        raise
+    if lost:
+        await _resend_lost(lost, base)
+    return result
+
+
+async def _submit_userop_once(
     *,
     kind: str,
     sender: str,
@@ -1440,6 +1534,8 @@ async def _submit_userop(
     deadline_s: Optional[float],
     fact_ids: Optional[list[str]],
     on_lost: Optional[Callable[[list[str]], Any]],
+    lost_sink: Optional[list] = None,
+    resends: int = 0,
 ) -> str:
     """Shared writer behind :func:`build_and_send_userop` (``kind="single"``)
     and :func:`build_and_send_userop_batch` (``kind="batch"``)."""
@@ -1464,7 +1560,7 @@ async def _submit_userop(
                 sponsor_fail = "Paymaster sponsorship failed: "
                 send_fail = "UserOp submission failed: "
 
-            await _settle_pending(http, ctx, deadline)
+            await _settle_pending(http, ctx, deadline, lost_sink)
 
             in_flight: list[_Attempt] = []
             pinned: Optional[int] = None
@@ -1659,7 +1755,8 @@ async def _submit_userop(
                     and not ambiguous_send
                     and local_hash is not None
                 ):
-                    _park(sender, in_flight, facts, on_lost)
+                    _park(sender, in_flight, facts, on_lost, payloads=payloads,
+                          kind=kind, resend_ok=True, resends=resends)
                     return local_hash
 
                 try:
@@ -1704,7 +1801,8 @@ async def _submit_userop(
                     continue
                 # timeout: fate still unknown at the deadline
                 if kind == "single":
-                    _park(sender, in_flight, facts, on_lost)
+                    _park(sender, in_flight, facts, on_lost, payloads=payloads,
+                          kind=kind, resend_ok=True, resends=resends)
                     logger.warning(
                         "write %s not yet confirmed at the deadline; it stays tracked as pending",
                         in_flight[-1].hash,

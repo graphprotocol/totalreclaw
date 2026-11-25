@@ -179,8 +179,9 @@ async def test_u6_dropped_predecessor_fresh_account_reattaches_factory(monkeypat
     assert lost == [["a"]]
     assert w.ops[h].factory is True and w.ops[h].nonce == 0
     assert any(r.levelno == logging.ERROR and "dropped" in r.getMessage() for r in caplog.records)
-    assert w.chain_nonce(S) == 1
-    assert w.executed_payloads == [b"u6-b"]
+    assert w.chain_nonce(S) == 2
+    # a was proven dropped (bundler status "rejected", nonce unused): it is sent again, once
+    assert sorted(w.executed_payloads) == [b"u6-a", b"u6-b"]
 
 
 @pytest.mark.asyncio
@@ -749,12 +750,13 @@ async def test_u17_quota_invariant_in_every_ledger_mode(monkeypatch, mode):
     await many([b"u17-b1", b"u17-b2", b"u17-b3"])
     settle(w)
     w.assert_invariants()
+    # the dropped write is proven dropped and sent again: it costs a second debit
     if mode == "today":
-        assert w.quota_used == 6        # revert + drop debits are kept
+        assert w.quota_used == 7        # revert + the dropped op's debit are kept
     elif mode == "pr87":
-        assert w.quota_used == 5        # revert refunded
+        assert w.quota_used == 6        # revert refunded
     else:
-        assert w.quota_used == 4        # revert and drop refunded
+        assert w.quota_used == 5        # revert and drop refunded
 
 
 @pytest.mark.asyncio
@@ -858,3 +860,19 @@ async def test_cancel_while_waiting_for_own_fate_tracks_the_op(monkeypatch):
     assert len(recs) == 1 and recs[0].fact_ids == ["a"]
     lock = await userop._get_sender_lock(S)
     assert not lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_resend_needs_proof_a_lagging_status_index_is_not_proof(monkeypatch):
+    """The bundler's status index says not_found for an op that is alive. That is
+    not proof: the write is NOT sent again (it would execute twice)."""
+    w = make(monkeypatch)
+    deploy(w)
+    await one(b"lag-a", fact_ids=["a"])
+    w.status_lies = {"*": 2}        # two passes of "not_found" while the op is alive
+    w.bundle_delay = 1000           # ... and still unmined at the gate
+    with pytest.raises(RuntimeError):      # b collides with the live op at its nonce: bounded failure
+        await one(b"lag-b", fact_ids=["b"])
+    settle(w, 3000)
+    assert w.executed_payloads.count(b"lag-a") <= 1
+    w.assert_invariants()
