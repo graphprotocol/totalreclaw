@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Batch writes no longer store a fact with an on-chain decayScore below 0.3 (#789, interim).** The subgraph marks any fact under 0.3 inactive, so a batch-written fact with importance 2 (or a legacy 0.2 float) was invisible to every client. `store_fact_batch` (remember_batch, auto-extraction, import, recrystallize) now floors live facts at 0.3 (`ACTIVE_DECAY_THRESHOLD`); tombstones still write 0, and `store_fact` is unchanged. The canonical-scale decision is separate. Tests: `tests/test_decay_floor_789.py`.
+
 - **A Session Crystal with importance 10 is stored as 10 again, not 1 (regression from #807).** The Crystal producer sends `importance / 10.0`, so 10 arrived as the float `1.0`, which `normalize_importance` read as 1 on the 1-10 scale. Floats in `(0, 1]` are now the legacy 0-1 scale (1.0 -> 10, 0.8 -> 8); ints stay 1-10 by type (`1` is still 1, #704). The on-chain decayScore was never affected. Tests: `tests/test_importance_scale.py`.
 
 - **`import_*` and `remember` now honour the 1-10 importance scale (internal#704).** `remember(importance=1)` and every import-progress note (default 0.7) were stored at importance 10, because values `<= 1` were read as the 0-1 scale and multiplied by 10. `normalize_importance` now decides by type (int = 1-10, float strictly in (0, 1) = legacy 0-1, other floats = 1-10); internal producers pass the int, and pending entries queued by older versions are decoded at the drain. `decayScore` is unchanged on purpose. Tests no longer touch the real `~/.totalreclaw/credentials.json` (an autouse fixture points `HOME` at a temp dir).

@@ -247,6 +247,30 @@ class ForgetResult(dict):
         return bool(self.get("success", False))
 
 
+#: Subgraph active threshold: a fact whose on-chain ``decayScore`` is below this
+#: is marked inactive and disappears from every client (``subgraph/src/mapping.ts``
+#: ``INACTIVE_THRESHOLD``). Live-fact writes are floored here (#789, interim).
+#: NEVER apply to tombstones: decay 0 is how forget/supersede delete a fact.
+ACTIVE_DECAY_THRESHOLD = 0.3
+
+
+def live_batch_decay_score(importance_raw) -> float:
+    """On-chain decayScore for a LIVE fact written by the batch path (#789).
+
+    Same scale rule as before (``<= 1`` is taken as-is, otherwise ``/ 10``),
+    floored at :data:`ACTIVE_DECAY_THRESHOLD` so the fact stays visible.
+    Non-numeric / non-finite input falls back to 5 (0.5).
+    """
+    if (
+        isinstance(importance_raw, bool)
+        or not isinstance(importance_raw, (int, float))
+        or not math.isfinite(importance_raw)
+    ):
+        importance_raw = 5
+    value = importance_raw if importance_raw <= 1 else importance_raw / 10.0
+    return max(value, ACTIVE_DECAY_THRESHOLD)
+
+
 def normalize_importance(value) -> int:
     """Normalise an importance value to the canonical 1-10 integer.
 
@@ -811,7 +835,7 @@ async def store_fact_batch(
             owner=owner,
             encrypted_blob=encrypted_hex,
             blind_indices=all_indices,
-            decay_score=importance_raw if importance_raw <= 1 else importance_raw / 10.0,
+            decay_score=live_batch_decay_score(importance_raw),  # floored, #789
             source=source,
             content_fp=content_fp,
             agent_id=agent_id,
