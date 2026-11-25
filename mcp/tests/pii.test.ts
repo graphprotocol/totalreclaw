@@ -156,6 +156,48 @@ describe('ConfirmationStore', () => {
   });
 });
 
+describe('ConfirmationStore value binding (#718)', () => {
+  const CARD_B = 'my other card is 5500 0000 0000 0004';
+
+  test('same value accepted (whitespace/case-insensitive); different value rejected; reuse rejected', () => {
+    let t = 1_000_000;
+    const store = new pii.ConfirmationStore(() => t);
+    const token = store.issue('payment_card', CARD_TEXT);
+    t += pii.CONFIRM_TOKEN_MIN_AGE_MS;
+    expect(store.redeem(token, 'payment_card', CARD_B)).toBe('value_mismatch');
+    expect(store.redeem(token, 'payment_card', undefined)).toBe('value_mismatch');
+    // A rejected attempt does not consume the token.
+    expect(store.redeem(token, 'payment_card', `  ${CARD_TEXT.toUpperCase()}  `)).toBeNull();
+    expect(store.redeem(token, 'payment_card', CARD_TEXT)).toBe('unknown_token');
+  });
+
+  test('expiry and minimum age are unchanged', () => {
+    let t = 0;
+    const store = new pii.ConfirmationStore(() => t);
+    const token = store.issue('payment_card', CARD_TEXT);
+    expect(store.redeem(token, 'payment_card', CARD_TEXT)).toBe('too_soon');
+    t += pii.CONFIRM_TOKEN_TTL_MS;
+    expect(store.redeem(token, 'payment_card', CARD_TEXT)).toBe('expired');
+  });
+
+  test('store never holds the plaintext value', () => {
+    const store = new pii.ConfirmationStore(() => 0);
+    store.issue('payment_card', CARD_TEXT);
+    expect(JSON.stringify([...((store as any).tokens as Map<string, unknown>).values()])).not.toContain('4111');
+  });
+
+  test('screenExplicit: a retry with a different card gets a fresh block notice', () => {
+    let t = 1_000_000;
+    const store = new pii.ConfirmationStore(() => t);
+    const first = pii.screenExplicit(CARD_TEXT, false, undefined, store);
+    t += pii.CONFIRM_TOKEN_MIN_AGE_MS;
+    const retry = pii.screenExplicit(CARD_B, true, first.notice!.confirm_token, store);
+    expect(retry.notice?.blocked).toBe('sensitive');
+    expect(retry.notice?.confirm_token).not.toBe(first.notice!.confirm_token);
+    expect(pii.screenExplicit(CARD_TEXT, true, first.notice!.confirm_token, store).notice).toBeNull();
+  });
+});
+
 describe('handleRemember (self-hosted) block-and-tell', () => {
   test('a credential is blocked with the approved message and a token; nothing stored', async () => {
     const out = parse(await handleRemember(ctx, { fact: CARD_TEXT }));

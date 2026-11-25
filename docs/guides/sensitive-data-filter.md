@@ -32,10 +32,11 @@ The messages are the same on every client:
 
 > Not saved: this looks like it contains a payment card number. TotalReclaw doesn't store financial identifiers unless you confirm you want it saved.
 
-To store it anyway, tell the agent you really want it saved. The agent then repeats the call with `allow_sensitive: true`. Your vault is end-to-end encrypted, so this is your call to make. The filter exists so nothing lands there by accident.
+To store it anyway, tell the agent you really want it saved. The agent then repeats the call with `allow_sensitive: true`, with the exact same text. Your vault is end-to-end encrypted, so this is your call to make. The filter exists so nothing lands there by accident.
 
 ## For integrators
 
+- A `confirm_token` authorizes exactly the normalized text it was issued for (NFKC, case-folded, whitespace-collapsed; MCP uses `toLowerCase()`, slightly weaker than Python `casefold()` on exotic input) and, where the client has conversation ids, the issuing conversation (MCP: value only). Any other value or conversation re-blocks with a fresh token.
 - Core function: `pii_filter(text)` in `totalreclaw-core`. WASM `piiFilter`, PyO3 `pii_filter`. Both return `{"decision":"allow"}` or `{"decision":"block"|"flag","category":"…","message":"…"}`.
 - Blocked explicit remember result (Hermes): `{"stored": false, "blocked": "sensitive", "category": "…", "message": "…", "override": "allow_sensitive"}`.
 - Contract: [client-consistency spec](../specs/totalreclaw/client-consistency.md#sensitive-data-pii--credential-filter). Test corpus: `tests/parity/pii/corpus.json`.

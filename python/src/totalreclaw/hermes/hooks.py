@@ -1301,7 +1301,7 @@ def ingest_turn(
     _maybe_crystallize_idle_active(state)
     # Always track turns and messages (client may be configured mid-session).
     state.increment_turn()
-    _pii_note_turn_completed()  # S35: sensitive-write confirmation needs a later turn
+    _pii_note_turn_completed(session_id or None)  # S35: sensitive-write confirmation needs a later turn
     state.add_message("user", user_message)
     state.add_message("assistant", assistant_response)
     # 2.4.4rc2 (F7) — pending-extract buffer so later manual

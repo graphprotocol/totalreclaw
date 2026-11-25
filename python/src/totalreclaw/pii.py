@@ -26,11 +26,14 @@ user asked for it).
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import secrets
 import threading
 import time
+import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional, TypeVar
@@ -109,35 +112,75 @@ CONFIRM_NEXT_STEP = (
 )
 
 
+def _normalize_value(text: str) -> str:
+    """Normalize ``text`` for value binding: NFKC, casefold, collapsed whitespace."""
+    return " ".join(unicodedata.normalize("NFKC", str(text)).casefold().split())
+
+
+#: Cap on per-conversation turn counters kept (oldest dropped first).
+_MAX_TRACKED_CONVERSATIONS = 256
+
+
 class ConfirmationStore:
     """Process-wide store of single-use confirmation tokens for sensitive writes.
 
-    A token is issued with a block and records the category and the completed
-    turn count at issue time. :meth:`redeem` accepts it only if it is known,
-    unexpired, the category matches, and at least one turn completed since
+    A token is issued with a block and records the category, a keyed hash of
+    the normalized text it was issued for, the conversation id (when the host
+    gave one) and the completed turn count at issue time. :meth:`redeem`
+    accepts it only if it is known, unexpired, the category and the value hash
+    match, the conversation matches, and at least one turn completed since
     issue (:meth:`note_turn_completed`), so the user had a chance to answer.
-    The clock is injectable for tests.
+
+    The plaintext value is never stored: only an HMAC-SHA256 under a random
+    per-process salt. When a conversation id is known, the turn counter that
+    must advance is that conversation's own, so another chat finishing a turn
+    cannot release this chat's token. Without an id the process-wide counter
+    is used. The clock is injectable for tests.
     """
 
     def __init__(self, clock=time.time) -> None:
         self._clock = clock
-        self._tokens: "OrderedDict[str, tuple[str, float, int]]" = OrderedDict()
+        # token -> (category, issued_at, issued_global_turn, issued_conv_turn,
+        #           value_hash, conversation_id)
+        self._tokens: "OrderedDict[str, tuple[str, float, int, int, bytes, Optional[str]]]" = OrderedDict()
         self._turns = 0
+        self._conv_turns: "OrderedDict[str, int]" = OrderedDict()
+        self._salt = secrets.token_bytes(32)
         self._lock = threading.Lock()
+
+    def _hash(self, text: Optional[str]) -> bytes:
+        return hmac.new(self._salt, _normalize_value(text or "").encode("utf-8"), hashlib.sha256).digest()
 
     @property
     def turn_seq(self) -> int:
         with self._lock:
             return self._turns
 
-    def note_turn_completed(self) -> None:
+    def note_turn_completed(self, conversation_id: Optional[str] = None) -> None:
         with self._lock:
             self._turns += 1
+            if conversation_id:
+                self._conv_turns[conversation_id] = self._conv_turns.pop(conversation_id, 0) + 1
+                while len(self._conv_turns) > _MAX_TRACKED_CONVERSATIONS:
+                    self._conv_turns.popitem(last=False)
 
-    def issue(self, category: Optional[str]) -> str:
+    def issue(
+        self,
+        category: Optional[str],
+        text: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+    ) -> str:
         with self._lock:
             token = secrets.token_hex(8)
-            self._tokens[token] = (str(category), self._clock(), self._turns)
+            conv = conversation_id or None
+            self._tokens[token] = (
+                str(category),
+                self._clock(),
+                self._turns,
+                self._conv_turns.get(conv, 0) if conv else 0,
+                self._hash(text),
+                conv,
+            )
             while len(self._tokens) > CONFIRM_TOKEN_MAX_LIVE:
                 self._tokens.popitem(last=False)
             return token
@@ -146,6 +189,8 @@ class ConfirmationStore:
         self,
         token: Optional[str],
         category: Optional[str],
+        text: Optional[str] = None,
+        conversation_id: Optional[str] = None,
         now: Optional[float] = None,
         turn_seq: Optional[int] = None,
     ) -> Optional[str]:
@@ -156,16 +201,34 @@ class ConfirmationStore:
             entry = self._tokens.get(token)
             if entry is None:
                 return "unknown_token"
-            tok_category, issued_at, issued_turn = entry
+            tok_category, issued_at, issued_turn, issued_conv_turn, tok_hash, tok_conv = entry
             now = self._clock() if now is None else now
-            turn_seq = self._turns if turn_seq is None else turn_seq
+            conv = conversation_id or None
             if now - issued_at >= CONFIRM_TOKEN_TTL_SECONDS:
                 del self._tokens[token]
                 return "expired"
-            if turn_seq <= issued_turn:
+            # A token issued for a conversation is redeemable only there; one
+            # issued without an id is redeemable with or without one.
+            if tok_conv is not None and tok_conv != conv:
+                return "conversation_mismatch"
+            # Per-conversation counter only if ingest_turn has recorded a turn
+            # for this conversation id in this process and it was not reset; otherwise the
+            # process-wide counter (the host may not pass the same id to tools
+            # and to ingest_turn).
+            if tok_conv is not None and self._conv_turns.get(tok_conv, -1) >= issued_conv_turn:
+                # (a reset or evicted counter reads below the issue-time value)
+                counter, issued, used = self._conv_turns[tok_conv], issued_conv_turn, "conversation"
+            else:
+                counter, issued, used = self._turns, issued_turn, "global"
+            if turn_seq is not None:
+                counter = turn_seq
+            logger.debug("confirmation turn check used the %s counter", used)
+            if counter <= issued:
                 return "same_turn"
             if tok_category != str(category):
                 return "category_mismatch"
+            if not hmac.compare_digest(tok_hash, self._hash(text)):
+                return "value_mismatch"
             del self._tokens[token]
             return None
 
@@ -174,9 +237,9 @@ class ConfirmationStore:
 confirmations = ConfirmationStore()
 
 
-def note_turn_completed() -> None:
+def note_turn_completed(conversation_id: Optional[str] = None) -> None:
     """Record a completed conversation turn (called from the per-turn sync)."""
-    confirmations.note_turn_completed()
+    confirmations.note_turn_completed(conversation_id)
 
 
 def block_notice(result: PiiResult, confirm_token: Optional[str] = None) -> dict:
@@ -209,7 +272,10 @@ def log_label(text: str, result: PiiResult, limit: int = 200) -> str:
 
 
 def screen_explicit(
-    text: str, allow_sensitive: bool, confirm_token: Optional[str] = None
+    text: str,
+    allow_sensitive: bool,
+    confirm_token: Optional[str] = None,
+    conversation_id: Optional[str] = None,
 ) -> tuple[PiiResult, Optional[dict]]:
     """Gate for an explicit remember.
 
@@ -222,7 +288,9 @@ def screen_explicit(
     if result.decision == "block":
         try:
             if allow_sensitive:
-                reason = confirmations.redeem(confirm_token, result.category)
+                reason = confirmations.redeem(
+                    confirm_token, result.category, text, conversation_id
+                )
                 if reason is None:
                     logger.info(
                         "remember storing sensitive text on explicit request (decision=%s category=%s)",
@@ -238,11 +306,11 @@ def screen_explicit(
                 )
             else:
                 logger.info("remember blocked: sensitive text (category=%s)", result.category)
-            return result, block_notice(result, confirmations.issue(result.category))
+            return result, block_notice(result, confirmations.issue(result.category, text, conversation_id))
         except Exception as exc:  # noqa: BLE001 — fail closed: never store, never raise
             logger.warning("remember blocked: confirmation store error (%s)", type(exc).__name__)
             try:
-                return result, block_notice(result, confirmations.issue(result.category))
+                return result, block_notice(result, confirmations.issue(result.category, text, conversation_id))
             except Exception:  # noqa: BLE001
                 return result, block_notice(result)
     if not result.is_allow:
