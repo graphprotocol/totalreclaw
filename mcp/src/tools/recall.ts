@@ -5,6 +5,7 @@ import { readBlobUnified } from '../claims-helper.js';
 import { DEFAULT_RECALL_TOP_K, getRecallTopK } from '../recall-top-k.js';
 import { buildRecallResponse } from '../recall-format.js';
 import type { ToolResponse } from './types.js';
+import { createRecallTimer } from '../recall-timing.js';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 let _wasm: typeof import('@totalreclaw/core') | null = null;
@@ -77,8 +78,12 @@ export async function handleRecall(
   const client = ctx.client as TotalReclaw;
   const input = args as RecallInput;
   const startTime = Date.now();
+  const timer = createRecallTimer('self-hosted');
+  let timerK: number = DEFAULT_RECALL_TOP_K;
+  let timerCandidates = 0;
 
   if (!input.query || typeof input.query !== 'string' || input.query.trim().length === 0) {
+    timer.emit({ candidates: 0, k: timerK, outcome: 'invalid' });
     return {
       content: [{
         type: 'text',
@@ -97,7 +102,12 @@ export async function handleRecall(
     if (k < 1) k = defaultK;
     if (k > 50) k = 50;
 
+    timerK = k;
+    // client.recall bundles embedding, search, decrypt and rerank; the client
+    // library does not expose those stages, so they are one stage here.
     const results = await client.recall(input.query.trim(), k);
+    timer.mark('client_recall');
+    timerCandidates = results.length;
 
     let filtered = results;
     if (input.min_importance !== undefined) {
@@ -155,6 +165,9 @@ export async function handleRecall(
       };
     });
 
+    timer.mark('format');
+    timer.emit({ candidates: timerCandidates, k });
+
     const result: RecallOutput = {
       memories,
       latency_ms: Date.now() - startTime,
@@ -169,6 +182,7 @@ export async function handleRecall(
       })),
     );
   } catch (error) {
+    timer.emit({ candidates: timerCandidates, k: timerK, outcome: 'error' });
     const message = error instanceof Error ? error.message : 'Unknown error occurred';
     return {
       content: [{
