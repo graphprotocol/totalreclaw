@@ -152,3 +152,14 @@ async def test_client_get_fact_pin_status_delegates(monkeypatch) -> None:
     monkeypatch.setattr(client_mod, "get_fact_pin_status", spy)
     assert await c.get_fact_pin_status("f1") is True
     spy.assert_awaited_once_with(fact_id="f1", keys=c._keys, owner="0xabc", relay=c._relay)
+
+
+async def test_foreign_owner_raises() -> None:
+    relay = _Relay(_fact(_hex(V1_PINNED)))  # fact owner is 0xabc
+    with pytest.raises(RuntimeError):
+        await operations.get_fact_pin_status(FACT_ID, _keys(), "0xDEF", relay)
+
+
+async def test_owner_compare_is_case_insensitive() -> None:
+    relay = _Relay(_fact(_hex(V1_PINNED)))
+    assert await operations.get_fact_pin_status(FACT_ID, _keys(), "0xABC", relay) is True
