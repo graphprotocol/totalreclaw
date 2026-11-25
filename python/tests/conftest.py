@@ -212,3 +212,12 @@ def _pin_embedder_unavailable(monkeypatch):
 
     monkeypatch.setattr(_recall, "_embed_inflight", None)
     monkeypatch.setattr(_recall, "_warmup_started", False)
+
+
+@pytest.fixture(autouse=True)
+def _reset_hermes_turn_dedup():
+    """The per-turn dedup guard (internal#720) is process-global; tests reuse turn text."""
+    from totalreclaw.hermes import hooks
+
+    hooks._recent_turns.clear()
+    yield

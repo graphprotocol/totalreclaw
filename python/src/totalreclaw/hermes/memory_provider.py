@@ -62,9 +62,11 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import os
 import queue
 import threading
 import time
+import uuid
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -395,6 +397,13 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
             state = get_shared_state()
         self._state = state
         self._session_id: Optional[str] = None
+        # Short random id so QA can tell provider instances apart in the log
+        # (internal#720). Not derived from any key material.
+        self._instance_id = uuid.uuid4().hex[:8]
+        logger.info(
+            "TotalReclaw MemoryProvider instance created (instance=%s, pid=%d)",
+            self._instance_id, os.getpid(),
+        )
 
     # ------------------------------------------------------------------
     # Core lifecycle (abstract)
@@ -439,6 +448,10 @@ class TotalReclawMemoryProvider(_MemoryProviderBase):  # type: ignore[misc,valid
         calls ``on_session_start`` itself — doing so would double it.
         """
         self._session_id = session_id
+        logger.info(
+            "TotalReclaw MemoryProvider initialize (instance=%s, session=%s)",
+            self._instance_id, (session_id or "-")[:12],
+        )
         # Mark this process as provider-driven so the lifecycle hooks defer
         # recall/extract to us. getattr-default-False elsewhere keeps dormant
         # installs (provider never initialized) on the legacy hook path.

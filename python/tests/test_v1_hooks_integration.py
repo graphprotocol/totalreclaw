@@ -94,8 +94,8 @@ def test_post_llm_call_forwards_v1_fields_to_remember_batch() -> None:
                     return_value=False,
                 ):
                     # Trigger extraction by calling post_llm_call enough times.
-                    for _ in range(DEFAULT_EXTRACTION_INTERVAL):
-                        post_llm_call(state, user_message="u", assistant_response="a")
+                    for i in range(DEFAULT_EXTRACTION_INTERVAL):
+                        post_llm_call(state, user_message=f"u{i}", assistant_response="a")
 
     # As of v2.2.1 auto_extract uses remember_batch (not remember per-fact).
     assert fake_client.remember_batch.called, "client.remember_batch should have been called"

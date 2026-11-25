@@ -8,7 +8,10 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import hashlib
 import os
+import threading
+import time
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -1230,6 +1233,39 @@ def _maybe_crystallize_idle_active(state: "PluginState") -> None:
         logger.warning("TotalReclaw idle-conversation crystallize failed: %s", e)
 
 
+# Per-turn dedup guard (internal#720). Hermes can drive ``sync_turn`` for the
+# same completed turn more than once in one process (two MemoryManager /
+# provider instances sharing this process's PluginState; QA saw two extraction
+# runs ~0.4 s apart on ~10% of turns). Each run would double-count the turn and
+# extract the same unprocessed messages twice. The key is (session id, content
+# hash of the turn); a repeat inside the window is dropped.
+# Accepted trade-off: an identical user+assistant pair repeated in one session
+# within the window is treated as one turn.
+_TURN_DEDUP_WINDOW_S = 30.0
+_turn_dedup_lock = threading.Lock()
+_recent_turns: dict = {}
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def _is_duplicate_turn(session_id: str, user_message: str, assistant_response: str) -> bool:
+    """True when this exact (session, turn) was already ingested moments ago."""
+    digest = hashlib.sha256(
+        f"{user_message}\x00{assistant_response}".encode("utf-8", "replace")
+    ).hexdigest()
+    now = _now()
+    with _turn_dedup_lock:
+        for key in [k for k, (_, t) in _recent_turns.items() if now - t > _TURN_DEDUP_WINDOW_S]:
+            del _recent_turns[key]
+        prior = _recent_turns.get(session_id or "")
+        if prior is not None and prior[0] == digest:
+            return True
+        _recent_turns[session_id or ""] = (digest, now)
+    return False
+
+
 def ingest_turn(
     state: "PluginState",
     user_message: str,
@@ -1249,6 +1285,13 @@ def ingest_turn(
     one mixed Crystal. When absent (or a host that hands one coarse id to the
     whole chat) the behavior is byte-identical to the prior single buffer.
     """
+    if _is_duplicate_turn(session_id, user_message, assistant_response):
+        logger.info(
+            "TotalReclaw ingest_turn: duplicate delivery of the same turn within %ds "
+            "- skipped (possible second driver)",
+            int(_TURN_DEDUP_WINDOW_S),
+        )
+        return
     # Route this turn to its conversation's slot BEFORE any bookkeeping, so the
     # turn counter + message buffer + session id all belong to the right chat.
     if session_id and hasattr(state, "activate_conversation"):

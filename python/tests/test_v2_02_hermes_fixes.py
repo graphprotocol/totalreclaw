@@ -238,8 +238,8 @@ class TestBug5VisibleLLMError:
             ):
                 # Call enough times to hit the extraction interval.
                 from totalreclaw.hermes.state import DEFAULT_EXTRACTION_INTERVAL
-                for _ in range(DEFAULT_EXTRACTION_INTERVAL):
-                    post_llm_call(state, user_message="u", assistant_response="a")
+                for i in range(DEFAULT_EXTRACTION_INTERVAL):
+                    post_llm_call(state, user_message=f"u{i}", assistant_response="a")
 
         # A quota_warning should now be queued and mention LLM.
         warning = state.get_quota_warning()
@@ -266,8 +266,8 @@ class TestBug5VisibleLLMError:
             ):
                 from totalreclaw.hermes.state import DEFAULT_EXTRACTION_INTERVAL
                 # Trigger twice.
-                for _ in range(DEFAULT_EXTRACTION_INTERVAL * 2):
-                    post_llm_call(state, user_message="u", assistant_response="a")
+                for i in range(DEFAULT_EXTRACTION_INTERVAL * 2):
+                    post_llm_call(state, user_message=f"u{i}", assistant_response="a")
 
         # First consume clears the warning; second cycle shouldn't re-set it.
         w1 = state.get_quota_warning()
