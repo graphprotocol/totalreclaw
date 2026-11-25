@@ -164,6 +164,8 @@ class TestBundlerClassification:
                 return rpc(body, "0x" + "0" * 64)
             if method == "eth_getCode":
                 return rpc(body, "0x01")
+            if method == "eth_blockNumber":
+                return rpc(body, "0x3e8")
             if method == "pimlico_getUserOperationGasPrice":
                 return rpc(body, {"fast": {"maxFeePerGas": "0x77359400", "maxPriorityFeePerGas": "0x59682f00"}})
             if method == "pm_sponsorUserOperation":

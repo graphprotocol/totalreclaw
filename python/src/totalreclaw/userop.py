@@ -25,9 +25,13 @@ Key addresses (deployed on all supported chains):
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
-from typing import TYPE_CHECKING, Optional
+import random
+import time
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional
 
 import httpx
 from eth_hash.auto import keccak
@@ -39,7 +43,11 @@ from .grant import (
     encode_install_signature,
     sign_digest,
 )
-from .relay import _client_header_value, raise_for_bundler_status
+from .relay import (
+    RelayWriteQuotaExceeded,
+    _client_header_value,
+    raise_for_bundler_status,
+)
 
 if TYPE_CHECKING:
     from .relay import RelayClient
@@ -54,18 +62,124 @@ ENTRYPOINT_V07 = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 SIMPLE_ACCOUNT_FACTORY = "0x91E60e0613810449d098b0b5Ec8b51A0FE8c8985"
 
 # ---------------------------------------------------------------------------
+# Test seams (internal #646 / #650)
+# ---------------------------------------------------------------------------
+#
+# Every wait and deadline in this module goes through ``_now`` / ``_sleep`` /
+# ``_rand`` so the unit tests can drive a virtual clock instead of sleeping.
+# Production behaviour is unchanged: they are the real monotonic clock,
+# ``asyncio.sleep`` and ``random.random``.
+_now = time.monotonic
+_sleep = asyncio.sleep
+_rand = random.random
+
+
+# ---------------------------------------------------------------------------
+# Timing constants (module-level so tests can override them)
+# ---------------------------------------------------------------------------
+
+#: Poll cadence while waiting for a predecessor / our own op (plus jitter).
+GATE_POLL_S: float = 1.5
+#: After this long the poll cadence widens (a slow bundler is not hammered).
+GATE_SLOW_POLL_AFTER_S: float = 20.0
+GATE_SLOW_POLL_S: float = 5.0
+#: Back-off when Pimlico's simulator looks one block behind the public RPC.
+SIM_LAG_BACKOFF_S: tuple[float, ...] = (1.0, 2.0)
+#: Give up on an unreadable public RPC after this long (fail fast, nothing sent).
+RPC_DOWN_FAIL_FAST_S: float = 10.0
+#: Two chain reads at least this far apart must both sit below the nonce floor
+#: before the floor is reset to chain truth (reorg recovery).
+REORG_CONFIRM_GAP_S: float = 10.0
+#: An accepted-but-unresolved op older than this stops blocking the account.
+PENDING_MAX_AGE_S: float = 600.0
+#: Sends of one logical write (fee-bumped re-sends after a ``gone`` verdict
+#: included). Unchanged from the old retry budget.
+_MAX_NONCE_RETRIES: int = 3
+#: Builds of one logical write, counting retries that never reached the
+#: bundler (sponsor-stage back-offs).
+_MAX_BUILD_ATTEMPTS: int = 6
+#: Bound for a wait on someone else's op (foreign nonce holder / deployment).
+FOREIGN_WAIT_S: float = 15.0
+
+#: Deadline profiles. ``gate`` is the predecessor-gate window, measured from
+#: the predecessor's ``accepted_at``. ``total`` is the budget of one call,
+#: measured from call entry (lock wait included). ``batch_total`` is the
+#: overall cap for a batch, which also waits for its own receipt.
+PROFILES: dict[str, dict[str, float]] = {
+    "interactive": {"gate": 30.0, "total": 60.0, "batch_total": 60.0},
+    "background": {"gate": 90.0, "total": 150.0, "batch_total": 390.0},
+}
+
+
+# ---------------------------------------------------------------------------
+# Typed errors
+# ---------------------------------------------------------------------------
+
+
+class NothingSentError(RuntimeError):
+    """Base class: the call ended BEFORE anything reached the bundler.
+
+    Nothing was sent and nothing was debited, so the caller may simply try
+    again later. Callers that need to tell "nothing sent" from "maybe stored"
+    catch this class (and :class:`UserOpAmbiguousError`)."""
+
+
+class PredecessorPendingError(NothingSentError):
+    """An earlier accepted op of this account is still unresolved, so a new
+    write was not started. Nothing was sent."""
+
+
+class AccountBusyError(NothingSentError):
+    """The per-account lock was not free before the call's deadline. Nothing
+    was sent."""
+
+
+class WriteDeadlineError(NothingSentError):
+    """The call's deadline ran out before any send. Nothing was sent."""
+
+
+class UserOpDroppedError(RuntimeError):
+    """The bundler accepted a UserOp but dropped it: it never executed and
+    its nonce is unused (proven by two matching checks). Not stored."""
+
+
+class UserOpRevertedError(RuntimeError):
+    """A UserOp was mined but reverted (``receipt.success=false``). ERC-4337
+    consumes the nonce even then. The facts were not stored; a new op is
+    safe."""
+
+
+class UserOpAmbiguousError(RuntimeError):
+    """The write MAY be stored: an op was sent and its fate is not yet known.
+
+    Callers must treat the facts as "maybe stored": record them in the write
+    ledger and resolve the op hashes with :func:`resolve_fate` before any
+    retry. Carries ``fact_ids``, ``hashes``, ``nonce`` and ``sent_block``."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        fact_ids: Optional[list[str]] = None,
+        hashes: Optional[list[str]] = None,
+        nonce: Optional[int] = None,
+        sent_block: Optional[int] = None,
+    ) -> None:
+        super().__init__(message)
+        self.fact_ids: list[str] = list(fact_ids or [])
+        self.hashes: list[str] = list(hashes or [])
+        self.nonce = nonce
+        self.sent_block = sent_block
+
+
+# ---------------------------------------------------------------------------
 # Per-account submission mutex — 3.3.1-rc.3 AA25 serialization
 # ---------------------------------------------------------------------------
 #
 # Concurrent UserOp submissions for the SAME Smart Account used to race
-# at the nonce fetch:
-#   - Call A: get_nonce()=5, build UserOp, submit, await receipt.
-#   - Call B: get_nonce()=5 (A not mined yet), build UserOp, submit → AA25.
-#
-# The fix: serialize per-``sender`` with an ``asyncio.Lock`` so call B
-# does not even START its nonce fetch until call A has settled. Existing
-# AA25 retry with fresh nonce continues to catch relay-side zombie
-# UserOps. Per-sender dict lives in module scope; keys are lowercased
+# at the nonce fetch. The fix: serialize per-``sender`` with an
+# ``asyncio.Lock`` so call B does not even START its nonce fetch until call A
+# has settled. Per-sender dict lives in module scope; keys are lowercased
 # addresses. Entries are never removed (bounded by # unique accounts per
 # process, typically 1).
 _sender_submission_locks: dict[str, asyncio.Lock] = {}
@@ -93,85 +207,158 @@ def _reset_sender_locks_for_tests() -> None:
     _sender_submission_locks.clear()
 
 
+class _Deadline:
+    """Monotonic budget of one call. Starts at call entry, BEFORE the lock."""
+
+    def __init__(
+        self,
+        profile: str,
+        deadline_s: Optional[float],
+        *,
+        batch: bool,
+    ) -> None:
+        prof = PROFILES.get(profile) or PROFILES["background"]
+        self.profile = profile if profile in PROFILES else "background"
+        self.start = _now()
+        if deadline_s is not None:
+            total = float(deadline_s)
+            self.send_by = self.start + total
+            self.total = self.start + total
+            self.gate_window = min(prof["gate"], total)
+        else:
+            self.send_by = self.start + prof["total"]
+            self.total = self.start + (prof["batch_total"] if batch else prof["total"])
+            self.gate_window = prof["gate"]
+
+    def remaining(self) -> float:
+        return self.total - _now()
+
+    def send_remaining(self) -> float:
+        return self.send_by - _now()
+
+
+async def _acquire_sender_lock(lock: asyncio.Lock, deadline: _Deadline) -> None:
+    """Take the per-account lock, or raise :class:`AccountBusyError`."""
+    if not lock.locked():
+        await lock.acquire()
+        return
+    try:
+        await asyncio.wait_for(lock.acquire(), timeout=max(deadline.send_remaining(), 0.0))
+    except asyncio.TimeoutError:
+        raise AccountBusyError(
+            "Another write for this account is still running; nothing was "
+            "sent. Try again shortly."
+        ) from None
+
+
 # ---------------------------------------------------------------------------
-# Local monotonic nonce cache — F3 / internal #423
+# Per-account write state — internal #646 / #650
 # ---------------------------------------------------------------------------
 #
-# The EntryPoint nonce only advances at ON-CHAIN EXECUTION, but this client
-# returns as soon as the bundler accepts an op into its mempool. Sequential
-# submissions (import batches fire back-to-back) therefore re-fetched the
-# SAME nonce while the previous op was unmined -> AA25 -> blind 1+2+4s retry
-# lost the race against ~5s Gnosis blocks -> whole batches dropped (rc12 QA:
-# 15/44 facts stored = only the first batch landed).
+# The EntryPoint nonce only advances at ON-CHAIN EXECUTION, but a write used
+# to return as soon as the bundler ACCEPTED it. The next write then built at
+# a pipelined nonce (#423) that Pimlico's paymaster simulation rejects (AA25)
+# once the predecessor is bundled but not mined (#646), or left out the factory
+# because the deploy latch was set at accept time (AA20, #650).
 #
-# Fix: remember the next expected nonce per sender and submit with
-# max(chain_nonce, cached). Bundlers accept queued sequential-nonce ops from
-# one sender, so pipelining is preserved. The cache is process-local and
-# self-healing: max() with the chain nonce means external activity or a
-# restart can only correct it upward from reality; an AA25 resets it.
-# Reads/writes happen under the per-sender submission lock.
-_sender_next_nonce: dict[str, int] = {}
+# State is process-local and read/written only under the per-account lock:
+#   pending[sender]  records of accepted ops whose fate is unknown when a call
+#                    exits. The NEXT call resolves them BY HASH (the "gate").
+#   stale[sender]    records past PENDING_MAX_AGE_S; still resolved
+#                    opportunistically so a late "dead"/"gone" is reported.
+#   landed_floor     highest ``nonce + 1`` observed EXECUTED. A stale read of
+#                    the chain nonce can never lower the nonce below it.
+#   deployed latch   set only on chain evidence (see below).
 
 
-def _resolve_submission_nonce(sender: str, chain_nonce: int) -> int:
-    """Nonce to submit with: the chain nonce or our pipelined next, whichever is higher."""
-    return max(chain_nonce, _sender_next_nonce.get(sender.lower(), 0))
+@dataclass
+class _Attempt:
+    """One send of one logical write."""
+
+    hash: str
+    nonce: int
+    sent_block: int
+    carried_factory: bool
 
 
-def _record_submitted_nonce(sender: str, nonce: int) -> None:
-    """Record a bundler-accepted submission; never decreases."""
+@dataclass
+class _PendingRecord:
+    """An accepted op (or a write with several attempts) of unknown fate."""
+
+    hashes: list[str]
+    nonce: int
+    sent_block: int
+    carried_factory: bool
+    fact_ids: list[str]
+    accepted_at: float
+    on_lost: Optional[Callable[[list[str]], Any]] = None
+
+
+_pending: dict[str, list[_PendingRecord]] = {}
+_stale: dict[str, list[_PendingRecord]] = {}
+_landed_floor: dict[str, int] = {}
+
+
+def _floor_of(sender: str) -> int:
+    return _landed_floor.get(sender.lower(), 0)
+
+
+def _raise_floor(sender: str, value: int) -> None:
     key = sender.lower()
-    _sender_next_nonce[key] = max(_sender_next_nonce.get(key, 0), nonce + 1)
+    _landed_floor[key] = max(_landed_floor.get(key, 0), value)
 
 
-def _reset_sender_nonce(sender: str) -> None:
-    """Drop the cached nonce (AA25 path) — fall back to chain truth."""
-    _sender_next_nonce.pop(sender.lower(), None)
+def _reset_floor_to(sender: str, value: int) -> None:
+    """Reorg recovery only: drop the floor to chain truth."""
+    _landed_floor[sender.lower()] = value
 
 
 def _reset_nonce_cache_for_tests() -> None:
-    """Clear the nonce cache. Test-only helper."""
-    _sender_next_nonce.clear()
+    """Clear nonce floor and pending/stale records. Test-only helper."""
+    _landed_floor.clear()
+    _pending.clear()
+    _stale.clear()
+
+
+def _reset_write_state_for_tests() -> None:
+    """Clear all per-account write state (floor, pending, stale, latch)."""
+    _reset_nonce_cache_for_tests()
+    _sender_deployed.clear()
+
+
+def pending_records(sender: str) -> list[_PendingRecord]:
+    """Snapshot of the unresolved records for ``sender`` (read-only)."""
+    key = sender.lower()
+    return list(_pending.get(key, [])) + list(_stale.get(key, []))
 
 
 # ---------------------------------------------------------------------------
-# Deployed-account cache — F3 / internal #435
+# Deployed-account latch — F3 / internal #435 (+ #650)
 # ---------------------------------------------------------------------------
 #
 # A Smart Account deploys exactly once (its first UserOp carries the factory /
-# initCode; every op after that must NOT). The old code re-derived "is
-# deployed" every submission from ``eth_getCode`` — but ``_eth_get_code``
-# silently read any RPC error as ``"0x"`` (= not deployed). Under import bursts
-# the public Gnosis RPC rate-limits, so a deployed account read as undeployed,
-# the factory was re-attached, and the paymaster reverted the whole batch with
-# ``-32500 "Sender does not implement validateUserOp or factory is not
-# deployed"`` — dropping every fact in it (rc13 QA: 52/78 lost).
+# initCode; every op after that must NOT). Public RPCs rate-limit under bursts
+# and ``_eth_get_code`` used to read any RPC error as "0x" (= not deployed), so
+# the factory was re-attached and the paymaster reverted the batch (#435). The
+# fix is a monotonic per-sender "deployed" latch.
 #
-# Fix: a monotonic per-sender "deployed" latch. Once we have ANY proof the
-# account executed on-chain (code present, chain_nonce > 0, a confirmed send,
-# or a sponsor-stage sender-state error), we never attach the factory again.
-# Keys are lowercased addresses; reads/writes happen under the per-sender
-# submission lock. Mirrors the OpenClaw plugin's PR #407 deploy-state cache.
+# #650: the latch is NO LONGER set when the bundler ACCEPTS a send. Accept is
+# not execution: a second write that left out the factory while the deploy op
+# was still unmined got AA20. The latch is now set only on chain evidence
+# (code present, chain nonce > 0, an op of ours that carried the factory
+# EXECUTED) and on the simulator-stage AA10 signal, where the simulator is the
+# authority (#435).
 _sender_deployed: set[str] = set()
 
 
 def _mark_sender_deployed(sender: str) -> None:
-    """Latch a sender as deployed (monotonic — never cleared in-process)."""
+    """Latch a sender as deployed."""
     _sender_deployed.add(sender.lower())
 
 
 def _clear_sender_deployed(sender: str) -> None:
-    """Un-latch a sender whose factory-carrying op was truly DROPPED (#431
-    review finding 2).
-
-    The latch is monotonic against ON-CHAIN evidence, but the batch path also
-    latches at bundler-ACCEPT time — the same accept-time trust that produced
-    the #431 nonce gap. If a fresh account's first (factory-carrying) op is
-    dropped, the account never deployed: keeping the stale latch would make
-    every resubmit omit the factory and fail all attempts. This is the single
-    sanctioned exception to "never cleared in-process", taken only after
-    re-reading the chain nonce proves the op did not mine.
-    """
+    """Un-latch a sender. Used when chain evidence shows the account has no
+    code (AA20 with an undeployed chain, reorged deploy)."""
     _sender_deployed.discard(sender.lower())
 
 
@@ -184,41 +371,87 @@ def _reset_deployed_cache_for_tests() -> None:
     _sender_deployed.clear()
 
 
+# ---------------------------------------------------------------------------
+# Error classification (Alto ``main`` strings, see plan section 4.4)
+# ---------------------------------------------------------------------------
+
+_MEMPOOL_AA10_MARKERS = (
+    "already being processed",
+    "already in the mempool",
+    "another deployment operation",
+    "conflicting useroperation with initcode",
+)
+
+
+def _is_mempool_aa10(err_str: str) -> bool:
+    """Alto's mempool-stage AA10 (a second deploy op for the sender is
+    queued). NOT a statement about chain state, so it must not latch."""
+    low = (err_str or "").lower()
+    return "AA10" in err_str and any(m in low for m in _MEMPOOL_AA10_MARKERS)
+
+
 def _is_sender_state_error(err_str: str) -> bool:
-    """True when a sponsor/bundler error indicates the account is ALREADY
-    deployed (so re-attaching the factory is the actual fault).
+    """True when the SIMULATOR says the account is ALREADY deployed (so
+    re-attaching the factory is the actual fault): the paymaster revert
+    "Sender does not implement validateUserOp or factory is not deployed"
+    (#435) or the EntryPoint ``AA10 sender already constructed``.
 
-    Matches ONLY the specific "account already exists" signals:
-      - the paymaster revert \"Sender does not implement validateUserOp or
-        factory is not deployed\" (the #435 root-cause message), and
-      - the EntryPoint ``AA10 sender already constructed`` code / phrasing.
-
-    Deliberately NOT keyed on the bare JSON-RPC code ``-32500``: many
-    UNRELATED failures share it (AA13 initCode-failed, AA21 prefund,
-    AA23 sig, AA31/AA33 paymaster, transient sim errors). Latching those as
-    "deployed" would strip the factory from a FRESH account's first op —
-    whose deploy DEPENDS on the factory — and permanently brick it in-process
-    (the cache is never cleared). AA13 in particular must retry WITH the
-    factory; see the transient-``-32500`` retry branch in the submit loops.
-    Checked only AFTER an ``AA25`` nonce-conflict has been ruled out."""
-    if not err_str:
+    Mempool-stage AA10 (Alto telling us another deploy op is queued) is NOT a
+    sender-state error: see :func:`_is_mempool_aa10`."""
+    if not err_str or _is_mempool_aa10(err_str):
         return False
     return (
-        "already constructed" in err_str          # AA10 / raw phrasing
+        "already constructed" in err_str
         or "AA10" in err_str
-        or "validateUserOp or factory" in err_str  # paymaster -32500 revert
+        or "validateUserOp or factory" in err_str
     )
+
+
+def _is_not_deployed_error(err_str: str) -> bool:
+    """EntryPoint AA20: the sender has no code and no factory was supplied."""
+    return bool(err_str) and (
+        "AA20" in err_str or "account not deployed" in err_str.lower()
+    )
+
+
+def _is_already_known(err_str: str) -> bool:
+    return "Already known" in (err_str or "")
 
 
 def _is_transient_sim_error(err_str: str) -> bool:
     """True for a ``-32500`` simulation error that is NOT a redeploy signal.
-
-    A ``-32500`` that :func:`_is_sender_state_error` did not claim (AA13
-    initCode-failed, AA21 prefund, transient sim reverts, …) is treated as
-    transient: rebuild and retry with the deploy state UNCHANGED — the
-    account is NOT latched deployed and a fresh account keeps its factory.
-    Callers must have already ruled out AA25 and the sender-state case."""
+    AA20 / AA25 / AA10 are handled by their own branches first."""
     return bool(err_str) and "-32500" in err_str
+
+
+def _is_shutdown_error(exc: BaseException) -> bool:
+    """The host interpreter is shutting down (the httpx/anyio thread pool
+    refuses new work). Nothing was sent; waits must stop at once instead of
+    polling an RPC that can no longer be reached."""
+    if type(exc).__name__ == "InterpreterShutdownError":
+        return True
+    return isinstance(exc, RuntimeError) and (
+        "cannot schedule new futures after interpreter shutdown" in str(exc)
+    )
+
+
+class _StageError(RuntimeError):
+    """A JSON-RPC rejection tagged with the stage that produced it. The
+    message text is exactly what the old code raised."""
+
+    def __init__(self, message: str, stage: str) -> None:
+        super().__init__(message)
+        self.stage = stage
+
+
+class _SendAmbiguous(RuntimeError):
+    """The send call itself failed WITHOUT a JSON-RPC answer (transport error,
+    timeout, HTTP error with no JSON-RPC body): the bundler may or may not
+    hold the op."""
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__(f"send outcome unknown: {type(cause).__name__}: {str(cause)[:200]}")
+        self.cause = cause
 
 
 async def _resolve_is_deployed(
@@ -227,14 +460,10 @@ async def _resolve_is_deployed(
     """Decide whether ``sender`` is already deployed for THIS submission.
 
     Resolution order (cheapest, most-authoritative first):
-      1. Deployed cache — once True, always True.
-      2. ``chain_nonce > 0`` — the account has executed ops ⇒ deployed.
-         Skips ``eth_getCode`` entirely (the burst-rate-limited call that
-         caused #435).
-      3. ``eth_getCode`` — non-empty bytecode ⇒ deployed. A hardened
-         ``_eth_get_code`` raises (rather than reading "0x") on an RPC
-         error, so a transient failure propagates into the retry loop
-         instead of being silently misread as undeployed.
+      1. Deployed latch (set only from chain evidence, see above).
+      2. ``chain_nonce > 0`` - the account has executed ops.
+      3. ``eth_getCode`` - non-empty bytecode. A hardened ``_eth_get_code``
+         raises on an RPC error instead of reading "0x".
     """
     key = sender.lower()
     if key in _sender_deployed:
@@ -249,32 +478,12 @@ async def _resolve_is_deployed(
     return False
 
 
-# ---------------------------------------------------------------------------
-# Batch receipt confirmation — F3 / internal #431
-# ---------------------------------------------------------------------------
-#
-# ``eth_sendUserOperation`` returns as soon as the bundler ACCEPTS the op into
-# its mempool — not when it mines. rc13 QA saw ``facts_stored=26`` while only
-# ~11 landed on-chain, because the batch path returned the hash at accept time
-# and a later on-chain revert (e.g. the #435 factory bug) silently dropped the
-# facts. For the BATCH path only, we now poll ``eth_getUserOperationReceipt``
-# and return the hash ONLY once a receipt reports success — so "stored" means
-# on-chain. The single-fact path keeps accept-time return (auto-extraction
-# latency matters more there and a single dropped fact re-extracts next turn).
-#
-# rc4 (internal#435): the instrumented staging repro showed >60s inclusion
-# latency for larger (sim-passing) ops on the staging bundler — a 60s wait
-# false-negatived batches that DID eventually mine. Lifted to 240s / 5s poll.
-_BATCH_RECEIPT_TIMEOUT_S: float = 240.0
-_BATCH_RECEIPT_POLL_S: float = 5.0
-
-
 def _receipt_success(result: dict) -> Optional[bool]:
     """Interpret a UserOperation receipt's ``success`` field.
 
     Returns True/False when the receipt states success, or None when the
-    receipt is absent / doesn't carry a decidable success flag (keep
-    polling). Tolerates both boolean and string ("true"/"false") shapes.
+    receipt is absent / doesn't carry a decidable success flag. Tolerates
+    both boolean and string ("true"/"false") shapes.
     """
     if not isinstance(result, dict):
         return None
@@ -290,96 +499,6 @@ def _receipt_success(result: dict) -> Optional[bool]:
     return None
 
 
-class UserOpDroppedError(RuntimeError):
-    """The bundler accepted a UserOp but it never confirmed on-chain.
-
-    Raised by :func:`_await_batch_receipt` when no successful receipt arrives
-    within the timeout — the op was dropped on bundler restart, mempool
-    eviction, or paymaster-window expiry. The on-chain nonce did NOT advance,
-    so any accept-time nonce-cache record (#423) now points past a GAP: later
-    writes would queue silently behind the missing nonce. The batch submit
-    loop resets the per-sender cache on this error (#431 self-heal) so the
-    next submission targets chain truth. Subclasses :class:`RuntimeError` so
-    pre-#431 callers that catch ``RuntimeError`` keep working.
-    """
-
-
-class UserOpRevertedError(RuntimeError):
-    """A UserOp was mined but reverted (``receipt.success=false``).
-
-    ERC-4337 consumes the nonce even when an op reverts, so the on-chain nonce
-    DID advance and the accept-time nonce-cache record is still correct —
-    callers must NOT reset it. The facts were not stored; the error surfaces
-    so the import engine counts the batch as failed. Subclasses
-    :class:`RuntimeError` for back-compat.
-    """
-
-
-class UserOpAmbiguousError(RuntimeError):
-    """A UserOp has no readable receipt but the sender nonce ADVANCED past
-    the submitted value (#431 review finding 1).
-
-    "No receipt in the window" is not proof an op didn't mine: a bundler
-    restart or receipt-indexing blackout can hide a MINED op for the whole
-    window. If the nonce moved past the one we submitted, the op almost
-    certainly mined (the per-sender lock rules out our own concurrent
-    submissions) — resubmitting would write the identical payloads on-chain
-    twice. The batch is surfaced as FAILED-AMBIGUOUS without a resubmit; the
-    nonce cache is left alone (accept-time record now equals chain truth).
-    Verify via the subgraph before retrying. Subclasses
-    :class:`RuntimeError` for back-compat.
-    """
-
-
-async def _await_batch_receipt(
-    http: httpx.AsyncClient,
-    relay_url: str,
-    headers: dict,
-    user_op_hash: str,
-    timeout_s: Optional[float] = None,
-    poll_s: Optional[float] = None,
-) -> None:
-    """Poll ``eth_getUserOperationReceipt`` until success, or raise.
-
-    Raises :class:`UserOpRevertedError` on an explicit ``success=false``
-    receipt (the op mined but reverted — the on-chain nonce advanced) or
-    :class:`UserOpDroppedError` on timeout (the bundler dropped an accepted
-    op — the on-chain nonce did NOT advance, leaving a cache gap). The batch
-    submit loop uses the distinction (#431) to decide whether to reset the
-    nonce cache before resubmitting. Both subclass :class:`RuntimeError`, so
-    the import engine still treats either as a FAILED batch (not stored) and
-    ``facts_stored`` reflects on-chain reality.
-    """
-    import time as _time
-    timeout = _BATCH_RECEIPT_TIMEOUT_S if timeout_s is None else timeout_s
-    poll = _BATCH_RECEIPT_POLL_S if poll_s is None else poll_s
-    deadline = _time.monotonic() + timeout
-    while True:
-        try:
-            resp = await _relay_rpc(
-                http, relay_url, headers,
-                "eth_getUserOperationReceipt", [user_op_hash], rpc_id=4,
-            )
-        except Exception as e:
-            logger.debug("receipt poll for %s failed (%s); retrying", user_op_hash, e)
-            resp = {}
-        result = resp.get("result") if isinstance(resp, dict) else None
-        verdict = _receipt_success(result)
-        if verdict is True:
-            return
-        if verdict is False:
-            raise UserOpRevertedError(
-                f"Batch UserOp {user_op_hash} reverted on-chain "
-                f"(receipt.success=false)"
-            )
-        if _time.monotonic() >= deadline:
-            raise UserOpDroppedError(
-                f"Batch UserOp {user_op_hash} not confirmed within "
-                f"{timeout:.0f}s (no successful receipt)"
-            )
-        await asyncio.sleep(poll)
-
-
 async def _await_nonce_advance(
     http,
     sender: str,
@@ -389,24 +508,23 @@ async def _await_nonce_advance(
     poll_s: float = 1.5,
 ) -> int:
     """Poll the EntryPoint nonce until it reaches ``min_nonce`` or timeout.
-
-    Used by the AA25 retry path: instead of sleeping blind while the
-    conflicting op mines, wait for the observable signal (nonce advance).
-    RPC errors are tolerated (retry on next poll). Returns the last nonce
-    seen (may be < min_nonce on timeout).
-    """
-    import time as _time
-    deadline = _time.monotonic() + timeout_s
+    RPC errors are tolerated. Returns the last nonce seen (may be below
+    ``min_nonce`` on timeout)."""
+    deadline = _now() + timeout_s
     last = -1
-    while _time.monotonic() < deadline:
+    while _now() < deadline:
         try:
             last = await get_nonce(http, sender, chain_id)
             if last >= min_nonce:
                 return last
-        except Exception:
-            pass
-        await asyncio.sleep(poll_s)
+        except Exception as e:
+            if _is_shutdown_error(e):
+                raise
+        await _sleep(poll_s)
     return last
+
+
+
 DATA_EDGE_ADDRESS = "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"
 
 # Chain-specific public RPCs
@@ -559,22 +677,36 @@ def _rpc_url_for_chain(chain_id: int) -> str:
 
 
 async def _eth_call(
-    http: httpx.AsyncClient, rpc_url: str, to: str, data: str
+    http: httpx.AsyncClient,
+    rpc_url: str,
+    to: str,
+    data: str,
+    block: str = "latest",
 ) -> str:
-    """Execute an ``eth_call`` and return the hex result."""
+    """Execute an ``eth_call`` and return the hex result.
+
+    Raises on a JSON-RPC ``error``, a missing ``result`` or a non-hex
+    ``result``. A malformed reply used to read as ``"0x0"`` (= nonce 0), the
+    same misread class #435 fixed for ``eth_getCode``.
+    """
     resp = await http.post(
         rpc_url,
         json={
             "jsonrpc": "2.0",
             "method": "eth_call",
-            "params": [{"to": to, "data": data}, "latest"],
+            "params": [{"to": to, "data": data}, block],
             "id": 1,
         },
     )
     body = resp.json()
+    if not isinstance(body, dict):
+        raise RuntimeError(f"eth_call failed: unexpected reply {str(body)[:200]}")
     if "error" in body:
         raise RuntimeError(f"eth_call failed: {body['error']}")
-    return body.get("result", "0x0")
+    result = body.get("result")
+    if not isinstance(result, str) or not result.startswith("0x") or len(result) < 3:
+        raise RuntimeError("eth_call returned no usable result")
+    return result
 
 
 async def _eth_get_code(
@@ -614,15 +746,22 @@ async def _eth_get_code(
 
 
 async def get_nonce(
-    http: httpx.AsyncClient, sender: str, chain_id: int
+    http: httpx.AsyncClient,
+    sender: str,
+    chain_id: int,
+    block: Optional[int] = None,
 ) -> int:
     """Get the next nonce for a Smart Account from the EntryPoint.
 
     Uses ``eth_call`` to ``EntryPoint.getNonce(sender, 0)`` via a public RPC.
+    ``block`` pins the read to one block number (default: ``"latest"``).
     """
     calldata = f"0x{GET_NONCE_SELECTOR}{_pad32(sender)}{_encode_uint256(0)}"
     rpc_url = _rpc_url_for_chain(chain_id)
-    result = await _eth_call(http, rpc_url, ENTRYPOINT_V07, calldata)
+    if block is None:
+        result = await _eth_call(http, rpc_url, ENTRYPOINT_V07, calldata)
+    else:
+        result = await _eth_call(http, rpc_url, ENTRYPOINT_V07, calldata, hex(block))
     return int(result, 16)
 
 
@@ -696,8 +835,889 @@ async def _relay_rpc(
 
 
 # ---------------------------------------------------------------------------
+# Fate resolution by hash — internal #646 / #650
+# ---------------------------------------------------------------------------
+#
+# "Nonce advanced" is not "our op landed": the nonce can be taken by another
+# op (another process, a fee-bump replacement). So every question about an
+# earlier op is answered BY HASH. ``resolve_fate`` is read-only.
+
+#: topic0 of ``UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)``.
+USER_OPERATION_EVENT_TOPIC = "0x" + keccak(
+    b"UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)"
+).hex()
+#: ``eth_getLogs`` block-range chunk (public RPCs cap the range).
+_LOGS_CHUNK_BLOCKS: int = 2000
+_LOGS_MAX_CHUNKS: int = 25
+
+
+class Fate(NamedTuple):
+    """What happened to an op. ``kind`` is one of: ``executed`` (mined;
+    ``success`` says whether it reverted; ``hash`` is the op that ran),
+    ``dead`` (the nonce was used by another op, so ours can never execute),
+    ``gone`` (the bundler dropped it and the nonce is unused), ``pending``,
+    ``unknown``."""
+
+    kind: str
+    success: Optional[bool] = None
+    hash: Optional[str] = None
+
+
+@dataclass
+class _Ctx:
+    """Per-call connection data (never logged)."""
+
+    sender: str
+    relay_url: str
+    headers: dict
+    chain_id: int
+    rpc_url: str
+
+
+async def _eth_block_number(http: httpx.AsyncClient, rpc_url: str) -> int:
+    """Current block number from the public RPC. Raises on a bad reply."""
+    resp = await http.post(
+        rpc_url,
+        json={"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1},
+    )
+    body = resp.json()
+    if not isinstance(body, dict) or "error" in body:
+        raise RuntimeError(f"eth_blockNumber failed: {str(body)[:200]}")
+    result = body.get("result")
+    if not isinstance(result, str) or not result.startswith("0x"):
+        raise RuntimeError("eth_blockNumber returned no usable result")
+    return int(result, 16)
+
+
+async def _find_userop_events(
+    http: httpx.AsyncClient,
+    rpc_url: str,
+    hashes: list[str],
+    from_block: int,
+    to_block: int,
+) -> dict[str, bool]:
+    """``UserOperationEvent`` logs for ``hashes`` on the EntryPoint over
+    ``[from_block, to_block]``. Returns ``{hash_lower: success}``. Raises on
+    any RPC error or malformed reply (the caller then says ``unknown``)."""
+    found: dict[str, bool] = {}
+    wanted = [h.lower() for h in hashes]
+    start = max(from_block, 0)
+    chunks = 0
+    while start <= to_block:
+        chunks += 1
+        if chunks > _LOGS_MAX_CHUNKS:
+            raise RuntimeError("eth_getLogs range too large to scan")
+        end = min(start + _LOGS_CHUNK_BLOCKS - 1, to_block)
+        resp = await http.post(
+            rpc_url,
+            json={
+                "jsonrpc": "2.0",
+                "method": "eth_getLogs",
+                "params": [{
+                    "address": ENTRYPOINT_V07,
+                    "fromBlock": hex(start),
+                    "toBlock": hex(end),
+                    "topics": [USER_OPERATION_EVENT_TOPIC, wanted],
+                }],
+                "id": 1,
+            },
+        )
+        body = resp.json()
+        if not isinstance(body, dict) or "error" in body or not isinstance(body.get("result"), list):
+            raise RuntimeError(f"eth_getLogs failed: {str(body)[:200]}")
+        for log in body["result"]:
+            topics = log.get("topics") or []
+            data = log.get("data") or "0x"
+            if len(topics) < 2 or not isinstance(data, str):
+                raise RuntimeError("eth_getLogs returned a malformed log")
+            raw = data[2:]
+            if len(raw) < 128:
+                raise RuntimeError("UserOperationEvent data too short")
+            # data = nonce, success, actualGasCost, actualGasUsed (32 bytes each)
+            found[str(topics[1]).lower()] = int(raw[64:128], 16) != 0
+        start = end + 1
+    return found
+
+
+_STATUS_PENDING = {"not_submitted", "submitted", "queued", "included"}
+_STATUS_GONE = {"rejected", "failed", "not_found"}
+
+
+async def _fate_once(
+    http: httpx.AsyncClient,
+    ctx: _Ctx,
+    hashes: list[str],
+    nonce: int,
+    sent_block: int,
+) -> Fate:
+    """One pass of the section-4.2 decision procedure."""
+    # 1. Fast path: a receipt by hash.
+    for h in hashes:
+        try:
+            resp = await _relay_rpc(
+                http, ctx.relay_url, ctx.headers,
+                "eth_getUserOperationReceipt", [h], rpc_id=4,
+            )
+        except Exception as e:
+            if isinstance(e, RelayWriteQuotaExceeded) or _is_shutdown_error(e):
+                raise
+            logger.debug("receipt lookup failed (%s)", type(e).__name__)
+            continue
+        result = resp.get("result") if isinstance(resp, dict) else None
+        verdict = _receipt_success(result)
+        if verdict is not None:
+            return Fate("executed", verdict, h)
+    # 2. Chain nonce and logs, both at ONE block so a lagging replica cannot
+    #    fake "dead".
+    try:
+        block = await _eth_block_number(http, ctx.rpc_url)
+        chain_nonce = await get_nonce(http, ctx.sender, ctx.chain_id, block=block)
+    except Exception as e:
+        if _is_shutdown_error(e):
+            raise
+        logger.debug("fate chain read failed (%s)", type(e).__name__)
+        return Fate("unknown")
+    if chain_nonce > nonce:
+        try:
+            events = await _find_userop_events(
+                http, ctx.rpc_url, hashes, max(sent_block - 2, 0), block
+            )
+        except Exception as e:
+            if _is_shutdown_error(e):
+                raise
+            logger.debug("fate log read failed (%s)", type(e).__name__)
+            return Fate("unknown")
+        for h in hashes:
+            if h.lower() in events:
+                return Fate("executed", events[h.lower()], h)
+        return Fate("dead")
+    # 3. The nonce is still free: ask the bundler.
+    kinds: list[str] = []
+    for h in hashes:
+        try:
+            resp = await _relay_rpc(
+                http, ctx.relay_url, ctx.headers,
+                "pimlico_getUserOperationStatus", [h], rpc_id=5,
+            )
+        except Exception as e:
+            if isinstance(e, RelayWriteQuotaExceeded) or _is_shutdown_error(e):
+                raise
+            return Fate("unknown")
+        result = resp.get("result") if isinstance(resp, dict) else None
+        status = result.get("status") if isinstance(result, dict) else None
+        if status in _STATUS_PENDING:
+            kinds.append("pending")
+        elif status in _STATUS_GONE:
+            kinds.append("gone")
+        else:
+            return Fate("unknown")
+    if "pending" in kinds:
+        return Fate("pending")
+    return Fate("gone")
+
+
+async def resolve_fate(
+    http: httpx.AsyncClient,
+    ctx: _Ctx,
+    hashes: list[str],
+    nonce: int,
+    sent_block: int,
+) -> Fate:
+    """Resolve the fate of the op attempts ``hashes`` (all at ``nonce``).
+
+    ``dead`` and ``gone`` are the two verdicts that release facts for
+    re-storing, so each must be seen twice, ``GATE_POLL_S`` apart, before it
+    is returned (a read replica or the bundler's status index can lag).
+    """
+    first = await _fate_once(http, ctx, hashes, nonce, sent_block)
+    if first.kind not in ("dead", "gone"):
+        return first
+    await _sleep(GATE_POLL_S)
+    second = await _fate_once(http, ctx, hashes, nonce, sent_block)
+    if second.kind == first.kind or second.kind == "executed":
+        return second
+    return second if second.kind == "pending" else Fate("unknown")
+
+
+def _poll_delay(elapsed: float) -> float:
+    base = GATE_POLL_S if elapsed < GATE_SLOW_POLL_AFTER_S else GATE_SLOW_POLL_S
+    return base + _rand() * 0.5
+
+
+def _apply_executed(
+    sender: str, nonce: int, carried_factory: bool, success: Optional[bool]
+) -> None:
+    """Chain evidence that an op at ``nonce`` executed."""
+    _raise_floor(sender, nonce + 1)
+    if carried_factory or nonce > 0:
+        # An executed op (even one whose inner call reverted) that carried the
+        # factory deployed the account; any executed op above nonce 0 implies it.
+        _mark_sender_deployed(sender)
+
+
+async def _call_on_lost(cb: Optional[Callable[[list[str]], Any]], fact_ids: list[str]) -> None:
+    if cb is None or not fact_ids:
+        return
+    try:
+        res = cb(list(fact_ids))
+        if inspect.isawaitable(res):
+            await res
+    except Exception:  # bookkeeping must never break the write path
+        logger.exception("on_lost callback failed")
+
+
+# ---------------------------------------------------------------------------
+# Predecessor gate (start of every call, after the lock, before the nonce read)
+# ---------------------------------------------------------------------------
+
+
+async def _settle_pending(http: httpx.AsyncClient, ctx: _Ctx, deadline: _Deadline) -> None:
+    """Resolve earlier accepted ops of this account BY HASH.
+
+    The gate never opens on "nonce advanced" alone. Raises
+    :class:`PredecessorPendingError` (nothing sent) when a predecessor is
+    still unresolved after the gate window (measured from ITS accepted_at),
+    after the call's deadline, or after ``RPC_DOWN_FAIL_FAST_S`` of unreadable
+    chain state.
+    """
+    key = ctx.sender.lower()
+    for rec in list(_pending.get(key, [])):
+        unknown_since: Optional[float] = None
+        while True:
+            fate = await resolve_fate(http, ctx, rec.hashes, rec.nonce, rec.sent_block)
+            if fate.kind == "executed":
+                _apply_executed(ctx.sender, rec.nonce, rec.carried_factory, fate.success)
+                if fate.success is False:
+                    logger.warning(
+                        "earlier write %s executed but reverted; facts %s were not stored",
+                        fate.hash, rec.fact_ids,
+                    )
+                    await _call_on_lost(rec.on_lost, rec.fact_ids)
+                _drop_record(_pending, key, rec)
+                break
+            if fate.kind in ("dead", "gone"):
+                if fate.kind == "dead":
+                    logger.error(
+                        "accepted write %s was replaced by another op at nonce %d; "
+                        "facts %s were not stored",
+                        rec.hashes[-1], rec.nonce, rec.fact_ids,
+                    )
+                else:
+                    logger.error(
+                        "accepted write %s was dropped by the bundler at nonce %d; "
+                        "facts %s were not stored",
+                        rec.hashes[-1], rec.nonce, rec.fact_ids,
+                    )
+                await _call_on_lost(rec.on_lost, rec.fact_ids)
+                _drop_record(_pending, key, rec)
+                break
+            now = _now()
+            if now - rec.accepted_at >= PENDING_MAX_AGE_S:
+                logger.error(
+                    "earlier write %s still unresolved after %.0fs; no longer "
+                    "blocking this account (it may still land)",
+                    rec.hashes[-1], now - rec.accepted_at,
+                )
+                _drop_record(_pending, key, rec)
+                _stale.setdefault(key, []).append(rec)
+                break
+            if fate.kind == "unknown":
+                unknown_since = unknown_since if unknown_since is not None else now
+                if now - unknown_since >= RPC_DOWN_FAIL_FAST_S:
+                    raise PredecessorPendingError(
+                        "An earlier write for this account could not be "
+                        "checked (chain data unreadable); nothing was sent."
+                    )
+            else:
+                unknown_since = None
+            window_end = min(rec.accepted_at + deadline.gate_window, deadline.send_by)
+            if now >= window_end:
+                raise PredecessorPendingError(
+                    "An earlier write for this account is still being "
+                    "confirmed on-chain; nothing was sent. Try again shortly."
+                )
+            await _sleep(_poll_delay(now - rec.accepted_at))
+    # Stale records: one cheap, non-blocking check each.
+    for rec in list(_stale.get(key, [])):
+        try:
+            fate = await resolve_fate(http, ctx, rec.hashes, rec.nonce, rec.sent_block)
+        except Exception as e:
+            if isinstance(e, RelayWriteQuotaExceeded) or _is_shutdown_error(e):
+                raise
+            continue
+        if fate.kind == "executed":
+            _apply_executed(ctx.sender, rec.nonce, rec.carried_factory, fate.success)
+            if fate.success is False:
+                await _call_on_lost(rec.on_lost, rec.fact_ids)
+            _drop_record(_stale, key, rec)
+        elif fate.kind in ("dead", "gone"):
+            logger.error(
+                "stale write %s is %s; facts %s were not stored",
+                rec.hashes[-1], fate.kind, rec.fact_ids,
+            )
+            await _call_on_lost(rec.on_lost, rec.fact_ids)
+            _drop_record(_stale, key, rec)
+
+
+def _drop_record(table: dict[str, list[_PendingRecord]], key: str, rec: _PendingRecord) -> None:
+    lst = table.get(key)
+    if lst and rec in lst:
+        lst.remove(rec)
+        if not lst:
+            table.pop(key, None)
+
+
+def _park(
+    sender: str,
+    in_flight: list[_Attempt],
+    fact_ids: list[str],
+    on_lost: Optional[Callable[[list[str]], Any]],
+) -> _PendingRecord:
+    """Record an accepted write whose fate is unknown when the call exits."""
+    last = in_flight[-1]
+    rec = _PendingRecord(
+        hashes=[a.hash for a in in_flight],
+        nonce=last.nonce,
+        sent_block=min(a.sent_block for a in in_flight),
+        carried_factory=any(a.carried_factory for a in in_flight),
+        fact_ids=list(fact_ids),
+        accepted_at=_now(),
+        on_lost=on_lost,
+    )
+    _pending.setdefault(sender.lower(), []).append(rec)
+    return rec
+
+
+async def settle_pending_writes(
+    sender: str,
+    relay_url: str,
+    auth_key_hex: str,
+    wallet_address: str,
+    chain_id: int = 84532,
+    client_id: str = "python-client",
+    session_id: Optional[str] = None,
+    profile: str = "background",
+    deadline_s: Optional[float] = None,
+) -> None:
+    """Resolve this account's earlier accepted writes (and apply their
+    ``on_lost`` callbacks) WITHOUT sending anything. Callers run this before
+    their own duplicate gate so a ledger entry for a dead op cannot make the
+    gate skip a fact that was never stored. Raises
+    :class:`PredecessorPendingError` / :class:`AccountBusyError` (nothing
+    sent)."""
+    relay_url = relay_url.rstrip("/")
+    ctx = _make_ctx(sender, relay_url, auth_key_hex, wallet_address, chain_id, client_id, session_id)
+    deadline = _Deadline(profile, deadline_s, batch=False)
+    lock = await _get_sender_lock(sender)
+    await _acquire_sender_lock(lock, deadline)
+    try:
+        if not pending_records(sender):
+            return
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            await _settle_pending(http, ctx, deadline)
+    finally:
+        lock.release()
+
+
+def _make_ctx(
+    sender: str,
+    relay_url: str,
+    auth_key_hex: str,
+    wallet_address: str,
+    chain_id: int,
+    client_id: str,
+    session_id: Optional[str],
+) -> _Ctx:
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {auth_key_hex}",
+        "X-TotalReclaw-Client": _client_header_value(client_id),
+        "X-Wallet-Address": wallet_address,
+    }
+    if session_id:
+        headers["X-TotalReclaw-Session"] = session_id
+    return _Ctx(sender, relay_url, headers, chain_id, _rpc_url_for_chain(chain_id))
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+_STUB_SIGNATURE = (
+    "0x"
+    "fffffffffffffffffffffffffffffff000000000000000000000000000000000"
+    "7aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    "1c"
+)
+
+
+def _jsonrpc_error_from_http(exc: BaseException) -> Optional[Any]:
+    """The JSON-RPC ``error`` object of an HTTP error response, or None when
+    the body is not a JSON-RPC error (then the outcome is unknown)."""
+    resp = getattr(exc, "response", None)
+    if resp is None:
+        return None
+    try:
+        body = resp.json()
+    except Exception:
+        return None
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict) and ("code" in err or "message" in err):
+            return err
+    return None
+
+
+async def _build_sign_send(
+    http: httpx.AsyncClient,
+    ctx: _Ctx,
+    *,
+    eoa_address: str,
+    eoa_private_key: bytes,
+    call_data: str,
+    nonce: int,
+    is_deployed: bool,
+    sponsor_fail_msg: str,
+    send_fail_msg: str,
+    att: dict,
+) -> str:
+    """Steps 4-8 of the write: build, gas price, sponsor, sign, send.
+
+    This is the single place a UserOp is built, sponsored, signed and sent;
+    both the single and the batch writer run it, as does every re-send at a
+    pinned nonce. Returns the LOCALLY computed v0.7 hash (the hash does not
+    cover the signature, so it equals the bundler's). ``att`` is filled with
+    ``hash`` before the send and ``sending`` while the send is in progress.
+    """
+    user_op: dict = {
+        "sender": ctx.sender,
+        "nonce": hex(nonce),
+        "callData": call_data,
+        "signature": _STUB_SIGNATURE,
+    }
+
+    if not is_deployed:
+        user_op["factory"] = SIMPLE_ACCOUNT_FACTORY
+        user_op["factoryData"] = encode_factory_data(eoa_address)
+        logger.debug("Account not deployed; including factory data")
+
+    # Gas prices from Pimlico
+    gas_data = await _relay_rpc(
+        http, ctx.relay_url, ctx.headers, "pimlico_getUserOperationGasPrice", [], rpc_id=1,
+    )
+    if "result" in gas_data and gas_data["result"].get("fast"):
+        fast = gas_data["result"]["fast"]
+        user_op["maxFeePerGas"] = fast["maxFeePerGas"]
+        user_op["maxPriorityFeePerGas"] = fast["maxPriorityFeePerGas"]
+    else:
+        user_op["maxFeePerGas"] = hex(2_000_000_000)
+        user_op["maxPriorityFeePerGas"] = hex(1_500_000_000)
+
+    # Sponsor via pm_sponsorUserOperation: gas limits AND paymaster fields.
+    sponsor_data = await _relay_rpc(
+        http, ctx.relay_url, ctx.headers, "pm_sponsorUserOperation",
+        [user_op, ENTRYPOINT_V07], rpc_id=2,
+    )
+    if "result" in sponsor_data:
+        sp = sponsor_data["result"]
+        user_op["callGasLimit"] = sp["callGasLimit"]
+        user_op["verificationGasLimit"] = sp["verificationGasLimit"]
+        user_op["preVerificationGas"] = sp["preVerificationGas"]
+        user_op["paymaster"] = sp["paymaster"]
+        user_op["paymasterData"] = sp["paymasterData"]
+        user_op["paymasterVerificationGasLimit"] = sp["paymasterVerificationGasLimit"]
+        user_op["paymasterPostOpGasLimit"] = sp["paymasterPostOpGasLimit"]
+    elif "error" in sponsor_data:
+        raise _StageError(f"{sponsor_fail_msg}{sponsor_data['error']}", "sponsor")
+    else:
+        raise _StageError("pm_sponsorUserOperation returned no result or error", "sponsor")
+
+    # Hash and sign with the EOA key (Rust core; EIP-191 prefix applied there).
+    user_op_hash = compute_user_op_hash(user_op, ENTRYPOINT_V07, ctx.chain_id)
+    user_op["signature"] = sign_user_op_hash(user_op_hash, eoa_private_key)
+    local_hash = "0x" + user_op_hash.hex()
+    att["hash"] = local_hash
+    # The block the op can first land in: fate lookups scan logs from here.
+    att["sent_block"] = await _eth_block_number(http, ctx.rpc_url)
+
+    # Submit the signed UserOp to the bundler.
+    att["sending"] = True
+    try:
+        send_data = await _relay_rpc(
+            http, ctx.relay_url, ctx.headers, "eth_sendUserOperation",
+            [user_op, ENTRYPOINT_V07], rpc_id=3,
+        )
+    except RelayWriteQuotaExceeded:
+        att["sending"] = False
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if _is_shutdown_error(exc):
+            att["sending"] = False
+            raise
+        err = _jsonrpc_error_from_http(exc)
+        if err is not None:
+            att["sending"] = False
+            raise _StageError(f"{send_fail_msg}{err}", "send") from exc
+        raise _SendAmbiguous(exc) from exc
+    att["sending"] = False
+    if "error" in send_data:
+        raise _StageError(f"{send_fail_msg}{send_data['error']}", "send")
+    returned = send_data.get("result", "")
+    if not returned:
+        logger.warning("bundler returned no op hash; using the locally computed %s", local_hash)
+    elif isinstance(returned, str) and returned.lower() != local_hash.lower():
+        logger.warning(
+            "bundler op hash %s differs from the local hash %s; tracking the local one",
+            returned, local_hash,
+        )
+    return local_hash
+
+
+async def _chain_deployed(http: httpx.AsyncClient, ctx: _Ctx) -> Optional[bool]:
+    """Fresh chain evidence that the account is deployed (code present or
+    nonce > 0). ``None`` when the chain cannot be read."""
+    try:
+        n = await get_nonce(http, ctx.sender, ctx.chain_id)
+        if n > 0:
+            return True
+        code = await _eth_get_code(http, ctx.rpc_url, ctx.sender)
+        return code != "0x" and len(code) > 2
+    except Exception as e:
+        if _is_shutdown_error(e):
+            raise
+        return None
+
+
+async def _await_deploy_evidence(http: httpx.AsyncClient, ctx: _Ctx, timeout_s: float) -> bool:
+    end = _now() + max(timeout_s, 0.0)
+    while True:
+        if await _chain_deployed(http, ctx):
+            return True
+        if _now() >= end:
+            return False
+        await _sleep(_poll_delay(0.0))
+
+
+async def _await_fate(
+    http: httpx.AsyncClient,
+    ctx: _Ctx,
+    in_flight: list[_Attempt],
+    deadline: _Deadline,
+) -> Fate:
+    """Poll :func:`resolve_fate` for the call's attempts until a verdict or
+    the call's deadline. Returns the verdict, or ``Fate('timeout')``."""
+    hashes = [a.hash for a in in_flight]
+    nonce = in_flight[-1].nonce
+    sent_block = min(a.sent_block for a in in_flight)
+    start = _now()
+    while True:
+        fate = await resolve_fate(http, ctx, hashes, nonce, sent_block)
+        if fate.kind in ("executed", "dead", "gone"):
+            return fate
+        if deadline.remaining() <= 0:
+            return Fate("timeout")
+        await _sleep(_poll_delay(_now() - start))
+
+
+async def _submit_userop(
+    *,
+    kind: str,
+    sender: str,
+    eoa_address: str,
+    eoa_private_key: bytes,
+    payloads: list[bytes],
+    relay_url: str,
+    auth_key_hex: str,
+    wallet_address: str,
+    chain_id: int,
+    client_id: str,
+    session_id: Optional[str],
+    data_edge_address: Optional[str],
+    confirm: str,
+    profile: str,
+    deadline_s: Optional[float],
+    fact_ids: Optional[list[str]],
+    on_lost: Optional[Callable[[list[str]], Any]],
+) -> str:
+    """Shared writer behind :func:`build_and_send_userop` (``kind="single"``)
+    and :func:`build_and_send_userop_batch` (``kind="batch"``)."""
+    batch = kind == "batch"
+    if confirm not in ("accept", "receipt"):
+        raise ValueError(f"confirm must be 'accept' or 'receipt', got {confirm!r}")
+    deadline = _Deadline(profile, deadline_s, batch=batch)
+    relay_url = relay_url.rstrip("/")
+    ctx = _make_ctx(sender, relay_url, auth_key_hex, wallet_address, chain_id, client_id, session_id)
+    facts = list(fact_ids or [])
+    key = sender.lower()
+    lock = await _get_sender_lock(sender)
+    await _acquire_sender_lock(lock, deadline)
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            if batch:
+                call_data = encode_execute_batch_calldata_for_data_edge(payloads, data_edge_address)
+                sponsor_fail = "Batch paymaster sponsorship failed: "
+                send_fail = "Batch UserOp submission failed: "
+            else:
+                call_data = encode_execute_calldata_for_data_edge(payloads[0], data_edge_address)
+                sponsor_fail = "Paymaster sponsorship failed: "
+                send_fail = "UserOp submission failed: "
+
+            await _settle_pending(http, ctx, deadline)
+
+            in_flight: list[_Attempt] = []
+            pinned: Optional[int] = None
+            gone_confirmed = False
+            sends = 0
+            soft_retries = 0
+            sim_backoffs = 0
+            last_exc: Optional[BaseException] = None
+            builds = 0
+
+            def _ambiguous(msg: str) -> UserOpAmbiguousError:
+                rec = _park(sender, in_flight, facts, on_lost)
+                return UserOpAmbiguousError(
+                    msg, fact_ids=facts, hashes=rec.hashes,
+                    nonce=rec.nonce, sent_block=rec.sent_block,
+                )
+
+            while True:
+                if builds >= _MAX_BUILD_ATTEMPTS:
+                    break
+                if deadline.send_remaining() <= 0 and not in_flight:
+                    raise WriteDeadlineError(
+                        "The write ran out of time before anything was sent."
+                    )
+                builds += 1
+                att: dict = {"hash": None, "sending": False, "sent_block": 0}
+                chain_nonce = -1
+                nonce = -1
+                is_deployed = True
+                sent_block = 0
+                sent = False        # a send reached (or may have reached) the bundler
+                ambiguous_send = False
+                try:
+                    chain_nonce = await get_nonce(http, sender, chain_id)
+                    floor = _floor_of(sender)
+                    nonce = pinned if pinned is not None else max(chain_nonce, floor)
+                    logger.debug("Nonce for %s: chain=%d floor=%d using=%d", sender, chain_nonce, floor, nonce)
+                    is_deployed = await _resolve_is_deployed(http, ctx.rpc_url, sender, chain_nonce)
+                    local_hash = await _build_sign_send(
+                        http, ctx,
+                        eoa_address=eoa_address, eoa_private_key=eoa_private_key,
+                        call_data=call_data, nonce=nonce, is_deployed=is_deployed,
+                        sponsor_fail_msg=sponsor_fail, send_fail_msg=send_fail, att=att,
+                    )
+                    sends += 1
+                    sent = True
+                    sent_block = att["sent_block"]
+                    logger.info(
+                        "userop accepted hash=%s nonce=%d factory=%s", local_hash, nonce, not is_deployed,
+                    )
+                except _SendAmbiguous as sa:
+                    sends += 1
+                    sent = True
+                    ambiguous_send = True
+                    sent_block = att["sent_block"]
+                    local_hash = att["hash"]
+                    logger.warning(
+                        "send outcome unknown (stage=send nonce=%d chain_nonce=%d factory=%s hash=%s): %s",
+                        nonce, chain_nonce, not is_deployed, local_hash, str(sa)[:200],
+                    )
+                except RelayWriteQuotaExceeded:
+                    if in_flight and not gone_confirmed:
+                        _park(sender, in_flight, facts, on_lost)
+                    raise
+                except asyncio.CancelledError:
+                    if in_flight and not gone_confirmed:
+                        _park(sender, in_flight, facts, on_lost)
+                    raise
+                except Exception as e:
+                    if _is_shutdown_error(e):
+                        if in_flight and not gone_confirmed:
+                            _park(sender, in_flight, facts, on_lost)
+                        raise
+                    last_exc = e
+                    err_str = str(e)
+                    stage = getattr(e, "stage", None) or "pre"
+                    logger.warning(
+                        "write attempt failed (stage=%s nonce=%d chain_nonce=%d factory=%s hash=%s build=%d/%d): %s",
+                        stage, nonce, chain_nonce, not is_deployed, att.get("hash"),
+                        builds, _MAX_BUILD_ATTEMPTS, err_str[:200],
+                    )
+                    # --- send stage: is the conflict OUR OWN op? ------------
+                    if stage == "send":
+                        ours_known = _is_already_known(err_str)
+                        conflict = "AA25" in err_str or "AA10" in err_str
+                        if ours_known or (in_flight and conflict):
+                            if ours_known and att["hash"] and att["hash"] not in [a.hash for a in in_flight]:
+                                in_flight.append(_Attempt(att["hash"], nonce, att["sent_block"], not is_deployed))
+                                pinned = nonce
+                            local_hash = None   # no new attempt; fate loop on what we have
+                            sent = True
+                        elif "AA25" in err_str:
+                            # Someone else holds nonce k (ours was definitely rejected).
+                            await _await_nonce_advance(
+                                http, sender, chain_id, min_nonce=nonce + 1,
+                                timeout_s=max(min(FOREIGN_WAIT_S, deadline.send_remaining()), 0.0),
+                                poll_s=GATE_POLL_S,
+                            )
+                            continue
+                        elif _is_mempool_aa10(err_str):
+                            # A second deploy op for this sender is queued. Not a
+                            # chain statement: do NOT latch; wait for evidence.
+                            await _await_deploy_evidence(
+                                http, ctx, min(FOREIGN_WAIT_S, max(deadline.send_remaining(), 0.0))
+                            )
+                            continue
+                    if not sent:
+                        if "AA25" in err_str:
+                            # Sponsor-stage AA25: Pimlico's simulator is a block
+                            # behind, or another process's op is bundled but not
+                            # mined. NOT a reason to wait for nonce + 1.
+                            floor_now = _floor_of(sender)
+                            if nonce == floor_now and floor_now > chain_nonce >= 0:
+                                # Our floor is ahead of the chain. A lagging read, or a
+                                # reorg? Confirm with a second read REORG_CONFIRM_GAP_S later.
+                                await _sleep(REORG_CONFIRM_GAP_S)
+                                again = await get_nonce(http, sender, chain_id)
+                                if again < floor_now and chain_nonce < floor_now:
+                                    logger.error(
+                                        "nonce floor %d is ahead of the chain (%d, then %d) on two "
+                                        "reads %.0fs apart; assuming a reorg and resetting to chain truth",
+                                        floor_now, chain_nonce, again, REORG_CONFIRM_GAP_S,
+                                    )
+                                    _reset_floor_to(sender, again)
+                                    _clear_sender_deployed(sender)
+                                continue
+                            if sim_backoffs < len(SIM_LAG_BACKOFF_S):
+                                await _sleep(SIM_LAG_BACKOFF_S[sim_backoffs])
+                                sim_backoffs += 1
+                            else:
+                                await _await_nonce_advance(
+                                    http, sender, chain_id, min_nonce=nonce + 1,
+                                    timeout_s=max(min(6.0, deadline.send_remaining()), 0.0),
+                                    poll_s=GATE_POLL_S,
+                                )
+                            continue
+                        if _is_not_deployed_error(err_str):
+                            evidence = await _chain_deployed(http, ctx)
+                            if evidence:
+                                # The chain says deployed: the simulator is behind.
+                                _mark_sender_deployed(sender)
+                                await _sleep(SIM_LAG_BACKOFF_S[min(sim_backoffs, len(SIM_LAG_BACKOFF_S) - 1)])
+                                sim_backoffs += 1
+                                continue
+                            was_latched = _is_sender_deployed_cached(sender)
+                            _clear_sender_deployed(sender)
+                            carried = any(r.carried_factory for r in pending_records(sender))
+                            if carried:
+                                await _await_deploy_evidence(
+                                    http, ctx, min(FOREIGN_WAIT_S, max(deadline.send_remaining(), 0.0))
+                                )
+                            elif not was_latched:
+                                await _sleep(SIM_LAG_BACKOFF_S[0])
+                            continue
+                        retryable = soft_retries < _MAX_NONCE_RETRIES - 1
+                        if _is_sender_state_error(err_str) and retryable:
+                            # #435: the SIMULATOR says the account already exists.
+                            soft_retries += 1
+                            logger.warning(
+                                "sender-state/redeploy error (stage=%s) - marking deployed and "
+                                "retrying without factory: %s", stage, err_str[:200],
+                            )
+                            _mark_sender_deployed(sender)
+                            continue
+                        if _is_transient_sim_error(err_str) and retryable:
+                            soft_retries += 1
+                            logger.warning(
+                                "transient -32500 sim error (stage=%s) - retrying with unchanged "
+                                "deploy state: %s", stage, err_str[:200],
+                            )
+                            await _sleep(min(2 ** (soft_retries - 1), 4))
+                            continue
+                        if isinstance(e, (httpx.TransportError, httpx.TimeoutException)) and retryable and stage == "pre":
+                            soft_retries += 1
+                            await _sleep(min(2 ** (soft_retries - 1), 4))
+                            continue
+                        if in_flight and not gone_confirmed:
+                            raise _ambiguous(
+                                f"A write may have been stored (op {in_flight[-1].hash}); "
+                                f"its outcome is not yet known: {err_str[:200]}"
+                            ) from e
+                        raise
+
+                # ---------------- a send happened (or may have) --------------
+                if local_hash is not None:
+                    in_flight.append(_Attempt(local_hash, nonce, sent_block, not is_deployed))
+                    pinned = nonce
+                    gone_confirmed = False
+                if (
+                    kind == "single"
+                    and confirm == "accept"
+                    and not ambiguous_send
+                    and local_hash is not None
+                ):
+                    _park(sender, in_flight, facts, on_lost)
+                    return local_hash
+
+                fate = await _await_fate(http, ctx, in_flight, deadline)
+                if fate.kind == "executed":
+                    att_ex = next((a for a in in_flight if a.hash.lower() == (fate.hash or "").lower()), in_flight[-1])
+                    _apply_executed(sender, att_ex.nonce, att_ex.carried_factory, fate.success)
+                    if fate.success is False:
+                        raise UserOpRevertedError(
+                            f"UserOp {fate.hash} reverted on-chain (receipt.success=false)"
+                        )
+                    return fate.hash or att_ex.hash
+                if fate.kind == "dead":
+                    logger.warning(
+                        "attempt(s) %s at nonce %d are dead (nonce used by another op); rebuilding at chain truth",
+                        [a.hash for a in in_flight], pinned,
+                    )
+                    in_flight.clear()
+                    pinned = None
+                    gone_confirmed = False
+                    continue
+                if fate.kind == "gone":
+                    gone_confirmed = True
+                    if sends >= _MAX_NONCE_RETRIES:
+                        logger.error("write dropped by the bundler after %d sends; nonce %d is unused", sends, pinned)
+                        in_flight_hashes = [a.hash for a in in_flight]
+                        raise UserOpDroppedError(
+                            f"UserOp(s) {in_flight_hashes} were dropped by the bundler "
+                            f"after {sends} sends (the account nonce did not advance)"
+                        )
+                    logger.warning(
+                        "attempt(s) %s dropped by the bundler; re-sending at the pinned nonce %d",
+                        [a.hash for a in in_flight], pinned,
+                    )
+                    continue
+                # timeout: fate still unknown at the deadline
+                if kind == "single":
+                    _park(sender, in_flight, facts, on_lost)
+                    logger.warning(
+                        "write %s not yet confirmed at the deadline; it stays tracked as pending",
+                        in_flight[-1].hash,
+                    )
+                    return in_flight[-1].hash
+                raise _ambiguous(
+                    f"Batch UserOp {in_flight[-1].hash} was sent but is not confirmed "
+                    f"within the deadline; it may still be stored. Do not re-send "
+                    f"before its outcome is known."
+                )
+
+            # build attempts exhausted without a send decision
+            if in_flight and not gone_confirmed:
+                raise _ambiguous(
+                    "A write may have been stored; its outcome is not yet known."
+                )
+            if last_exc is not None:
+                raise last_exc
+            raise WriteDeadlineError("The write could not be started; nothing was sent.")
+    finally:
+        lock.release()
 
 
 async def build_and_send_userop(
@@ -712,6 +1732,12 @@ async def build_and_send_userop(
     client_id: str = "python-client",
     session_id: Optional[str] = None,
     data_edge_address: Optional[str] = None,
+    *,
+    confirm: str = "accept",
+    profile: str = "background",
+    deadline_s: Optional[float] = None,
+    fact_ids: Optional[list[str]] = None,
+    on_lost: Optional[Callable[[list[str]], Any]] = None,
 ) -> str:
     """Build, sign, and submit a UserOperation through the relay.
 
@@ -736,214 +1762,43 @@ async def build_and_send_userop(
     client_id : str
         Client identifier for X-TotalReclaw-Client header.
     session_id : str, optional
-        QA-scoped session tag forwarded as ``X-TotalReclaw-Session`` for
-        Axiom log tracing. Typically populated from
-        ``TOTALRECLAW_SESSION_ID`` at client construction time; see
-        :class:`totalreclaw.relay.RelayClient`.
+        QA-scoped session tag forwarded as ``X-TotalReclaw-Session``.
+    confirm : {"accept", "receipt"}
+        ``"accept"`` (default) returns as soon as the bundler accepts the op
+        and records it as pending; the NEXT write resolves it by hash before
+        building (the predecessor gate). ``"receipt"`` waits for the op's own
+        fate inside the call, up to the deadline.
+    profile : {"interactive", "background"}
+        Deadline profile (see :data:`PROFILES`).
+    deadline_s : float, optional
+        Total budget of this call from entry, lock wait included. Overrides
+        the profile.
+    fact_ids, on_lost
+        Bookkeeping only. ``on_lost(fact_ids)`` is called when an accepted op
+        is later proven replaced, dropped or reverted.
 
     Returns
     -------
     str
-        The userOpHash returned by the bundler.
+        The op hash (the locally computed v0.7 hash).
+
+    Raises
+    ------
+    NothingSentError
+        (:class:`PredecessorPendingError`, :class:`AccountBusyError`,
+        :class:`WriteDeadlineError`): nothing was sent.
+    UserOpAmbiguousError
+        An op was sent and its fate is unknown: the write may be stored.
     """
-    relay_url = relay_url.rstrip("/")
-    rpc_url = _rpc_url_for_chain(chain_id)
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {auth_key_hex}",
-        "X-TotalReclaw-Client": _client_header_value(client_id),
-        "X-Wallet-Address": wallet_address,
-    }
-    if session_id:
-        headers["X-TotalReclaw-Session"] = session_id
-
-    _MAX_NONCE_RETRIES = 3
-
-    # rc.3 — serialize concurrent submissions for the same Smart Account.
-    sender_lock = await _get_sender_lock(sender)
-
-    async with sender_lock, httpx.AsyncClient(timeout=30.0) as http:
-        # 1. Encode the execute calldata (idempotent, does not depend on nonce)
-        #    SmartAccount.execute(dataEdgeAddress, 0, protobufPayload)
-        #    DataEdge target is relay-authoritative (#366) when supplied.
-        call_data = encode_execute_calldata_for_data_edge(
-            protobuf_payload, data_edge_address
-        )
-
-        # Retry loop for AA25 nonce conflicts.  When two UserOps race for
-        # the same nonce the bundler rejects one with AA25.  Re-fetching
-        # the nonce and rebuilding the UserOp resolves it.
-        for attempt in range(_MAX_NONCE_RETRIES):
-            try:
-                # 2. Get nonce from EntryPoint, pipelined past any of our own
-                #    unmined submissions via the local cache (#423).
-                chain_nonce = await get_nonce(http, sender, chain_id)
-                nonce = _resolve_submission_nonce(sender, chain_nonce)
-                logger.debug("Nonce for %s: chain=%d using=%d", sender, chain_nonce, nonce)
-
-                # 3. Deployed check (#435): the deployed cache and
-                #    chain_nonce > 0 short-circuit eth_getCode; a getCode RPC
-                #    error now raises instead of silently reading as
-                #    undeployed (which re-attached the factory and reverted
-                #    the batch).
-                is_deployed = await _resolve_is_deployed(
-                    http, rpc_url, sender, chain_nonce
-                )
-
-                # 4. Build partial UserOp with stub signature for gas estimation.
-                #    This specific dummy signature passes ecrecover without
-                #    reverting (matches permissionless SDK's
-                #    SimpleAccount.getStubSignature).
-                _STUB_SIGNATURE = (
-                    "0x"
-                    "fffffffffffffffffffffffffffffff000000000000000000000000000000000"
-                    "7aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                    "1c"
-                )
-                user_op: dict = {
-                    "sender": sender,
-                    "nonce": hex(nonce),
-                    "callData": call_data,
-                    "signature": _STUB_SIGNATURE,
-                }
-
-                if not is_deployed:
-                    user_op["factory"] = SIMPLE_ACCOUNT_FACTORY
-                    user_op["factoryData"] = encode_factory_data(eoa_address)
-                    logger.debug(
-                        "Account not deployed; including factory data"
-                    )
-
-                # 5. Get gas prices from Pimlico
-                gas_data = await _relay_rpc(
-                    http,
-                    relay_url,
-                    headers,
-                    "pimlico_getUserOperationGasPrice",
-                    [],
-                    rpc_id=1,
-                )
-                if "result" in gas_data and gas_data["result"].get("fast"):
-                    fast = gas_data["result"]["fast"]
-                    user_op["maxFeePerGas"] = fast["maxFeePerGas"]
-                    user_op["maxPriorityFeePerGas"] = fast[
-                        "maxPriorityFeePerGas"
-                    ]
-                else:
-                    # Fallback gas prices
-                    user_op["maxFeePerGas"] = hex(2_000_000_000)
-                    user_op["maxPriorityFeePerGas"] = hex(1_500_000_000)
-
-                # 6. Sponsor the UserOperation via Pimlico's
-                #    pm_sponsorUserOperation.  This single call returns all
-                #    gas limits AND paymaster fields.
-                sponsor_data = await _relay_rpc(
-                    http,
-                    relay_url,
-                    headers,
-                    "pm_sponsorUserOperation",
-                    [user_op, ENTRYPOINT_V07],
-                    rpc_id=2,
-                )
-                if "result" in sponsor_data:
-                    sp = sponsor_data["result"]
-                    user_op["callGasLimit"] = sp["callGasLimit"]
-                    user_op["verificationGasLimit"] = sp[
-                        "verificationGasLimit"
-                    ]
-                    user_op["preVerificationGas"] = sp["preVerificationGas"]
-                    user_op["paymaster"] = sp["paymaster"]
-                    user_op["paymasterData"] = sp["paymasterData"]
-                    user_op["paymasterVerificationGasLimit"] = sp[
-                        "paymasterVerificationGasLimit"
-                    ]
-                    user_op["paymasterPostOpGasLimit"] = sp[
-                        "paymasterPostOpGasLimit"
-                    ]
-                elif "error" in sponsor_data:
-                    raise RuntimeError(
-                        f"Paymaster sponsorship failed: "
-                        f"{sponsor_data['error']}"
-                    )
-                else:
-                    raise RuntimeError(
-                        "pm_sponsorUserOperation returned no result or error"
-                    )
-
-                # 7. Compute UserOp hash and sign with EOA key.
-                #    Delegates to Rust core for both hashing and signing.
-                #    The Rust sign_userop applies EIP-191 Ethereum message
-                #    prefix internally.
-                user_op_hash = compute_user_op_hash(
-                    user_op, ENTRYPOINT_V07, chain_id
-                )
-                user_op["signature"] = sign_user_op_hash(
-                    user_op_hash, eoa_private_key
-                )
-
-                # 8. Submit the signed UserOp to the bundler
-                send_data = await _relay_rpc(
-                    http,
-                    relay_url,
-                    headers,
-                    "eth_sendUserOperation",
-                    [user_op, ENTRYPOINT_V07],
-                    rpc_id=3,
-                )
-
-                if "error" in send_data:
-                    raise RuntimeError(
-                        f"UserOp submission failed: {send_data['error']}"
-                    )
-
-                _record_submitted_nonce(sender, nonce)
-                _mark_sender_deployed(sender)  # #435: a confirmed send ⇒ deployed
-                return send_data.get("result", "")
-
-            except Exception as e:
-                err_str = str(e)
-                retryable = attempt < _MAX_NONCE_RETRIES - 1
-                if "AA25" in err_str and retryable:
-                    # #423: nonce conflict — drop the pipelined nonce and wait
-                    # for the conflicting op to mine (observable as a nonce
-                    # advance) instead of sleeping blind against ~5s blocks.
-                    logger.warning(
-                        "AA25 nonce conflict (attempt %d/%d), retrying...",
-                        attempt + 1, _MAX_NONCE_RETRIES,
-                    )
-                    _reset_sender_nonce(sender)
-                    await _await_nonce_advance(
-                        http, sender, chain_id, min_nonce=nonce + 1,
-                        timeout_s=15.0 if attempt else 6.0,
-                    )
-                    continue
-                if _is_sender_state_error(err_str) and retryable:
-                    # #435: the account is already deployed — re-attaching the
-                    # factory is the fault. Latch deployed and retry WITHOUT
-                    # the factory (next iteration reads the cache). No
-                    # nonce-advance wait — this is not a nonce conflict.
-                    logger.warning(
-                        "sender-state/redeploy error (attempt %d/%d) — marking "
-                        "deployed and retrying without factory: %s",
-                        attempt + 1, _MAX_NONCE_RETRIES, err_str[:200],
-                    )
-                    _mark_sender_deployed(sender)
-                    continue
-                if _is_transient_sim_error(err_str) and retryable:
-                    # #435 review: a -32500 that is NOT a redeploy signal
-                    # (AA13 initCode-failed, AA21 prefund, transient sim) —
-                    # do NOT latch deployed or strip the factory. Rebuild and
-                    # retry with the deploy state unchanged (a fresh account
-                    # keeps its factory, which its deploy depends on).
-                    logger.warning(
-                        "transient -32500 sim error (attempt %d/%d) — retrying "
-                        "with unchanged deploy state: %s",
-                        attempt + 1, _MAX_NONCE_RETRIES, err_str[:200],
-                    )
-                    await asyncio.sleep(min(2 ** attempt, 4))
-                    continue
-                raise
+    return await _submit_userop(
+        kind="single", sender=sender, eoa_address=eoa_address,
+        eoa_private_key=eoa_private_key, payloads=[protobuf_payload],
+        relay_url=relay_url, auth_key_hex=auth_key_hex,
+        wallet_address=wallet_address, chain_id=chain_id, client_id=client_id,
+        session_id=session_id, data_edge_address=data_edge_address,
+        confirm=confirm, profile=profile, deadline_s=deadline_s,
+        fact_ids=fact_ids, on_lost=on_lost,
+    )
 
 
 async def build_and_send_userop_batch(
@@ -958,76 +1813,38 @@ async def build_and_send_userop_batch(
     client_id: str = "python-client",
     session_id: Optional[str] = None,
     data_edge_address: Optional[str] = None,
+    *,
+    profile: str = "background",
+    deadline_s: Optional[float] = None,
+    fact_ids: Optional[list[str]] = None,
+    on_lost: Optional[Callable[[list[str]], Any]] = None,
 ) -> str:
     """Build, sign, and submit a BATCHED UserOperation through the relay.
 
-    Mirrors :func:`build_and_send_userop` but wraps N protobuf payloads
-    into a single ``SimpleAccount.executeBatch(...)`` call rather than
-    emitting N sequential UserOps. Each element of ``protobuf_payloads``
-    becomes one call to the DataEdge contract's ``fallback()`` and emits
-    an independent ``Log(bytes)`` event that the subgraph indexes
-    separately.
+    Wraps N protobuf payloads into one ``SimpleAccount.executeBatch(...)``
+    call (one UserOp, one nonce). A batch always waits for its own fate
+    (``confirm="receipt"``): it returns the op hash only once the op executed
+    successfully.
 
-    **Why batch?**
-
-    1. *UX*: a full 15-fact extraction cycle drops from ~60s to ~8s
-       because all the per-UserOp RPC overhead (nonce fetch, gas price,
-       sponsor call, bundler submit, inclusion wait) is paid once.
-    2. *Gas*: the ~21k base-tx cost is amortized across all N facts.
-    3. *Paymaster budget*: one UserOp counted, not N.
-    4. *Nonce safety*: collapses O(n) AA25 retry potential into O(1).
-
-    **Byte-parity with TS**: the underlying ABI encoding comes from the
-    shared Rust core (``totalreclaw_core.encode_batch_call``). The TS
-    plugin's ``encodeBatchCalls`` compiles to the same executeBatch
-    contract call, so a Python-encoded batch UserOp is byte-identical
-    to the TS equivalent for the same inputs. Verified in
-    ``tests/test_userop_batch.py::test_batch_calldata_fixture_parity``.
-
-    Parameters
-    ----------
-    sender : str
-        Smart Account (CREATE2) address. Same for every call in the batch.
-    eoa_address : str
-        EOA address that owns the Smart Account.
-    eoa_private_key : bytes
-        32-byte private key for the EOA.
-    protobuf_payloads : list[bytes]
-        1..15 raw encrypted protobuf payloads. Each becomes one
-        ``fallback()`` invocation on the DataEdge contract. A batch of
-        1 is byte-identical to :func:`build_and_send_userop` (the Rust
-        core folds it down to ``execute`` rather than ``executeBatch``).
-    relay_url : str
-        TotalReclaw relay URL (e.g. https://api.totalreclaw.xyz).
-    auth_key_hex : str
-        HKDF auth key in hex for Bearer auth.
-    wallet_address : str
-        Smart Account address for X-Wallet-Address header.
-    chain_id : int
-        Target chain (84532 = Base Sepolia, 100 = Gnosis).
-    client_id : str
-        Client identifier for X-TotalReclaw-Client header.
-    session_id : str, optional
-        QA-scoped session tag forwarded as ``X-TotalReclaw-Session``.
-
-    Returns
-    -------
-    str
-        The userOpHash returned by the bundler for the single batched
-        UserOperation. Callers who need per-fact subgraph IDs should use
-        the ``store_fact_batch`` wrapper, which generates UUIDs upstream
-        of this call.
+    The ABI encoding comes from the shared Rust core
+    (``totalreclaw_core.encode_batch_call``), byte-identical to the TS plugin.
 
     Raises
     ------
     ValueError
-        If ``protobuf_payloads`` is empty or exceeds
-        :data:`MAX_BATCH_SIZE`.
+        If ``protobuf_payloads`` is empty or exceeds :data:`MAX_BATCH_SIZE`.
+    UserOpRevertedError
+        The op mined and reverted (not stored; a new op is safe).
+    UserOpDroppedError
+        The bundler dropped the op and its nonce is unused (not stored).
+    UserOpAmbiguousError
+        The op was sent and its fate is unknown at the deadline: the batch
+        MAY be stored. Do not re-send before :func:`resolve_fate` says so.
+    NothingSentError
+        Nothing was sent (:class:`PredecessorPendingError`,
+        :class:`AccountBusyError`, :class:`WriteDeadlineError`).
     RuntimeError
-        Paymaster or bundler rejection (propagated from
-        ``pm_sponsorUserOperation`` / ``eth_sendUserOperation``). AA25 /
-        AA10 nonce-or-sender conflicts are retried up to 3 times before
-        surfacing here; other bundler errors are not retried.
+        Paymaster or bundler rejection.
     """
     if not protobuf_payloads:
         raise ValueError("Batch must contain at least 1 payload")
@@ -1036,297 +1853,16 @@ async def build_and_send_userop_batch(
             f"Batch size {len(protobuf_payloads)} exceeds maximum of "
             f"{MAX_BATCH_SIZE}"
         )
+    return await _submit_userop(
+        kind="batch", sender=sender, eoa_address=eoa_address,
+        eoa_private_key=eoa_private_key, payloads=list(protobuf_payloads),
+        relay_url=relay_url, auth_key_hex=auth_key_hex,
+        wallet_address=wallet_address, chain_id=chain_id, client_id=client_id,
+        session_id=session_id, data_edge_address=data_edge_address,
+        confirm="receipt", profile=profile, deadline_s=deadline_s,
+        fact_ids=fact_ids, on_lost=on_lost,
+    )
 
-    relay_url = relay_url.rstrip("/")
-    rpc_url = _rpc_url_for_chain(chain_id)
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {auth_key_hex}",
-        "X-TotalReclaw-Client": _client_header_value(client_id),
-        "X-Wallet-Address": wallet_address,
-    }
-    if session_id:
-        headers["X-TotalReclaw-Session"] = session_id
-
-    _MAX_NONCE_RETRIES = 3
-
-    # rc.3 — serialize concurrent batch submissions for the same Smart
-    # Account. Same lock shared with ``build_and_send_userop`` so a
-    # single-fact + batch concurrent pair also serialize correctly.
-    sender_lock = await _get_sender_lock(sender)
-
-    async with sender_lock, httpx.AsyncClient(timeout=30.0) as http:
-        # 1. Encode the executeBatch calldata once. Independent of nonce,
-        #    so we compute it before the retry loop. Delegates to the
-        #    Rust core for byte-parity with the TS plugin.
-        call_data = encode_execute_batch_calldata_for_data_edge(
-            protobuf_payloads, data_edge_address
-        )
-
-        # Retry loop for AA25 nonce conflicts.  When two UserOps race for
-        # the same nonce the bundler rejects one with AA25.  Re-fetching
-        # the nonce and rebuilding the UserOp resolves it. Collapses to
-        # O(1) retries for the batch path vs O(n) for sequential sends.
-        for attempt in range(_MAX_NONCE_RETRIES):
-            try:
-                # 2. Get nonce from EntryPoint, pipelined past our own unmined
-                #    submissions via the local cache (#423).
-                chain_nonce = await get_nonce(http, sender, chain_id)
-                nonce = _resolve_submission_nonce(sender, chain_nonce)
-                logger.debug(
-                    "Batch nonce for %s: chain=%d using=%d (batch size %d)",
-                    sender, chain_nonce, nonce, len(protobuf_payloads),
-                )
-
-                # 3. Deployed check (#435): the deployed cache and
-                #    chain_nonce > 0 short-circuit eth_getCode; a getCode RPC
-                #    error now raises instead of silently reading as
-                #    undeployed (which re-attached the factory and reverted
-                #    the batch).
-                is_deployed = await _resolve_is_deployed(
-                    http, rpc_url, sender, chain_nonce
-                )
-
-                # 4. Build partial UserOp with stub signature for gas estimation.
-                _STUB_SIGNATURE = (
-                    "0x"
-                    "fffffffffffffffffffffffffffffff000000000000000000000000000000000"
-                    "7aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                    "1c"
-                )
-                user_op: dict = {
-                    "sender": sender,
-                    "nonce": hex(nonce),
-                    "callData": call_data,
-                    "signature": _STUB_SIGNATURE,
-                }
-
-                if not is_deployed:
-                    user_op["factory"] = SIMPLE_ACCOUNT_FACTORY
-                    user_op["factoryData"] = encode_factory_data(eoa_address)
-                    logger.debug(
-                        "Batch: account not deployed; including factory data"
-                    )
-
-                # 5. Get gas prices from Pimlico
-                gas_data = await _relay_rpc(
-                    http,
-                    relay_url,
-                    headers,
-                    "pimlico_getUserOperationGasPrice",
-                    [],
-                    rpc_id=1,
-                )
-                if "result" in gas_data and gas_data["result"].get("fast"):
-                    fast = gas_data["result"]["fast"]
-                    user_op["maxFeePerGas"] = fast["maxFeePerGas"]
-                    user_op["maxPriorityFeePerGas"] = fast[
-                        "maxPriorityFeePerGas"
-                    ]
-                else:
-                    # Fallback gas prices — slightly higher than the
-                    # single-fact fallback because executeBatch gas
-                    # scales with batch size.
-                    user_op["maxFeePerGas"] = hex(2_000_000_000)
-                    user_op["maxPriorityFeePerGas"] = hex(1_500_000_000)
-
-                # 6. Sponsor the UserOperation via Pimlico's
-                #    pm_sponsorUserOperation. Sponsorship is per-UserOp
-                #    (not per-call), so the paymaster counts this as 1
-                #    op regardless of ``len(protobuf_payloads)``.
-                sponsor_data = await _relay_rpc(
-                    http,
-                    relay_url,
-                    headers,
-                    "pm_sponsorUserOperation",
-                    [user_op, ENTRYPOINT_V07],
-                    rpc_id=2,
-                )
-                if "result" in sponsor_data:
-                    sp = sponsor_data["result"]
-                    user_op["callGasLimit"] = sp["callGasLimit"]
-                    user_op["verificationGasLimit"] = sp[
-                        "verificationGasLimit"
-                    ]
-                    user_op["preVerificationGas"] = sp["preVerificationGas"]
-                    user_op["paymaster"] = sp["paymaster"]
-                    user_op["paymasterData"] = sp["paymasterData"]
-                    user_op["paymasterVerificationGasLimit"] = sp[
-                        "paymasterVerificationGasLimit"
-                    ]
-                    user_op["paymasterPostOpGasLimit"] = sp[
-                        "paymasterPostOpGasLimit"
-                    ]
-                elif "error" in sponsor_data:
-                    raise RuntimeError(
-                        f"Batch paymaster sponsorship failed: "
-                        f"{sponsor_data['error']}"
-                    )
-                else:
-                    raise RuntimeError(
-                        "pm_sponsorUserOperation returned no result or error"
-                    )
-
-                # 7. Compute UserOp hash and sign with EOA key.
-                #    Same hash shape as the single-fact path — only
-                #    callData differs. EntryPoint doesn't care whether
-                #    the inner SimpleAccount call is ``execute`` or
-                #    ``executeBatch``; both hash identically.
-                user_op_hash = compute_user_op_hash(
-                    user_op, ENTRYPOINT_V07, chain_id
-                )
-                user_op["signature"] = sign_user_op_hash(
-                    user_op_hash, eoa_private_key
-                )
-
-                # 8. Submit the signed batched UserOp to the bundler.
-                send_data = await _relay_rpc(
-                    http,
-                    relay_url,
-                    headers,
-                    "eth_sendUserOperation",
-                    [user_op, ENTRYPOINT_V07],
-                    rpc_id=3,
-                )
-
-                if "error" in send_data:
-                    raise RuntimeError(
-                        f"Batch UserOp submission failed: {send_data['error']}"
-                    )
-
-                # Record the accept-time nonce so a CONCURRENT submission for
-                # the same sender pipelines past this one (#423). The receipt
-                # gate below then confirms the op mined before we count the
-                # batch as stored; if the bundler DROPS an accepted op (#431
-                # residual) the accept-time record becomes a gap and is reset
-                # before resubmitting at chain truth.
-                _record_submitted_nonce(sender, nonce)
-                _mark_sender_deployed(sender)  # #435: a send reached the bundler ⇒ deployed
-                batch_hash = send_data.get("result", "")
-
-                # #431: confirm the batch actually mined before counting it as
-                # stored. A DROP (bundler accepted then evicted/restarted/
-                # paymaster-window expired — no successful receipt within the
-                # timeout) leaves the on-chain nonce UNCHANGED, so the
-                # accept-time record above is now a gap that would silently
-                # queue up to ~10 later writes behind it. Reset the cache
-                # (self-heal to chain truth) and resubmit within the retry
-                # budget — the next loop iteration re-reads the chain nonce.
-                # A REVERT (success=false) mined and consumed the nonce, so the
-                # record is correct; let it propagate without resetting.
-                try:
-                    await _await_batch_receipt(
-                        http, relay_url, headers, batch_hash
-                    )
-                except UserOpDroppedError:
-                    # Review finding 1: "no receipt in the window" is NOT
-                    # proof the op didn't mine — a bundler restart or
-                    # receipt-indexing blackout can hide a MINED op for the
-                    # whole window (false drop). Resubmitting after a false
-                    # drop writes the identical payloads on-chain twice.
-                    # Re-read chain truth: only a nonce that did NOT advance
-                    # past the submitted one is a true drop.
-                    fresh_chain_nonce = await get_nonce(http, sender, chain_id)
-                    if fresh_chain_nonce > nonce:
-                        # Submitted nonce was consumed — under the per-sender
-                        # lock that op was OURS, so it mined during the
-                        # blackout. One immediate receipt look decides
-                        # success vs revert; if still unreadable, surface
-                        # ambiguity WITHOUT resubmitting (no cache reset —
-                        # the accept-time record equals chain truth now).
-                        try:
-                            await _await_batch_receipt(
-                                http, relay_url, headers, batch_hash,
-                                timeout_s=0,
-                            )
-                            logger.warning(
-                                "Batch %s receipt arrived late (nonce %d "
-                                "consumed) — treating as mined, no resubmit",
-                                batch_hash, nonce,
-                            )
-                            return batch_hash
-                        except UserOpDroppedError:
-                            raise UserOpAmbiguousError(
-                                f"Batch UserOp {batch_hash} has no readable "
-                                f"receipt but the account nonce advanced "
-                                f"past the submitted value ({nonce} -> "
-                                f"{fresh_chain_nonce}) — it most likely "
-                                f"mined during a receipt blackout. NOT "
-                                f"resubmitting (double-store risk); verify "
-                                f"via the subgraph before retrying."
-                            ) from None
-                    _reset_sender_nonce(sender)
-                    if not is_deployed:
-                        # Review finding 2: this attempt attached the factory
-                        # and the op truly never mined — the accept-time
-                        # deploy latch above was premature for this fresh
-                        # account. Clear it so the resubmit re-derives deploy
-                        # state from chain and re-attaches the factory.
-                        _clear_sender_deployed(sender)
-                    if attempt < _MAX_NONCE_RETRIES - 1:
-                        logger.warning(
-                            "Batch %s dropped by bundler (attempt %d/%d, "
-                            "batch size %d) — nonce cache reset, "
-                            "resubmitting at chain truth",
-                            batch_hash, attempt + 1, _MAX_NONCE_RETRIES,
-                            len(protobuf_payloads),
-                        )
-                        continue
-                    logger.error(
-                        "Batch %s dropped by bundler after %d attempts; "
-                        "nonce cache reset so the next caller targets chain "
-                        "truth",
-                        batch_hash, _MAX_NONCE_RETRIES,
-                    )
-                    raise
-                return batch_hash
-
-            except Exception as e:
-                err_str = str(e)
-                retryable = attempt < _MAX_NONCE_RETRIES - 1
-                if "AA25" in err_str and retryable:
-                    # #423: nonce conflict — drop the pipelined nonce and wait
-                    # for the conflicting op to mine before rebuilding.
-                    logger.warning(
-                        "Batch AA25 nonce conflict (attempt %d/%d, batch size "
-                        "%d), retrying...",
-                        attempt + 1, _MAX_NONCE_RETRIES, len(protobuf_payloads),
-                    )
-                    _reset_sender_nonce(sender)
-                    await _await_nonce_advance(
-                        http, sender, chain_id, min_nonce=nonce + 1,
-                        timeout_s=15.0 if attempt else 6.0,
-                    )
-                    continue
-                if _is_sender_state_error(err_str) and retryable:
-                    # #435: account already deployed — latch deployed and
-                    # retry WITHOUT the factory (the sponsor -32500 root
-                    # cause). No nonce-advance wait; this is not a conflict.
-                    logger.warning(
-                        "Batch sender-state/redeploy error (attempt %d/%d, "
-                        "batch size %d) — marking deployed and retrying "
-                        "without factory: %s",
-                        attempt + 1, _MAX_NONCE_RETRIES,
-                        len(protobuf_payloads), err_str[:200],
-                    )
-                    _mark_sender_deployed(sender)
-                    continue
-                if _is_transient_sim_error(err_str) and retryable:
-                    # #435 review: a non-redeploy -32500 (AA13 initCode-failed,
-                    # AA21 prefund, transient sim) — do NOT latch deployed or
-                    # strip the factory. Rebuild and retry with deploy state
-                    # unchanged so a fresh account keeps its (required) factory.
-                    logger.warning(
-                        "Batch transient -32500 sim error (attempt %d/%d, "
-                        "batch size %d) — retrying with unchanged deploy "
-                        "state: %s",
-                        attempt + 1, _MAX_NONCE_RETRIES,
-                        len(protobuf_payloads), err_str[:200],
-                    )
-                    await asyncio.sleep(min(2 ** attempt, 4))
-                    continue
-                raise
 
 
 # ---------------------------------------------------------------------------

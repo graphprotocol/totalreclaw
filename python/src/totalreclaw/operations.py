@@ -13,7 +13,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,15 @@ from .protobuf import FactPayload, encode_fact_protobuf, encode_tombstone_protob
 from .relay import RelayClient, RelayReadBlocked, SubgraphQueryError, log_rate_limited, parse_subgraph_data
 from .reranker import RerankerCandidate, RerankerResult, default_pin_boost, rerank
 from .tuning_loop import maybe_write_feedback_for_pin
-from .userop import build_and_send_userop, build_and_send_userop_batch, MAX_BATCH_SIZE
+from .userop import (
+    MAX_BATCH_SIZE,
+    NothingSentError,
+    UserOpAmbiguousError,
+    UserOpDroppedError,
+    UserOpRevertedError,
+    build_and_send_userop,
+    build_and_send_userop_batch,
+)
 from .claims_helper import (
     PROTOBUF_VERSION_V4,
     build_canonical_claim_v1,
@@ -310,6 +318,10 @@ async def store_fact(
     extra_metadata: Optional[dict] = None,
     agent_name: Optional[str] = None,
     data_edge_address: Optional[str] = None,
+    confirm: str = "accept",
+    profile: str = "background",
+    deadline_s: Optional[float] = None,
+    on_lost: Optional[Callable[[list[str]], Any]] = None,
 ) -> str:
     """Encrypt and store a fact on-chain via relay.
 
@@ -434,6 +446,11 @@ async def store_fact(
         client_id=relay.client_id,
         session_id=relay.session_id,
         data_edge_address=data_edge_address,
+        confirm=confirm,
+        profile=profile,
+        deadline_s=deadline_s,
+        fact_ids=[fact_id],
+        on_lost=on_lost,
     )
 
     return fact_id
@@ -563,6 +580,16 @@ def is_duplicate_rejection(msg: str) -> bool:
     return bool(_HTTP_409.search(msg)) or "duplicate" in msg or "fingerprint" in msg
 
 
+# #646/#650: errors that must never trigger the halve-and-retry split.
+_NO_SPLIT_ERRORS = (
+    NothingSentError,
+    UserOpAmbiguousError,
+    UserOpDroppedError,
+    UserOpRevertedError,
+)
+_NO_SPLIT_TEXT = ("AA20", "AA25", "AA10", "Already known")
+
+
 async def _store_group_adaptive(store_fn, group: list) -> tuple[list[str], list[str]]:
     """Store one payload group via ``store_fn``; halve-and-retry on a
     simulation-size revert.
@@ -581,9 +608,11 @@ async def _store_group_adaptive(store_fn, group: list) -> tuple[list[str], list[
     single-group store — e.g. a closure over :func:`store_fact_batch`, or the
     client's ``remember_batch``). Returns ``(stored_ids, errors)``.
 
-    A ``-32500`` that is an AA25 (exhausted the userop-layer retry) is NOT a
-    size revert — halving it would be pointless, so any AA25-tagged error is
-    excluded from the size path (PR #461 review Finding 2).
+    A ``-32500`` that is an AA20 / AA25 / AA10 (account-state errors that
+    exhausted the userop-layer retry), an "Already known" bundler reply, or any
+    typed fate / nothing-sent error from the userop layer is NOT a size
+    revert — halving it would be pointless (PR #461 review Finding 2, extended
+    for #646/#650). Both clauses of the size test exclude them.
     """
     try:
         ids = await store_fn(group)
@@ -594,9 +623,16 @@ async def _store_group_adaptive(store_fn, group: list) -> tuple[list[str], list[
             logger.debug("Batch of %d facts rejected as duplicate", len(group))
             return [], []
         msg_l = msg.lower()
-        is_sim_revert = (
-            "reverted during simulation" in msg_l
-            or ("-32500" in msg and "AA25" not in msg)
+        # #646/#650: account-state and fate errors are not "batch too big".
+        # A sponsor-stage AA20 / AA25 / AA10 also says "reverted during
+        # simulation", and halving the batch only multiplies the sends (and,
+        # for a fate error, risks writing the same facts twice).
+        is_fate_or_state_error = (
+            isinstance(e, _NO_SPLIT_ERRORS)
+            or any(tag in msg for tag in _NO_SPLIT_TEXT)
+        )
+        is_sim_revert = not is_fate_or_state_error and (
+            "reverted during simulation" in msg_l or "-32500" in msg
         )
         if is_sim_revert and len(group) > 1:
             mid = len(group) // 2
@@ -663,6 +699,9 @@ async def store_fact_batch(
     source: str = "python-client",
     agent_id: str = "python-client",
     data_edge_address: Optional[str] = None,
+    profile: str = "background",
+    deadline_s: Optional[float] = None,
+    on_lost: Optional[Callable[[list[str]], Any]] = None,
 ) -> list[str]:
     """Encrypt and store N facts in a single batched on-chain UserOp.
 
@@ -852,6 +891,10 @@ async def store_fact_batch(
         client_id=relay.client_id,
         session_id=relay.session_id,
         data_edge_address=data_edge_address,
+        profile=profile,
+        deadline_s=deadline_s,
+        fact_ids=list(fact_ids),
+        on_lost=on_lost,
     )
 
     return fact_ids
@@ -1238,6 +1281,8 @@ async def forget_fact(
     sender: Optional[str] = None,
     chain_id: int = 84532,
     data_edge_address: Optional[str] = None,
+    profile: str = "background",
+    deadline_s: Optional[float] = None,
 ) -> bool:
     """Write a tombstone on-chain to soft-delete a fact.
 
@@ -1273,6 +1318,8 @@ async def forget_fact(
             client_id=relay.client_id,
             session_id=relay.session_id,
             data_edge_address=data_edge_address,
+            profile=profile,
+            deadline_s=deadline_s,
         )
         # Read-after-write: wait until the subgraph has flipped the fact's
         # isActive bit. Forget keeps its bool return contract — a False here
@@ -1681,6 +1728,8 @@ async def _change_claim_status(
     chain_id: int,
     lsh_hasher: Optional[LSHHasher],
     data_edge_address: Optional[str] = None,
+    profile: str = "background",
+    deadline_s: Optional[float] = None,
 ) -> dict:
     """Shared implementation for ``pin_fact`` / ``unpin_fact``.
 
@@ -1966,6 +2015,8 @@ async def _change_claim_status(
         client_id=relay.client_id,
         session_id=relay.session_id,
         data_edge_address=data_edge_address,
+        profile=profile,
+        deadline_s=deadline_s,
     )
 
     # Read-after-write: poll the subgraph until the new (pinned/unpinned)
@@ -2000,6 +2051,8 @@ async def pin_fact(
     chain_id: int = 84532,
     lsh_hasher: Optional[LSHHasher] = None,
     data_edge_address: Optional[str] = None,
+    profile: str = "background",
+    deadline_s: Optional[float] = None,
 ) -> dict:
     """Pin a claim so auto-resolution cannot supersede it.
 
@@ -2054,6 +2107,8 @@ async def pin_fact(
         chain_id=chain_id,
         lsh_hasher=lsh_hasher,
         data_edge_address=data_edge_address,
+        profile=profile,
+        deadline_s=deadline_s,
     )
 
 
@@ -2068,6 +2123,8 @@ async def unpin_fact(
     chain_id: int = 84532,
     lsh_hasher: Optional[LSHHasher] = None,
     data_edge_address: Optional[str] = None,
+    profile: str = "background",
+    deadline_s: Optional[float] = None,
 ) -> dict:
     """Inverse of :func:`pin_fact` — move a pinned claim back to ``active``.
 
@@ -2087,6 +2144,8 @@ async def unpin_fact(
         chain_id=chain_id,
         lsh_hasher=lsh_hasher,
         data_edge_address=data_edge_address,
+        profile=profile,
+        deadline_s=deadline_s,
     )
 
 

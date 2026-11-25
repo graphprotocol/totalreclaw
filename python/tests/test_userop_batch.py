@@ -32,6 +32,7 @@ import httpx
 import pytest
 
 import totalreclaw_core
+from totalreclaw import userop
 from totalreclaw.userop import (
     MAX_BATCH_SIZE,
     build_and_send_userop_batch,
@@ -294,7 +295,7 @@ class TestBatchSendRetry:
     single-fact path."""
 
     @pytest.mark.asyncio
-    async def test_aa25_retries_then_succeeds(self) -> None:
+    async def test_aa25_retries_then_succeeds(self, monkeypatch) -> None:
         """First send returns AA25, second succeeds. The batch sender
         should retry and ultimately return the second hash.
 
@@ -304,6 +305,11 @@ class TestBatchSendRetry:
         # Mock sequence covers 2 attempts: (nonce, code, gas, sponsor,
         # send=AA25) → (nonce, code, gas, sponsor, send=OK).
         call_log: list[tuple[str, dict]] = []
+        # A send-stage AA25 with no op of ours in flight means another writer
+        # holds the nonce: the client waits (bounded) for the chain nonce to
+        # advance. The mocked chain never advances, so keep that wait short.
+        monkeypatch.setattr(userop, "FOREIGN_WAIT_S", 0.02)
+        monkeypatch.setattr(userop, "GATE_POLL_S", 0.005)
 
         def _dispatch(request: httpx.Request) -> httpx.Response:
             try:
@@ -313,6 +319,8 @@ class TestBatchSendRetry:
             method = body.get("method", "")
             call_log.append((method, body))
 
+            if method == "eth_blockNumber":
+                return _ok_eth_call_response("0x3e8")
             if method == "eth_call":
                 # Return nonce=0 or empty code depending on "to" addr.
                 params = body.get("params", [{}])[0]
@@ -407,7 +415,9 @@ class TestBatchSendRetry:
                 chain_id=84532,
             )
 
-        assert result == "0xbatchsuccess"
+        # The client tracks the locally computed hash (the bundler's string is
+        # only logged when it differs).
+        assert result.startswith("0x") and len(result) == 66
         # Exactly two send attempts (first AA25, second OK).
         send_attempts = [m for m, _ in call_log if m == "eth_sendUserOperation"]
         assert len(send_attempts) == 2, (

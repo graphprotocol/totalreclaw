@@ -31,6 +31,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: How the explicit ``remember`` tool confirms its write (#646/#650).
+#: ``"receipt"`` (option B): the tool waits for ITS OWN op to execute, within
+#: the interactive deadline (about one block, ~5-15 s on Gnosis). ``"accept"``
+#: (option A) returns when the bundler accepts the op, and the NEXT write waits
+#: for it instead. This is the single switch between the two; flip it to
+#: ``"accept"`` to restore the fast return. Background writers (mirror,
+#: reconcile, auto-extraction, import) always use ``"accept"`` plus the gate.
+REMEMBER_TOOL_CONFIRM = "receipt"
+
 
 def _real_read_block(client) -> Optional[ReadBlockState]:
     """``client.read_block`` if it's a real ``ReadBlockState``, else
@@ -397,6 +406,14 @@ async def remember(
             logger.debug("remember: entity derivation failed", exc_info=True)
             derived_entities = None
 
+        # The explicit tool waits for its own op (REMEMBER_TOOL_CONFIRM) under
+        # the interactive deadline. A mirrored built-in memory write is a
+        # background copy: it keeps the fast return plus the gate.
+        write_kw = (
+            {}
+            if kwargs.get("_from_mirror")
+            else {"confirm": REMEMBER_TOOL_CONFIRM, "profile": "interactive"}
+        )
         fact_id = await client.remember(
             text,
             embedding=embedding,
@@ -407,6 +424,7 @@ async def remember(
             scope=scope,
             reasoning=reasoning,
             confidence=1.0,  # explicit remember = highest confidence
+            **write_kw,
         )
         record_write(client, fact_id, text, embedding)
         return json.dumps({
@@ -556,7 +574,9 @@ async def forget(args: dict, state: "PluginState", **kwargs) -> str:
         # mirror's forget (a USER.md line was edited, i.e. replaced) passes
         # ``_from_mirror`` and stays out of the ledger.
         result = await client.forget(
-            fact_id, suppress_reextraction=not kwargs.get("_from_mirror", False)
+            fact_id,
+            suppress_reextraction=not kwargs.get("_from_mirror", False),
+            profile="interactive",
         )
         out = {"deleted": result["success"], "fact_id": fact_id}
         pin_state = result.get("pinned") if hasattr(result, "get") else None
@@ -594,7 +614,7 @@ async def pin(args: dict, state: "PluginState", **kwargs) -> str:
         return json.dumps({"error": "No fact_id provided"})
 
     try:
-        result = await client.pin_fact(fact_id)
+        result = await client.pin_fact(fact_id, profile="interactive")
         response = {
             "pinned": True,
             "fact_id": result.get("fact_id"),
@@ -639,7 +659,7 @@ async def unpin(args: dict, state: "PluginState", **kwargs) -> str:
         notice = await pinned_change_notice(client, "unpin", fact_id, args, kwargs)
         if notice is not None:
             return json.dumps(notice)
-        result = await client.unpin_fact(fact_id)
+        result = await client.unpin_fact(fact_id, profile="interactive")
         response = {
             "unpinned": True,
             "fact_id": result.get("fact_id"),
@@ -688,7 +708,9 @@ async def retype(args: dict, state: "PluginState", **kwargs) -> str:
         )
         if notice is not None:
             return json.dumps(notice)
-        result = await client.retype(parsed["fact_id"], parsed["new_type"])
+        result = await client.retype(
+            parsed["fact_id"], parsed["new_type"], profile="interactive"
+        )
         if not result.get("success"):
             return json.dumps({"error": result.get("error", "retype failed")})
         response = {
@@ -737,7 +759,9 @@ async def set_scope(args: dict, state: "PluginState", **kwargs) -> str:
         )
         if notice is not None:
             return json.dumps(notice)
-        result = await client.set_scope(parsed["fact_id"], parsed["new_scope"])
+        result = await client.set_scope(
+            parsed["fact_id"], parsed["new_scope"], profile="interactive"
+        )
         if not result.get("success"):
             return json.dumps({"error": result.get("error", "set_scope failed")})
         response = {
