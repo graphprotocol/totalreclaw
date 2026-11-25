@@ -54,12 +54,15 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
  * spec §3.2 — "re-deriving them is pure risk"):
  *   - `_grantDigest` and the four EIP-712 typehash/domain constants
  *     (parity-tested against TS/Python).
- *   - `_isCallDataInScope` / `_isBatchInScope` / `_inSelectors` — the
+ *   - `_isCallDataInScope` / `_inSelectors` — the outer-selector
+ *     allowlist and single-call scope check.
+ *   - `_isBatchInScope` — ported, then CHANGED in internal#542: the
  *     per-inner-call `executeBatch` validation (cred-6 invariant: EVERY
- *     inner call's target, zero-value and selector are checked
- *     individually; one out-of-scope inner fails the whole batch. No
- *     outer-selector shortcut, no first-inner sampling, no partial
- *     execution).
+ *     inner call's target and zero-value are checked individually, the
+ *     same rule as single-call `execute`; one out-of-scope inner fails
+ *     the whole batch. NO inner-selector check -- DataEdge inner calls
+ *     are raw protobuf with no selector. No outer-selector shortcut, no
+ *     first-inner sampling, no partial execution).
  *   - `_recoverEcdsa` with the EIP-2 malleability guard (kept as the
  *     original hand-rolled assembly implementation rather than swapped
  *     for `ECDSA.tryRecover`, per the spec's explicit "lift verbatim"
@@ -184,7 +187,11 @@ contract TotalReclawAccount is SimpleAccount {
         uint256 issuedAt; // informational -- never compared to block.timestamp
         address target; // scope.target (DataEdge address)
         uint256 valueMax; // always 0 per spec
-        bytes4[] selectors; // scope.selectors (execute, executeBatch)
+        // scope.selectors (execute, executeBatch). Gates ONLY the account's
+        // OUTER entry points; inner calldata is unrestricted, so the grant
+        // target must be a contract where every function is safe for the
+        // session key to call AS THE ACCOUNT.
+        bytes4[] selectors;
     }
 
     /// @custom:storage-location erc7201:totalreclaw.account.sessionkeys
@@ -224,7 +231,10 @@ contract TotalReclawAccount is SimpleAccount {
         uint8 version;
         address account;
         address signer;
-        address target;
+        address target; // every function on it must be safe to call as the account
+        // Allowlist for the account's OUTER entry points (execute /
+        // executeBatch) only. Inner calldata (the target's own selector or
+        // raw payload) is NOT restricted by it.
         bytes4[] selectors;
         uint256 valueMax;
         uint256 nonce;
