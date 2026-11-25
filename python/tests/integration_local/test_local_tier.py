@@ -147,10 +147,14 @@ async def test_l1_dropped_accepted_op(stack, caplog):
                                  on_lost=lambda ids: lost.append(ids))
     await asyncio.sleep(8)
     assert any("dropped" in r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR)
-    assert len(stub.world.executed_payloads) == 1, "only the second write executed"
-    # real quota row: today keeps the dropped op's debit; #87 refunds only reverts; the
-    # drop refund needs the nonce to be consumed, which write 2 did (it reused the nonce)
-    expected = {"today": 2, "pr87": 2, "pr87_drops": 1}[VARIANT]
+    # the dropped write (bundler status "rejected", nonce unused) is proven dropped and
+    # sent again once: both writes executed, each exactly once
+    assert len(stub.world.executed_payloads) == 2
+    assert all(stub.world.executed_payloads.count(p) == 1 for p in stub.world.executed_payloads)
+    # real quota row: dropped op's debit + write 2 + the re-send. Today keeps the dropped
+    # op's debit; #87 refunds only reverts; the drop refund needs the nonce to be consumed,
+    # which the later writes did (they reused the nonce)
+    expected = {"today": 3, "pr87": 3, "pr87_drops": 2}[VARIANT]
     assert await wait_quota(a.sa, expected) == expected, debits(a.sa)
 
 

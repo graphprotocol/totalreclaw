@@ -400,13 +400,22 @@ async def verify_account(acct: Account, spy: Spy, *, expect_extra_sends: Optiona
     ev_hashes = [e["topics"][1].lower() for e in events]
     ev_success = [int(e["data"][2 + 64:2 + 128], 16) != 0 for e in events]
     c = res["checks"]
-    c["1_nonce_equals_accepted"] = (nonce == len(accepted), f"nonce={nonce} accepted={len(accepted)}")
-    extra = set(ev_hashes) - reported_hashes
-    missing = reported_hashes - set(ev_hashes)
+    unknown_hashes = {s["hash"].lower() for s in unknown}
+    allowed = reported_hashes | unknown_hashes
+    extra = set(ev_hashes) - allowed
+    missing = reported_hashes - set(ev_hashes)           # accepted but never executed (replaced / dropped)
+    unknown_landed = unknown_hashes & set(ev_hashes)     # sent, answer lost, executed anyway
+    c["1_nonce_equals_executed_ops"] = (
+        nonce == len(ev_hashes),
+        f"nonce={nonce} executed_events={len(ev_hashes)} accepted_sends={len(accepted)} "
+        f"unknown_sends_landed={len(unknown_landed)}")
     c["2_one_event_per_hash_all_success"] = (
-        not extra and not missing and len(ev_hashes) == len(set(ev_hashes)) and all(ev_success),
-        f"events={len(ev_hashes)} reported={len(reported_hashes)} extra={len(extra)} missing={len(missing)} "
-        f"reverted={ev_success.count(False)}")
+        not extra and len(ev_hashes) == len(set(ev_hashes)) and all(ev_success),
+        f"events={len(ev_hashes)} accepted={len(reported_hashes)} extra={len(extra)} "
+        f"accepted_never_executed={len(missing)} reverted={ev_success.count(False)}")
+    if missing:
+        res["notes"].append(f"{len(missing)} accepted op(s) never executed (replaced or dropped); "
+                            f"check 4 proves their facts landed another way")
     nonce0 = [s for s in accepted if s["nonce"] == 0]
     dep_ok = len(deploys) == 1 and (not nonce0 or deploys[0]["topics"][1].lower() == nonce0[0]["hash"].lower())
     c["3_one_deploy_in_nonce0_op"] = (dep_ok, f"deploys={len(deploys)}")
@@ -484,13 +493,13 @@ async def s5(spy: Spy, accts: list) -> dict:
             "ops": sum(1 for s in f["sends"] if s["accepted"]), "latency": summarize_times(a.write_secs)}
 
 
-async def spawn_child(a: Account, texts: list, *, mode: str = "single", print_accepted: bool = False):
+async def spawn_child(a: Account, texts: list, *, mode: str = "single", print_accepted: bool = False, final_settle: bool = False):
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "PYTHONPATH", "LANG", "VIRTUAL_ENV")}
     proc = await asyncio.create_subprocess_exec(
         sys.executable, __file__, "--worker",
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
     )
-    payload = json.dumps({"phrase": a.phrase, "texts": texts, "mode": mode, "print_accepted": print_accepted})
+    payload = json.dumps({"phrase": a.phrase, "texts": texts, "mode": mode, "print_accepted": print_accepted, "final_settle": final_settle})
     proc.stdin.write(payload.encode() + b"\n")
     await proc.stdin.drain()
     proc.stdin.close()
@@ -514,7 +523,7 @@ async def finish_child(proc, a: Account, *, timeout: float = 900) -> dict:
 
 async def s6(spy: Spy, accts: list) -> dict:
     a = Account("S6"); accts.append(a); await a.prepare()
-    procs = [await spawn_child(a, [a.text(f"p{p}-{i}") for i in range(5)]) for p in range(3)]
+    procs = [await spawn_child(a, [a.text(f"p{p}-{i}") for i in range(5)], final_settle=True) for p in range(3)]
     results = await asyncio.gather(*[finish_child(p, a) for p in procs])
     f = spy.for_sender(a.sa)
     child_aa = sum(len([e for e in r.get("sponsor_errors", [])]) for r in results)
@@ -681,6 +690,13 @@ async def worker_main() -> int:
         except Exception as e:  # noqa: BLE001
             errors.append(f"{type(e).__name__}: {redact(e)[:240]}")
         secs.append(time.monotonic() - t0)
+    if cfg.get("final_settle"):
+        # what the next session start / drain does: settle earlier writes (a write
+        # proven replaced or dropped is sent again), so a trailing write is not lost
+        try:
+            await client.settle_pending_writes(profile="background")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"final settle: {type(e).__name__}: {redact(e)[:200]}")
     sa = (client._wallet_address or "").lower()
     f = spy.for_sender(sa)
     print("RESULT " + json.dumps({"ids": ids, "errors": errors, "secs": secs, "sends": f["sends"],
