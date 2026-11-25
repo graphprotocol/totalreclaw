@@ -76,7 +76,7 @@ TotalReclaw uses **LLM extraction** (not pattern matching) to identify facts fro
 2. **Chunk**: split each conversation into batches of ~20 messages (`CHUNK_SIZE`). Large conversations become multiple chunks (`part 1/N`, `part 2/N`, ...).
 3. **Extract**: each chunk is run through an LLM (the host's LLM on MCP integrations; your gateway's LLM on OpenClaw; Hermes' configured LLM otherwise). The LLM identifies facts, preferences, decisions, goals, and context.
 4. **Triage + profile**: extracted facts are deduplicated and merged into a coherent profile via the smart-import pipeline (see [`rust/totalreclaw-core/src/smart_import.rs`](https://github.com/graphprotocol/totalreclaw/blob/main/rust/totalreclaw-core/src/smart_import.rs) for the schema).
-5. **Encrypt + store**: each surviving fact is encrypted with your TotalReclaw key (XChaCha20-Poly1305), fingerprinted for dedup, and stored.
+5. **Encrypt + store**: each surviving fact is encrypted with your TotalReclaw key (XChaCha20-Poly1305), fingerprinted for dedup (not on the MCP server in self-hosted mode, #784), and stored.
 
 ### What to expect
 
@@ -128,14 +128,14 @@ Imported memories behave identically to natively stored ones:
 - **Searchable immediately** via `totalreclaw_recall`
 - **Encrypted** with your recovery phrase (XChaCha20-Poly1305)
 - **Tagged** with `import_source:chatgpt` for filtering
-- **Deduplicated** -- re-importing the same data skips duplicates automatically (content fingerprint)
+- **Deduplicated** -- re-importing the same data skips duplicates automatically (content fingerprint), except imports through the MCP server in self-hosted mode, which currently store duplicates ([#784](https://github.com/graphprotocol/totalreclaw/issues/784))
 
 ---
 
 ## Abort + resume
 
-- **Abort**: say "stop the import" — the background loop exits at the next chunk boundary. Already-stored facts stay (dedup makes resume idempotent).
-- **Resume**: re-run the import with the same file. State persists in `~/.totalreclaw/import-state/<import_id>.json`; the loop picks up from the last completed chunk. On OpenClaw + Hermes, restarts auto-resume if the previous run was less than 1 hour ago.
+- **Abort**: say "stop the import" — the background loop exits at the next chunk boundary. Already-stored facts stay (dedup makes resume idempotent, except imports through the MCP server in self-hosted mode, which currently store duplicates ([#784](https://github.com/graphprotocol/totalreclaw/issues/784))).
+- **Resume**: re-run the import with the same file (not in self-hosted MCP mode, where it stores duplicates, #784). State persists in `~/.totalreclaw/import-state/<import_id>.json`; the loop picks up from the last completed chunk. On OpenClaw + Hermes, restarts auto-resume if the previous run was less than 1 hour ago.
 
 ---
 

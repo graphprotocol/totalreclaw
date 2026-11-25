@@ -181,7 +181,7 @@ INVOKE WHEN USER SAYS:
 - "import my ChatGPT memories" / "here's my Mem0 export"
 - "I pasted my Claude memory"
 WHEN NOT TO USE: TotalReclaw backup → totalreclaw_import. Single fact → totalreclaw_remember.
-DOES: adapter parses+stores (unless dry_run). Fingerprint dedup.
+DOES: adapter parses+stores (unless dry_run).
 ALWAYS dry_run=true first.`;
 
 export const IMPORT_TOOL_DESCRIPTION = `Restore from totalreclaw_export backup (JSON/Markdown). Self-hosted only (managed service refuses it).
@@ -192,7 +192,7 @@ INVOKE WHEN USER SAYS:
 WHEN NOT TO USE:
 - Mem0/ChatGPT/Claude → totalreclaw_import_from
 - single fact → totalreclaw_remember
-DOES: parse JSON/Markdown (auto), store + fingerprint dedup.
+DOES: parse JSON/Markdown (auto), store.
 PARAMS: content (req), format, merge_strategy, validate_only.`;
 
 export const SUPPORT_TOOL_DESCRIPTION = `Support contact, docs, troubleshooting.

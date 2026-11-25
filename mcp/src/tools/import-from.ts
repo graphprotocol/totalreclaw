@@ -112,7 +112,7 @@ export const importFromToolDefinition = {
     destructiveHint: false,
     // Not idempotent: in self-hosted (HTTP) mode client.remember() sends no
     // content fingerprint, so re-importing the same file stores every fact
-    // again (#784). Managed mode dedups on the fingerprint, self-hosted does not.
+    // again (#784). Managed-mode writes dedup on the fingerprint (this tool refuses in managed mode); self-hosted does not.
     idempotentHint: false,
   },
 };

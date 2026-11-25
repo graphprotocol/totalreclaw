@@ -258,7 +258,7 @@
   },
   {
     "name": "totalreclaw_import",
-    "description": "Restore from totalreclaw_export backup (JSON/Markdown). Self-hosted only (managed service refuses it).\nINVOKE WHEN USER SAYS:\n- \"restore memories from this backup\" / \"import this JSON\"\n- \"I exported from another TotalReclaw account\"\n- \"put the export back\"\nWHEN NOT TO USE:\n- Mem0/ChatGPT/Claude → totalreclaw_import_from\n- single fact → totalreclaw_remember\nDOES: parse JSON/Markdown (auto), store + fingerprint dedup.\nPARAMS: content (req), format, merge_strategy, validate_only.",
+    "description": "Restore from totalreclaw_export backup (JSON/Markdown). Self-hosted only (managed service refuses it).\nINVOKE WHEN USER SAYS:\n- \"restore memories from this backup\" / \"import this JSON\"\n- \"I exported from another TotalReclaw account\"\n- \"put the export back\"\nWHEN NOT TO USE:\n- Mem0/ChatGPT/Claude → totalreclaw_import_from\n- single fact → totalreclaw_remember\nDOES: parse JSON/Markdown (auto), store.\nPARAMS: content (req), format, merge_strategy, validate_only.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -302,7 +302,7 @@
   },
   {
     "name": "totalreclaw_import_from",
-    "description": "Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, JSON/CSV. Self-hosted only (managed service refuses it, even dry_run).\nINVOKE WHEN USER SAYS:\n- \"migrate memory from [Mem0/ChatGPT/Claude]\"\n- \"import my ChatGPT memories\" / \"here's my Mem0 export\"\n- \"I pasted my Claude memory\"\nWHEN NOT TO USE: TotalReclaw backup → totalreclaw_import. Single fact → totalreclaw_remember.\nDOES: adapter parses+stores (unless dry_run). Fingerprint dedup.\nALWAYS dry_run=true first.",
+    "description": "Import from Mem0, MCP Memory, ChatGPT, Claude, Gemini, JSON/CSV. Self-hosted only (managed service refuses it, even dry_run).\nINVOKE WHEN USER SAYS:\n- \"migrate memory from [Mem0/ChatGPT/Claude]\"\n- \"import my ChatGPT memories\" / \"here's my Mem0 export\"\n- \"I pasted my Claude memory\"\nWHEN NOT TO USE: TotalReclaw backup → totalreclaw_import. Single fact → totalreclaw_remember.\nDOES: adapter parses+stores (unless dry_run).\nALWAYS dry_run=true first.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -546,7 +546,7 @@
     "annotations": {
       "readOnlyHint": false,
       "destructiveHint": false,
-      "idempotentHint": true
+      "idempotentHint": false
     }
   },
   {
