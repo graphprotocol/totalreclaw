@@ -212,10 +212,11 @@ class ConfirmationStore:
             if tok_conv is not None and tok_conv != conv:
                 return "conversation_mismatch"
             # Per-conversation counter only if ingest_turn has recorded a turn
-            # for this conversation id in this process; otherwise the
+            # for this conversation id in this process and it was not reset; otherwise the
             # process-wide counter (the host may not pass the same id to tools
             # and to ingest_turn).
-            if tok_conv is not None and tok_conv in self._conv_turns:
+            if tok_conv is not None and self._conv_turns.get(tok_conv, -1) >= issued_conv_turn:
+                # (a reset or evicted counter reads below the issue-time value)
                 counter, issued, used = self._conv_turns[tok_conv], issued_conv_turn, "conversation"
             else:
                 counter, issued, used = self._turns, issued_turn, "global"

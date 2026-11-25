@@ -735,3 +735,15 @@ class TestConfirmTokenBinding:
         args["confirm_token"] = second["confirm_token"]
         assert (await call(args, session_id="chat-b"))["blocked"] == "sensitive"
         client.remember.assert_not_called()
+
+
+def test_evicted_conversation_counter_falls_back_to_global(monkeypatch) -> None:
+    monkeypatch.setattr(pii, "_MAX_TRACKED_CONVERSATIONS", 2)
+    s = pii.ConfirmationStore(clock=_Clock())
+    s.note_turn_completed("A")
+    s.note_turn_completed("A")
+    t = s.issue("payment_card", CARD_TEXT, "A")  # issued at conv turn 2
+    s.note_turn_completed("B")
+    s.note_turn_completed("C")  # evicts A's counter
+    assert "A" not in s._conv_turns
+    assert s.redeem(t, "payment_card", CARD_TEXT, "A") is None  # global advanced

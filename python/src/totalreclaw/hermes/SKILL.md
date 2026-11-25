@@ -31,7 +31,7 @@ NEVER echo / generate / ask the user to paste a recovery phrase in chat. NEVER i
    - Decisions the user wants ledgered with reasoning ("we picked X because Y")
    - Anything the user marks with imperative language: "remember", "save", "store", "don't forget", "keep this"
 
-**Sensitive values (card numbers, IBANs, API keys, passwords, IDs).** `totalreclaw_remember` refuses them and returns `blocked: "sensitive"` with a message and a `confirm_token`. Relay the message to the user and wait. Only if they confirm in a later message, call it again with `allow_sensitive=true` and that `confirm_token`; without a token from an earlier turn the override is ignored.
+**Sensitive values (card numbers, IBANs, API keys, passwords, IDs).** `totalreclaw_remember` refuses them and returns `blocked: "sensitive"` with a message and a `confirm_token`. Relay the message to the user and wait. Only if they confirm in a later message, call it again with the exact same text, `allow_sensitive=true` and that `confirm_token`; without a token from an earlier turn the override is ignored.
 
 **Don't double-call.** If auto-extraction just fired (recent log lines show extraction), skip the manual `totalreclaw_remember` — embedding dedup will silently drop the duplicate, but you waste a write against quota.
 
