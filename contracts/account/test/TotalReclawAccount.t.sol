@@ -889,6 +889,45 @@ contract TotalReclawAccountTest is Test {
         }
     }
 
+    /// @dev Realistic-size validation gas (internal#542 review): facts run to
+    ///      several KB and a batch to ~32 KB. Validation must stay well inside
+    ///      a sane verificationGasLimit; bound is deliberately loose, the logged
+    ///      numbers are the signal.
+    function _batchOfSized(uint256 n, uint256 size) internal pure returns (bytes memory) {
+        address[] memory targets = new address[](n);
+        uint256[] memory values = new uint256[](n);
+        bytes[] memory datas = new bytes[](n);
+        for (uint256 i = 0; i < n; i++) {
+            targets[i] = DATA_EDGE;
+            datas[i] = new bytes(size);
+            datas[i][0] = 0x0a;
+        }
+        return abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+    }
+
+    function _validateGas(bytes memory cd, string memory label) internal returns (uint256 used) {
+        bytes32 h = keccak256(bytes(label));
+        PackedUserOperation memory op = _makePackedOp(cd, _signWithKey(signerPriv, h));
+        vm.prank(ENTRY_POINT);
+        uint256 g0 = gasleft();
+        uint256 vd = account.validateUserOp(op, h, 0);
+        used = g0 - gasleft();
+        assertEq(vd, 0, label);
+    }
+
+    function test_batch_validation_gas_realistic_sizes() public {
+        _installGrant(1);
+        uint256 small = _validateGas(_batchOfSized(8, 4096), "gas-8x4k"); // ~32 KB
+        uint256 mid = _validateGas(_batchOfSized(4, 8192), "gas-4x8k"); // ~32 KB
+        uint256 many = _validateGas(_batchOfSized(30, 1024), "gas-30x1k"); // ~30 KB
+        emit log_named_uint("validate gas, 8 x 4KB (~32KB)", small);
+        emit log_named_uint("validate gas, 4 x 8KB (~32KB)", mid);
+        emit log_named_uint("validate gas, 30 x 1KB", many);
+        assertLt(small, 1_000_000);
+        assertLt(mid, 1_000_000);
+        assertLt(many, 1_000_000);
+    }
+
     function test_batch_of_30_validates() public {
         _installGrant(1);
         assertEq(_validate(_batchOf(30), "batch-30"), 0);

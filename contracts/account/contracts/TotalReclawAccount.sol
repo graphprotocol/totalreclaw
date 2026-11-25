@@ -588,9 +588,9 @@ contract TotalReclawAccount is SimpleAccount {
             // validated. First non-match -> false; no partial-execution
             // semantics, no outer-selector-passes shortcut.
             try this._decodeExecuteBatch(callData[4:]) returns (
-                address[] memory targets, uint256[] memory values, bytes[] memory datas
+                address[] memory targets, uint256[] memory values, uint256 datasLength
             ) {
-                return _isBatchInScope(targets, values, datas, grantTarget);
+                return _isBatchInScope(targets, values, datasLength, grantTarget);
             } catch {
                 return false;
             }
@@ -600,13 +600,20 @@ contract TotalReclawAccount is SimpleAccount {
     }
 
     /// @dev Public-but-only-self entry for the try/catch decode of the
-    ///      executeBatch payload. Ported verbatim.
+    ///      executeBatch payload. The full `abi.decode` is kept so that every
+    ///      offset and length (including each `datas` element) is validated
+    ///      exactly as strictly as before, but only `datas.length` is
+    ///      returned: the inner payloads are never inspected, so copying them
+    ///      back out through the return data (internal#542) was wasted gas
+    ///      that grew with payload size.
     function _decodeExecuteBatch(bytes calldata payload)
         external
         pure
-        returns (address[] memory targets, uint256[] memory values, bytes[] memory datas)
+        returns (address[] memory targets, uint256[] memory values, uint256 datasLength)
     {
+        bytes[] memory datas;
         (targets, values, datas) = abi.decode(payload, (address[], uint256[], bytes[]));
+        datasLength = datas.length;
     }
 
     /// @dev Per-inner-call scope assertion -- the load-bearing cred-6
@@ -620,12 +627,12 @@ contract TotalReclawAccount is SimpleAccount {
     function _isBatchInScope(
         address[] memory targets,
         uint256[] memory values,
-        bytes[] memory datas,
+        uint256 datasLength,
         address grantTarget
     ) internal pure returns (bool) {
         uint256 n = targets.length;
         if (n == 0) return false;
-        if (values.length != n || datas.length != n) return false;
+        if (values.length != n || datasLength != n) return false;
 
         for (uint256 i = 0; i < n; i++) {
             if (targets[i] != grantTarget) return false;
