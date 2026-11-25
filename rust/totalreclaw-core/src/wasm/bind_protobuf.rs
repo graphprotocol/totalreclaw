@@ -25,10 +25,21 @@ use super::*;
 /// Returns the protobuf bytes as a Uint8Array.
 #[wasm_bindgen(js_name = "encodeFactProtobuf")]
 pub fn wasm_encode_fact_protobuf(json: &str) -> Result<Vec<u8>, JsError> {
+    Ok(protobuf::encode_fact_protobuf(&fact_payload_from_json(json)?))
+}
+
+/// Encode a scheme-1 fact: field 5 sorted and deduplicated, field 14 `index_scheme = 1`.
+/// Same JSON as `encodeFactProtobuf`; `blind_indices` must be keyed tags.
+#[wasm_bindgen(js_name = "encodeFactProtobufKeyed")]
+pub fn wasm_encode_fact_protobuf_keyed(json: &str) -> Result<Vec<u8>, JsError> {
+    Ok(protobuf::encode_fact_protobuf_keyed(&fact_payload_from_json(json)?))
+}
+
+fn fact_payload_from_json(json: &str) -> Result<protobuf::FactPayload, JsError> {
     let payload: FactPayloadJson =
         serde_json::from_str(json).map_err(|e| JsError::new(&format!("invalid JSON: {}", e)))?;
 
-    let fact = protobuf::FactPayload {
+    Ok(protobuf::FactPayload {
         id: payload.id,
         timestamp: payload.timestamp,
         owner: payload.owner,
@@ -42,9 +53,7 @@ pub fn wasm_encode_fact_protobuf(json: &str) -> Result<Vec<u8>, JsError> {
         version: payload
             .version
             .unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),
-    };
-
-    Ok(protobuf::encode_fact_protobuf(&fact))
+    })
 }
 
 /// Encode a tombstone protobuf for soft-deleting a fact.
@@ -56,6 +65,16 @@ pub fn wasm_encode_fact_protobuf(json: &str) -> Result<Vec<u8>, JsError> {
 #[wasm_bindgen(js_name = "encodeTombstoneProtobuf")]
 pub fn wasm_encode_tombstone_protobuf(fact_id: &str, owner: &str, version: Option<u32>) -> Vec<u8> {
     protobuf::encode_tombstone_protobuf(
+        fact_id,
+        owner,
+        version.unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),
+    )
+}
+
+/// Encode a scheme-1 tombstone: like `encodeTombstoneProtobuf` plus field 14 `index_scheme = 1`.
+#[wasm_bindgen(js_name = "encodeTombstoneProtobufKeyed")]
+pub fn wasm_encode_tombstone_protobuf_keyed(fact_id: &str, owner: &str, version: Option<u32>) -> Vec<u8> {
+    protobuf::encode_tombstone_protobuf_keyed(
         fact_id,
         owner,
         version.unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),

@@ -233,6 +233,23 @@ pub fn generate_search_trapdoors(
     Ok(trapdoors)
 }
 
+/// Keyed search trapdoors (index scheme 1): stem tags of the query plus keyed
+/// LSH bucket tags, combined, sorted and deduplicated. Sort happens here so the
+/// host's 5-per-batch split cannot reveal which family a tail batch belongs to.
+/// The host may add entity tags with [`crate::blind::BlindIndexer::entity_tag`]
+/// and must re-sort with [`crate::blind::sort_dedup_tags`] before batching.
+pub fn generate_search_trapdoors_keyed(
+    query: &str,
+    query_embedding: &[f32],
+    indexer: &crate::blind::BlindIndexer,
+    lsh_hasher: &LshHasher,
+) -> Result<Vec<String>> {
+    let mut trapdoors = indexer.stem_tags(query);
+    let embedding_f64: Vec<f64> = query_embedding.iter().map(|&f| f as f64).collect();
+    trapdoors.extend(lsh_hasher.hash_keyed(&embedding_f64)?);
+    Ok(blind::sort_dedup_tags(trapdoors))
+}
+
 /// Generate trapdoors for multiple query reformulations in one call.
 ///
 /// Convenience batch wrapper around `generate_search_trapdoors` for the

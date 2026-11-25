@@ -7,10 +7,12 @@
 //!   2. Random bytes -> Box-Muller transform -> Gaussian hyperplanes
 //!   3. Embedding dot hyperplane -> sign bit -> N-bit signature per table
 //!   4. Signature -> "lsh_t{table}_{signature}" -> SHA-256 -> blind hash hex
+//!      (legacy `hash`), or HMAC-SHA256 under `lshBucketKey` (`hash_keyed`,
+//!      index scheme 1; internal#573)
 
 use sha2::{Digest, Sha256};
 
-use crate::crypto::derive_random_bytes;
+use crate::crypto::{derive_lsh_bucket_key, derive_random_bytes, SecretKey};
 use crate::{Error, Result};
 
 /// Default number of independent hash tables.
@@ -32,6 +34,9 @@ pub struct LshHasher {
     dims: usize,
     n_tables: usize,
     n_bits: usize,
+    /// `lshBucketKey`, derived from the seed. Never exposed, never printed
+    /// (this struct deliberately has no `Debug`).
+    bucket_key: SecretKey,
 }
 
 impl LshHasher {
@@ -79,13 +84,39 @@ impl LshHasher {
             dims,
             n_tables,
             n_bits,
+            bucket_key: derive_lsh_bucket_key(seed)?,
         })
     }
 
-    /// Hash an embedding vector to blind-hashed bucket IDs.
+    /// Hash an embedding vector to blind-hashed bucket IDs (legacy, UNKEYED).
     ///
-    /// Returns `n_tables` hex strings (one SHA-256 blind hash per table).
+    /// Returns `n_tables` hex strings (one plain SHA-256 per table). The
+    /// bucket id space is small enough to enumerate, so these tags are
+    /// invertible by anyone. Index scheme 1 uses [`Self::hash_keyed`]; this
+    /// stays until core 3.0.0 and is not called by any keyed path.
     pub fn hash(&self, embedding: &[f64]) -> Result<Vec<String>> {
+        Ok(self
+            .bucket_ids(embedding)?
+            .iter()
+            .map(|id| hex::encode(Sha256::digest(id.as_bytes())))
+            .collect())
+    }
+
+    /// Hash an embedding vector to KEYED bucket tags (index scheme 1).
+    ///
+    /// `tag_t = hex(HMAC-SHA256(lshBucketKey, "lsh_t{t}_{bits}"))`, one per
+    /// table, in table order (the caller sorts with the other tags). Bucket
+    /// equality is preserved exactly, so recall is unchanged.
+    pub fn hash_keyed(&self, embedding: &[f64]) -> Result<Vec<String>> {
+        Ok(self
+            .bucket_ids(embedding)?
+            .iter()
+            .map(|id| self.bucket_key.hmac_hex(id.as_bytes()))
+            .collect())
+    }
+
+    /// `"lsh_t{t}_{bits}"` for every table.
+    fn bucket_ids(&self, embedding: &[f64]) -> Result<Vec<String>> {
         if embedding.len() != self.dims {
             return Err(Error::Lsh(format!(
                 "embedding dimension mismatch: expected {}, got {}",
@@ -110,11 +141,7 @@ impl LshHasher {
                 signature.push(if dot >= 0.0 { '1' } else { '0' });
             }
 
-            let bucket_id = format!("lsh_t{}_{}", t, signature);
-
-            // SHA-256 blind hash
-            let hash = Sha256::digest(bucket_id.as_bytes());
-            results.push(hex::encode(hash));
+            results.push(format!("lsh_t{}_{}", t, signature));
         }
 
         Ok(results)

@@ -29,6 +29,21 @@ pub(crate) fn py_generate_search_trapdoors(
     search::generate_search_trapdoors(query, &query_embedding, &lsh_hasher.inner).map_err(to_pyerr)
 }
 
+/// Keyed search trapdoors (index scheme 1): stem tags + keyed LSH tags, sorted
+/// and deduplicated (list of hex strings).
+#[cfg(feature = "managed")]
+#[pyfunction]
+#[pyo3(name = "generate_search_trapdoors_keyed")]
+pub(crate) fn py_generate_search_trapdoors_keyed(
+    query: &str,
+    query_embedding: Vec<f32>,
+    indexer: &PyBlindIndexer,
+    lsh_hasher: &PyLshHasher,
+) -> PyResult<Vec<String>> {
+    search::generate_search_trapdoors_keyed(query, &query_embedding, &indexer.inner, &lsh_hasher.inner)
+        .map_err(to_pyerr)
+}
+
 /// Parse a blind index search GraphQL response into SubgraphFact list.
 ///
 /// Args:

@@ -30,6 +30,14 @@ const ENCRYPTION_KEY_INFO: &[u8] = b"totalreclaw-encryption-key-v1";
 const DEDUP_KEY_INFO: &[u8] = b"openmemory-dedup-v1";
 const LSH_SEED_INFO: &[u8] = b"openmemory-lsh-seed-v1";
 
+// Keyed-blind-index scheme 1 (internal#573). Each label is used exactly once.
+// The input key of each derivation is a vault key (never the BIP-39 seed), so
+// none can collide with the four derivations above. Changing a label is a new
+// index scheme (protobuf field 14 = 2).
+const BLIND_INDEX_KEY_INFO: &[u8] = b"totalreclaw-blind-index-v1";
+const LSH_BUCKET_KEY_INFO: &[u8] = b"totalreclaw-lsh-bucket-key-v1";
+const CONTENT_FP_KEY_V2_INFO: &[u8] = b"totalreclaw-content-fp-v2";
+
 const NONCE_LENGTH: usize = 24;
 const TAG_LENGTH: usize = 16;
 
@@ -154,6 +162,51 @@ pub fn derive_lsh_seed(mnemonic: &str, salt: &[u8; 32]) -> Result<[u8; 32]> {
 pub fn compute_auth_key_hash(auth_key: &[u8; 32]) -> String {
     let hash = Sha256::digest(auth_key);
     hex::encode(hash)
+}
+
+/// A 32-byte secret that cannot be printed, logged, serialized or copied.
+///
+/// Deliberately no `Debug`, `Display`, `Clone`, `Serialize` or raw-key getter.
+/// Holds `indexKey`, `lshBucketKey` and `fpKeyV2`.
+pub(crate) struct SecretKey([u8; 32]);
+
+impl SecretKey {
+    /// `hex(HMAC-SHA256(key, message))`.
+    pub(crate) fn hmac_hex(&self, message: &[u8]) -> String {
+        use hmac::{Hmac, Mac};
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.0)
+            .expect("HMAC accepts any key length");
+        mac.update(message);
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    /// Test-only raw access, for the known-answer key vectors.
+    #[cfg(test)]
+    pub(crate) fn expose_for_test(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// The one HKDF shape for every keyed-blind-index key:
+/// `HKDF-SHA256(ikm = vault key, salt = empty, info = label, 32 bytes)`.
+/// RFC 5869 section 2.2: an empty salt is 32 zero bytes.
+fn derive_vault_subkey(ikm: &[u8], info: &[u8]) -> Result<SecretKey> {
+    hkdf_sha256(ikm, &[], info).map(SecretKey)
+}
+
+/// `indexKey` = HKDF(encryptionKey, "", "totalreclaw-blind-index-v1"). Core only.
+pub(crate) fn derive_blind_index_key(encryption_key: &[u8; 32]) -> Result<SecretKey> {
+    derive_vault_subkey(encryption_key, BLIND_INDEX_KEY_INFO)
+}
+
+/// `lshBucketKey` = HKDF(lshSeed, "", "totalreclaw-lsh-bucket-key-v1"). Core only.
+pub(crate) fn derive_lsh_bucket_key(lsh_seed: &[u8]) -> Result<SecretKey> {
+    derive_vault_subkey(lsh_seed, LSH_BUCKET_KEY_INFO)
+}
+
+/// `fpKeyV2` = HKDF(dedupKey, "", "totalreclaw-content-fp-v2"). Core only.
+pub(crate) fn derive_content_fp_key_v2(dedup_key: &[u8; 32]) -> Result<SecretKey> {
+    derive_vault_subkey(dedup_key, CONTENT_FP_KEY_V2_INFO)
 }
 
 /// Single HKDF-SHA256 expand producing 32 bytes.
@@ -423,4 +476,56 @@ mod tests {
         assert!(result.is_ok());
     }
 
+
+    // -- Keyed blind indices (index scheme 1, internal#573) -----------------
+
+    const KEYED_FIXTURE: &str =
+        include_str!("../../../tests/parity/fixtures/keyed-blind-indices-v1.json");
+
+    #[test]
+    fn hkdf_helper_matches_rfc5869_test_case_3() {
+        // Empty salt, empty info: the shape every scheme-1 key uses. The RFC's
+        // OKM is 42 bytes; our helper returns the first 32 (T(1)).
+        let fixture: serde_json::Value = serde_json::from_str(KEYED_FIXTURE).unwrap();
+        let case = &fixture["hkdf_rfc5869_case3"];
+        let ikm = hex::decode(case["ikm_hex"].as_str().unwrap()).unwrap();
+        let okm = derive_vault_subkey(&ikm, b"").unwrap();
+        assert_eq!(hex::encode(okm.expose_for_test()), case["okm_first32_hex"].as_str().unwrap());
+    }
+
+    #[test]
+    fn keyed_index_keys_match_frozen_vectors_and_are_distinct() {
+        let fixture: serde_json::Value = serde_json::from_str(KEYED_FIXTURE).unwrap();
+        let keys = &fixture["keys"];
+        let key = |k: &str| -> [u8; 32] {
+            hex::decode(fixture["meta"][k].as_str().unwrap()).unwrap().try_into().unwrap()
+        };
+        let enc = key("encryption_key_hex");
+        let dedup = key("dedup_key_hex");
+        let lsh_seed = hex::decode(fixture["meta"]["lsh_seed_hex"].as_str().unwrap()).unwrap();
+
+        let index = derive_blind_index_key(&enc).unwrap();
+        let bucket = derive_lsh_bucket_key(&lsh_seed).unwrap();
+        let fp = derive_content_fp_key_v2(&dedup).unwrap();
+        assert_eq!(hex::encode(index.expose_for_test()), keys["index_key_hex"].as_str().unwrap());
+        assert_eq!(hex::encode(bucket.expose_for_test()), keys["lsh_bucket_key_hex"].as_str().unwrap());
+        assert_eq!(hex::encode(fp.expose_for_test()), keys["fp_key_v2_hex"].as_str().unwrap());
+
+        // All three differ from each other and from the four existing keys.
+        let base = derive_keys_from_mnemonic(
+            fixture["meta"]["mnemonic"].as_str().unwrap(),
+        )
+        .unwrap();
+        let mut all: Vec<[u8; 32]> = vec![
+            *index.expose_for_test(),
+            *bucket.expose_for_test(),
+            *fp.expose_for_test(),
+            base.auth_key,
+            base.encryption_key,
+            base.dedup_key,
+        ];
+        all.push(lsh_seed.clone().try_into().unwrap());
+        let unique: std::collections::HashSet<[u8; 32]> = all.iter().copied().collect();
+        assert_eq!(unique.len(), all.len());
+    }
 }

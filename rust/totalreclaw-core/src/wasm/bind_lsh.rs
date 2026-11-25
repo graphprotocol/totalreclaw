@@ -62,6 +62,16 @@ impl WasmLshHasher {
         serde_wasm_bindgen::to_value(&hashes).map_err(|e| JsError::new(&e.to_string()))
     }
 
+    /// Hash an embedding vector to KEYED bucket tags (index scheme 1).
+    ///
+    /// Returns a JSON array of hex strings (one per table). `lshBucketKey` is
+    /// derived from the seed inside core and never exposed.
+    #[wasm_bindgen(js_name = "hashKeyed")]
+    pub fn hash_keyed(&self, embedding: &[f64]) -> Result<JsValue, JsError> {
+        let hashes = self.inner.hash_keyed(embedding).map_err(to_js_error)?;
+        serde_wasm_bindgen::to_value(&hashes).map_err(|e| JsError::new(&e.to_string()))
+    }
+
     /// Number of hash tables.
     #[wasm_bindgen(getter)]
     pub fn tables(&self) -> usize {

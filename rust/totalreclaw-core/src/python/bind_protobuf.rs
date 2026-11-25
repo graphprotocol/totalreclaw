@@ -21,6 +21,27 @@ use super::*;
 #[pyfunction]
 #[pyo3(name = "encode_fact_protobuf")]
 pub(crate) fn py_encode_fact_protobuf<'py>(py: Python<'py>, json_str: &str) -> PyResult<Bound<'py, PyBytes>> {
+    let payload = fact_payload_from_json(json_str)?;
+    let encoded = protobuf::encode_fact_protobuf(&payload);
+    Ok(PyBytes::new(py, &encoded))
+}
+
+/// Encode a scheme-1 fact: field 5 sorted and deduplicated, field 14 `index_scheme = 1`.
+///
+/// Args:
+///     json_str: same JSON as ``encode_fact_protobuf``; ``blind_indices`` must be keyed tags.
+///
+/// Returns:
+///     bytes (protobuf wire format).
+#[pyfunction]
+#[pyo3(name = "encode_fact_protobuf_keyed")]
+pub(crate) fn py_encode_fact_protobuf_keyed<'py>(py: Python<'py>, json_str: &str) -> PyResult<Bound<'py, PyBytes>> {
+    let payload = fact_payload_from_json(json_str)?;
+    let encoded = protobuf::encode_fact_protobuf_keyed(&payload);
+    Ok(PyBytes::new(py, &encoded))
+}
+
+fn fact_payload_from_json(json_str: &str) -> PyResult<protobuf::FactPayload> {
     let value: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| PyValueError::new_err(e.to_string()))?;
 
@@ -87,9 +108,7 @@ pub(crate) fn py_encode_fact_protobuf<'py>(py: Python<'py>, json_str: &str) -> P
             .map(|v| v as u32)
             .unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),
     };
-
-    let encoded = protobuf::encode_fact_protobuf(&payload);
-    Ok(PyBytes::new(py, &encoded))
+    Ok(payload)
 }
 
 /// Encode a tombstone protobuf for soft-deleting a fact.
@@ -119,3 +138,21 @@ pub(crate) fn py_encode_tombstone_protobuf<'py>(
     Ok(PyBytes::new(py, &encoded))
 }
 
+
+/// Encode a scheme-1 tombstone: like ``encode_tombstone_protobuf`` plus field 14 `index_scheme = 1`.
+#[pyfunction]
+#[pyo3(signature = (fact_id, owner, version=None))]
+#[pyo3(name = "encode_tombstone_protobuf_keyed")]
+pub(crate) fn py_encode_tombstone_protobuf_keyed<'py>(
+    py: Python<'py>,
+    fact_id: &str,
+    owner: &str,
+    version: Option<u32>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let encoded = protobuf::encode_tombstone_protobuf_keyed(
+        fact_id,
+        owner,
+        version.unwrap_or(protobuf::DEFAULT_PROTOBUF_VERSION),
+    );
+    Ok(PyBytes::new(py, &encoded))
+}
