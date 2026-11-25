@@ -526,6 +526,11 @@ contract TotalReclawAccount is SimpleAccount {
         if (g.verifyingContract != address(this)) return false; // P3-3: account-binding
         if (g.valueMax != 0) return false; // session keys cannot move ETH
         if (g.target == address(0)) return false;
+        // The inner call runs AS the account, so a grant targeting the
+        // account itself (upgradeToAndCall, withdrawDepositTo, revoke...) or
+        // the EntryPoint (withdrawTo on the account's deposit) would hand the
+        // session key owner-equivalent power. Never a legitimate DataEdge.
+        if (g.target == address(this) || g.target == address(entryPoint())) return false;
         if (g.signer == address(0)) return false;
         if (g.selectors.length == 0) return false;
         if (g.masterSignature.length != 65) return false;

@@ -146,7 +146,7 @@ contract TotalReclawAccountTest is Test {
     function test_pinned_implementation_create2_address() public pure {
         assertEq(
             _predictImplAddress(TOTAL_RECLAW_ACCOUNT_SALT_V1),
-            0xCF932161eCb91C91014f3911285D9FbfbDbF8709,
+            0x59B323d609F1aad9FeA38e8d840631366B99b444,
             "TotalReclawAccount predicted implementation address drifted - update the deployment plan's pinned value if intentional"
         );
     }
@@ -926,6 +926,50 @@ contract TotalReclawAccountTest is Test {
         assertLt(small, 1_000_000);
         assertLt(mid, 1_000_000);
         assertLt(many, 1_000_000);
+    }
+
+    // ---- grant-target guard (internal#542 review finding 6) ----
+
+    function _lazyInstallWith(address target, bytes memory cd, string memory label)
+        internal
+        returns (uint256)
+    {
+        TotalReclawAccount.PermissionGrant memory grant =
+            _buildGrant(signer, target, _twoSelectors(), 1);
+        bytes32 h = keccak256(bytes(label));
+        PackedUserOperation memory op =
+            _makePackedOp(cd, abi.encode(grant, _signWithKey(signerPriv, h)));
+        vm.prank(ENTRY_POINT);
+        return account.validateUserOp(op, h, 0);
+    }
+
+    function test_grant_rejects_target_equal_to_account() public {
+        bytes memory cd = _executeCallData(address(account), 0, hex"00");
+        assertEq(_lazyInstallWith(address(account), cd, "target-account"), 1);
+        assertFalse(account.isSessionKeyActive(signer));
+    }
+
+    function test_grant_rejects_target_equal_to_entrypoint() public {
+        bytes memory cd = _executeCallData(ENTRY_POINT, 0, hex"00");
+        assertEq(_lazyInstallWith(ENTRY_POINT, cd, "target-ep"), 1);
+        assertFalse(account.isSessionKeyActive(signer));
+    }
+
+    function test_batch_under_grant_targeting_account_or_entrypoint_fails() public {
+        address[2] memory bad = [address(account), ENTRY_POINT];
+        for (uint256 k = 0; k < 2; k++) {
+            address[] memory targets = new address[](2);
+            uint256[] memory values = new uint256[](2);
+            bytes[] memory datas = new bytes[](2);
+            targets[0] = bad[k];
+            targets[1] = bad[k];
+            bytes memory cd =
+                abi.encodePacked(EXECUTE_BATCH_SEL, abi.encode(targets, values, datas));
+            assertEq(_lazyInstallWith(bad[k], cd, k == 0 ? "batch-acct" : "batch-ep"), 1);
+            assertFalse(account.isSessionKeyActive(signer));
+            // and a later steady-state batch against the same target also fails
+            assertEq(_validate(cd, k == 0 ? "batch-acct-2" : "batch-ep-2"), 1);
+        }
     }
 
     function test_batch_of_30_validates() public {
