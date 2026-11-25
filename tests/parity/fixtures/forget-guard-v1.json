@@ -291,7 +291,10 @@
           ]
         }
       ],
-      "expected": null
+      "expected": {
+        "id": "v",
+        "reason": "paraphrase"
+      }
     },
     {
       "name": "deletion_note_is_left_to_is_forget_request",
@@ -589,6 +592,193 @@
         "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
         "reason": "clause"
       }
+    },
+    {
+      "name": "paraphrase_below_floor",
+      "text": "User does not eat meat",
+      "embedding": [
+        0.79,
+        0.6131068422387732
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "paraphrase_entry_with_anchor_never",
+      "text": "User moved to Lisbon.",
+      "embedding": [
+        0.82,
+        0.5723635208501675
+      ],
+      "entries": [
+        {
+          "id": "p",
+          "text": "User lives in Porto",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "paraphrase_same_size_swap_never",
+      "text": "User is vegan.",
+      "embedding": [
+        0.93,
+        0.36755951898978195
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "paraphrase_adds_relation_never",
+      "text": "User's sister doesn't eat meat.",
+      "embedding": [
+        0.85,
+        0.526782687642637
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "paraphrase_needs_content_tokens",
+      "text": "OK.",
+      "embedding": [
+        0.95,
+        0.31224989991991997
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "paraphrase_without_embedding",
+      "text": "User doesn't eat meat.",
+      "embedding": null,
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "superset_adds_relation_never",
+      "text": "User's sister is vegetarian.",
+      "embedding": [
+        0.87,
+        0.493051721424842
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "superset_and_anchor_add_relation_never",
+      "text": "User's brother lives in Porto and works at Tidewater.",
+      "embedding": [
+        0.9,
+        0.4358898943540673
+      ],
+      "entries": [
+        {
+          "id": "t",
+          "text": "User lives in Porto and works at Tidewater",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "paraphrase_candidate_anchor_never",
+      "text": "Alice doesn't eat meat.",
+      "embedding": [
+        0.85,
+        0.526782687642637
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
+    },
+    {
+      "name": "superset_adds_doctor_never",
+      "text": "User's doctor doesn't drink alcohol.",
+      "embedding": [
+        0.9,
+        0.4358898943540673
+      ],
+      "entries": [
+        {
+          "id": "a",
+          "text": "User doesn't drink alcohol",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": null
     }
   ],
   "request_cases": [
@@ -734,6 +924,7 @@
   ],
   "clause_min_cosine": 0.6,
   "release_min_cosine": 0.6,
+  "paraphrase_min_cosine": 0.8,
   "release_cases": [
     {
       "name": "release_ids_h13",
@@ -853,6 +1044,25 @@
         {
           "id": "45649345-c4d0-42e0-94bb-74027213bbfa",
           "text": "User is vegetarian.",
+          "embedding": [
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "release_skips_paraphrase",
+      "text": "User does not eat meat",
+      "embedding": [
+        0.84,
+        0.5425863986500216
+      ],
+      "entries": [
+        {
+          "id": "v",
+          "text": "User is vegetarian",
           "embedding": [
             1.0,
             0.0

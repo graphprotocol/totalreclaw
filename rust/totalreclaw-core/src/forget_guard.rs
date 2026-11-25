@@ -64,6 +64,24 @@
 //!      keeps value swaps and subject swaps out: their clause has a different
 //!      token set.
 //!
+//!    - `paraphrase`: the candidate shares no content token with the forgotten
+//!      text, the cosine is >= [`PARAPHRASE_MIN_COSINE`], and none of these
+//!      exclusions hold: the forgotten text or the candidate has an anchor (a
+//!      name, place, number or date, so the candidate names something else or
+//!      changed the value); both token sets
+//!      have the same size (a one-for-one swap, "vegetarian" -> "vegan"); the
+//!      candidate adds a relation word (a new subject). Catches "User doesn't
+//!      eat meat" after "User is vegetarian" was forgotten (internal #715).
+//!
+//!    Relation words ([`RELATION_WORDS`]: family, friends, colleagues and common
+//!    roles such as "doctor" or "landlord") veto `superset`, `anchor` and
+//!    `paraphrase`: a candidate that adds one the forgotten text lacks is
+//!    about someone else ("User's sister is vegetarian" after "User is
+//!    vegetarian" was forgotten). The list is finite: a subject noun outside it
+//!    (a pet, an employer, a person's name written lowercase) is not vetoed
+//!    unless the anchor rules catch it. `subset` cannot add words, and
+//!    `clause` needs an equal token set, so neither needs the veto.
+//!
 //!    Otherwise a candidate that both drops and adds content words never
 //!    matches. That keeps value swaps out: "favorite color is green" after
 //!    "... blue" was forgotten, or "brother Rui lives in Berlin" after "sister
@@ -111,6 +129,9 @@ pub const ANCHOR_MIN_COSINE: f64 = 0.80;
 
 /// Minimum cosine for a `clause` match (one clause states the forgotten fact).
 pub const CLAUSE_MIN_COSINE: f64 = 0.60;
+
+/// Minimum cosine for a `paraphrase` match (no shared content token).
+pub const PARAPHRASE_MIN_COSINE: f64 = 0.80;
 
 /// Minimum cosine for releasing an entry the remember text mentions.
 pub const RELEASE_MIN_COSINE: f64 = 0.60;
@@ -249,6 +270,76 @@ pub const STOPWORDS: &[&str] = &[
     "your",
 ];
 
+/// Words that name a person other than the user. A candidate that adds one the
+/// forgotten text lacks is about someone else. Sorted; lookups use binary
+/// search. Mirrored byte-for-byte by the Python fallback.
+pub const RELATION_WORDS: &[&str] = &[
+    "aunt",
+    "aunts",
+    "baby",
+    "boss",
+    "boyfriend",
+    "brother",
+    "brothers",
+    "child",
+    "children",
+    "coach",
+    "colleague",
+    "colleagues",
+    "cousin",
+    "cousins",
+    "coworker",
+    "coworkers",
+    "dad",
+    "daughter",
+    "daughters",
+    "dentist",
+    "doctor",
+    "family",
+    "father",
+    "flatmate",
+    "friend",
+    "friends",
+    "girlfriend",
+    "grandfather",
+    "grandma",
+    "grandmother",
+    "grandpa",
+    "grandparent",
+    "grandparents",
+    "husband",
+    "inlaw",
+    "inlaws",
+    "kid",
+    "kids",
+    "landlord",
+    "laws",
+    "manager",
+    "mom",
+    "mother",
+    "mum",
+    "neighbor",
+    "neighbour",
+    "nephew",
+    "niece",
+    "parent",
+    "parents",
+    "partner",
+    "roommate",
+    "sister",
+    "sisters",
+    "son",
+    "sons",
+    "spouse",
+    "teacher",
+    "teammate",
+    "teammates",
+    "tenant",
+    "therapist",
+    "uncle",
+    "wife",
+];
+
 /// A fact the user explicitly forgot, as the client's ledger holds it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ForgottenEntry {
@@ -267,7 +358,7 @@ pub struct ForgottenEntry {
 pub struct ForgottenMatch {
     /// Id of the forgotten fact the candidate restates.
     pub id: String,
-    /// `"exact"`, `"subset"`, `"superset"`, `"anchor"` or `"clause"`.
+    /// `"exact"`, `"subset"`, `"superset"`, `"anchor"`, `"clause"` or `"paraphrase"`.
     pub reason: String,
     /// Cosine similarity, when both embeddings were usable.
     pub cosine: Option<f64>,
@@ -295,6 +386,12 @@ pub fn guard_tokens_with_anchors(text: &str) -> (BTreeSet<String>, BTreeSet<Stri
 /// Content tokens of `text` (see the module docs). Sorted, unique.
 pub fn guard_tokens(text: &str) -> BTreeSet<String> {
     guard_tokens_with_anchors(text).0
+}
+
+/// True when `cand` has a relation word that `base` lacks.
+pub fn adds_relation_word(base: &BTreeSet<String>, cand: &BTreeSet<String>) -> bool {
+    cand.iter()
+        .any(|t| !base.contains(t) && RELATION_WORDS.binary_search(&t.as_str()).is_ok())
 }
 
 fn cosine(a: &[f64], b: &[f64]) -> Option<f64> {
@@ -364,7 +461,7 @@ pub fn match_forgotten(
         return None;
     }
     let norm = normalize_text(text);
-    let cand_tokens = guard_tokens(text);
+    let (cand_tokens, cand_anchors) = guard_tokens_with_anchors(text);
     let clauses = candidate_clauses(text);
 
     for entry in entries {
@@ -384,7 +481,24 @@ pub fn match_forgotten(
         if entry_tokens.is_empty() || cand_tokens.is_empty() {
             continue;
         }
+        let adds_relation = adds_relation_word(&entry_tokens, &cand_tokens);
         if entry_tokens.intersection(&cand_tokens).next().is_none() {
+            // No shared content word: only a pure-semantic paraphrase can match.
+            // Anchors (names, places, numbers) on either side mean the candidate
+            // names something else or changed the value; equal token counts are a one-for-one swap
+            // ("vegetarian" -> "vegan"); a new relation word is a new subject.
+            if entry_anchors.is_empty()
+                && cand_anchors.is_empty()
+                && !adds_relation
+                && entry_tokens.len() != cand_tokens.len()
+                && cos >= PARAPHRASE_MIN_COSINE
+            {
+                return Some(ForgottenMatch {
+                    id: entry.id.clone(),
+                    reason: "paraphrase".to_string(),
+                    cosine: Some(cos),
+                });
+            }
             continue;
         }
         if cand_tokens.is_subset(&entry_tokens) && cos >= SUBSET_MIN_COSINE {
@@ -394,7 +508,7 @@ pub fn match_forgotten(
                 cosine: Some(cos),
             });
         }
-        if entry_tokens.is_subset(&cand_tokens) && cos >= SUPERSET_MIN_COSINE {
+        if !adds_relation && entry_tokens.is_subset(&cand_tokens) && cos >= SUPERSET_MIN_COSINE {
             return Some(ForgottenMatch {
                 id: entry.id.clone(),
                 reason: "superset".to_string(),
@@ -402,7 +516,8 @@ pub fn match_forgotten(
             });
         }
         let shared_anchors = entry_anchors.intersection(&cand_tokens).count();
-        if entry_anchors.len() >= 2
+        if !adds_relation
+            && entry_anchors.len() >= 2
             && shared_anchors >= 2
             && shared_anchors * 2 >= entry_anchors.len()
             && cos >= ANCHOR_MIN_COSINE
@@ -430,7 +545,7 @@ pub fn match_forgotten(
 
 /// Ids of the forgotten entries an explicit remember of `text` releases.
 ///
-/// An entry is released when [`match_forgotten`] matches it (any reason), or
+/// An entry is released when [`match_forgotten`] matches it (any reason except `paraphrase`), or
 /// when `text` mentions it: the entry's content-token set is non-empty, is a
 /// subset of the text's, and cosine >= [`RELEASE_MIN_COSINE`]. Without an
 /// embedding (the text's or the entry's) only an `exact` match releases.
@@ -445,9 +560,13 @@ pub fn forget_release_ids(
     let cand_tokens = guard_tokens(text);
     let mut ids = Vec::new();
     for entry in entries {
-        if match_forgotten(text, embedding, std::slice::from_ref(entry)).is_some() {
-            ids.push(entry.id.clone());
-            continue;
+        // A `paraphrase` match does not release: an unprompted agent remember
+        // must not silently un-forget a fact on meaning alone.
+        if let Some(m) = match_forgotten(text, embedding, std::slice::from_ref(entry)) {
+            if m.reason != "paraphrase" {
+                ids.push(entry.id.clone());
+                continue;
+            }
         }
         let cos = match (embedding, entry.embedding.as_deref()) {
             (Some(a), Some(b)) => cosine(a, b),
@@ -750,6 +869,117 @@ mod tests {
     }
 
     #[test]
+    fn relation_words_are_sorted_and_unique() {
+        for w in RELATION_WORDS.windows(2) {
+            assert!(w[0] < w[1], "RELATION_WORDS not sorted/unique at {:?}", w);
+        }
+    }
+
+    #[test]
+    fn paraphrase_disjoint_tokens_matches() {
+        let m = match_forgotten("User doesn't eat meat.", Some(&at(0.83)), &veg()).unwrap();
+        assert_eq!(m.reason, "paraphrase");
+        assert!(match_forgotten("User doesn't eat meat.", Some(&at(0.79)), &veg()).is_none());
+    }
+
+    #[test]
+    fn paraphrase_never_when_entry_has_anchor() {
+        let e = vec![entry("p", "User lives in Porto", Some(vec![1.0, 0.0]))];
+        assert!(match_forgotten("User moved to Lisbon.", Some(&at(0.82)), &e).is_none());
+    }
+
+    #[test]
+    fn paraphrase_never_for_same_size_swap() {
+        assert!(match_forgotten("User is vegan.", Some(&at(0.93)), &veg()).is_none());
+    }
+
+    #[test]
+    fn paraphrase_never_adds_relation() {
+        assert!(match_forgotten("User's sister doesn't eat meat.", Some(&at(0.85)), &veg()).is_none());
+    }
+
+    #[test]
+    fn paraphrase_needs_content_tokens() {
+        assert!(match_forgotten("OK.", Some(&at(0.95)), &veg()).is_none());
+    }
+
+    #[test]
+    fn superset_and_anchor_veto_relation_words() {
+        assert!(match_forgotten("User's sister is vegetarian.", Some(&at(0.87)), &veg()).is_none());
+        assert_eq!(
+            match_forgotten("User has been vegetarian since 2019", Some(&at(0.86)), &veg())
+                .unwrap()
+                .reason,
+            "superset"
+        );
+        let e = vec![entry(
+            "t",
+            "User lives in Porto and works at Tidewater",
+            Some(vec![1.0, 0.0]),
+        )];
+        assert!(match_forgotten(
+            "User's brother lives in Porto and works at Tidewater",
+            Some(&at(0.90)),
+            &e
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn release_skips_paraphrase() {
+        assert!(forget_release_ids("User doesn't eat meat.", Some(&at(0.83)), &veg()).is_empty());
+    }
+
+    #[test]
+    fn labelled_set_precision_recall() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/parity/fixtures/paraphrase-labels-v1.json"
+        ))
+        .unwrap();
+        let (mut tp, mut fp, mut fneg, mut tn) = (0u32, 0u32, 0u32, 0u32);
+        let mut matched_must_store: Vec<String> = Vec::new();
+        let must_store: Vec<String> = serde_json::from_value(fixture["must_store"].clone()).unwrap();
+        for row in fixture["forget"].as_array().unwrap() {
+            let name = row["name"].as_str().unwrap();
+            let c = row["cos"].as_f64().unwrap();
+            let label = row["label"].as_bool().unwrap();
+            let got = match_forgotten(
+                row["text"].as_str().unwrap(),
+                Some(&at(c)),
+                &[entry("e", row["entry"].as_str().unwrap(), Some(vec![1.0, 0.0]))],
+            );
+            let pred = got.is_some();
+            eprintln!(
+                "{name:24} cos={c:.4} label={label} -> {:?}",
+                got.as_ref().map(|m| m.reason.as_str())
+            );
+            match (pred, label) {
+                (true, true) => tp += 1,
+                (true, false) => fp += 1,
+                (false, true) => fneg += 1,
+                (false, false) => tn += 1,
+            }
+            if pred && must_store.iter().any(|m| m == name) {
+                matched_must_store.push(name.to_string());
+            }
+        }
+        let p = tp as f64 / (tp + fp).max(1) as f64;
+        let r = tp as f64 / (tp + fneg).max(1) as f64;
+        eprintln!("forget guard: TP {tp} FP {fp} FN {fneg} TN {tn}: P {p:.2} R {r:.2}");
+        let want = &fixture["expected_counts"]["forget"];
+        assert_eq!(
+            (tp, fp, fneg, tn),
+            (
+                want["tp"].as_u64().unwrap() as u32,
+                want["fp"].as_u64().unwrap() as u32,
+                want["fn"].as_u64().unwrap() as u32,
+                want["tn"].as_u64().unwrap() as u32
+            )
+        );
+        assert!(matched_must_store.is_empty(), "must_store matched: {matched_must_store:?}");
+    }
+
+    #[test]
     fn forget_request_detection() {
         for yes in [
             "User asked the assistant to forget that Inês proposed PgBouncer",
@@ -849,6 +1079,10 @@ mod tests {
         assert_eq!(
             fixture["release_min_cosine"].as_f64(),
             Some(RELEASE_MIN_COSINE)
+        );
+        assert_eq!(
+            fixture["paraphrase_min_cosine"].as_f64(),
+            Some(PARAPHRASE_MIN_COSINE)
         );
         for case in fixture["release_cases"].as_array().unwrap() {
             let name = case["name"].as_str().unwrap();

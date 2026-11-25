@@ -23,6 +23,10 @@ Decision (``decide_write``):
   3. Cosine >= threshold against candidates with a same-length embedding
      (auto mode ignores pinned candidates); best similarity wins, ties keep
      the first → auto: skip, explicit: confirm.
+  3b. Explicit mode only, when 3 found nothing: among candidates with a
+      same-length embedding, cosine >= CONTAINED_MIN_COSINE and "contained"
+      (see ``reference_contained``); best similarity wins, ties keep the
+      first → confirm with kind ``contained``.
   4. Otherwise store.
 
 Cosine is computed on float32-rounded inputs in float64, like the Rust code.
@@ -34,12 +38,25 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import struct
 import unicodedata
 from pathlib import Path
 
 OUT_PATH = Path(__file__).resolve().parent / "write-gate-v1.json"
 DEFAULT_THRESHOLD = 0.85
+CONTAINED_MIN_COSINE = 0.65
+GUARD_SRC = Path(__file__).resolve().parents[3] / "rust" / "totalreclaw-core" / "src" / "forget_guard.rs"
+
+
+def _rust_word_list(name: str) -> frozenset:
+    src = GUARD_SRC.read_text(encoding="utf-8")
+    block = src.split(f"pub const {name}: &[&str] = &[", 1)[1].split("];", 1)[0]
+    return frozenset(re.findall(r'"([^"]+)"', block))
+
+
+STOPWORDS = _rust_word_list("STOPWORDS")
+RELATION_WORDS = _rust_word_list("RELATION_WORDS")
 
 WHITE_SPACE = set(
     "\t\n\x0b\x0c\r \x85\xa0 "
@@ -92,6 +109,47 @@ def cosine(a, b):
     return 0.0 if na * nb == 0 else dot / (na * nb)
 
 
+def reference_tokens(text):
+    """(content tokens, anchors): NFKD, drop combining marks, split on
+    non-alphanumerics, lowercase, keep 3+ chars that are not stopwords. A token
+    is an anchor when the original word starts uppercase or has a digit."""
+    s = "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
+    words, cur = [], []
+    for ch in s:
+        if ch.isalnum():
+            cur.append(ch)
+        elif cur:
+            words.append("".join(cur))
+            cur = []
+    if cur:
+        words.append("".join(cur))
+    tokens, anchors = set(), set()
+    for w in words:
+        low = w.lower()
+        if len(low) < 3 or low in STOPWORDS:
+            continue
+        if w[0].isupper() or any(ch.isdigit() for ch in w):
+            anchors.add(low)
+        tokens.add(low)
+    return tokens, anchors
+
+
+def _adds_relation(base, cand):
+    return any(t not in base and t in RELATION_WORDS for t in cand)
+
+
+def reference_contained(new_tokens, new_anchors, existing_text):
+    existing, _ = reference_tokens(existing_text)
+    return (
+        bool(new_tokens)
+        and len(new_tokens) < len(existing)
+        and new_anchors <= existing
+        and (new_tokens <= existing or bool(new_anchors))
+        and not _adds_relation(new_tokens, existing)
+        and not _adds_relation(existing, new_tokens)
+    )
+
+
 def reference_decide(text, embedding, candidates, threshold, mode):
     threshold = DEFAULT_THRESHOLD if threshold is None else threshold
     wanted = reference_normalize(text)
@@ -118,6 +176,24 @@ def reference_decide(text, embedding, candidates, threshold, mode):
         sim = cosine(embedding, emb)
         if sim >= threshold and (best is None or sim > best_sim):
             best, best_sim = c, sim
+    if best is None and mode == "explicit":
+        new_tokens, new_anchors = reference_tokens(text)
+        cbest, csim = None, None
+        for c in candidates:
+            if not c.get("id"):
+                continue
+            emb = c.get("embedding")
+            if not emb or len(emb) != len(embedding):
+                continue
+            sim = cosine(embedding, emb)
+            if (
+                sim >= CONTAINED_MIN_COSINE
+                and (cbest is None or sim > csim)
+                and reference_contained(new_tokens, new_anchors, c.get("text") or "")
+            ):
+                cbest, csim = c, sim
+        if cbest is not None:
+            return {"action": "confirm", "match": _match(cbest, "contained", csim)}
     if best is None:
         return {"action": "store", "match": None}
     return {
@@ -219,6 +295,46 @@ DECIDE_CASES = [
 ]
 
 
+TIDE = ("User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small "
+        "climate-tech startup, where they are building the company's carbon-accounting dashboard.")
+TIDE_NEW = "User lives in Porto and works at Tidewater."
+
+
+def at(cos):
+    return [cos, math.sqrt(1 - cos * cos)]
+
+
+DECIDE_CASES += [
+    {"name": "contained_short_rewording_confirms_in_explicit_mode", "text": TIDE_NEW,
+     "embedding": [1, 0], "candidates": [c("t", TIDE, at(0.71))], "mode": "explicit"},
+    {"name": "contained_is_explicit_only_auto", "text": TIDE_NEW,
+     "embedding": [1, 0], "candidates": [c("t", TIDE, at(0.71))], "mode": "auto"},
+    {"name": "contained_is_explicit_only_exact_only", "text": TIDE_NEW,
+     "embedding": [1, 0], "candidates": [c("t", TIDE, at(0.71))], "mode": "exact_only"},
+    {"name": "contained_below_floor_stores", "text": TIDE_NEW,
+     "embedding": [1, 0], "candidates": [c("t", TIDE, at(0.64))], "mode": "explicit"},
+    {"name": "contained_new_anchor_stores", "text": "User moved to Braga.",
+     "embedding": [1, 0], "candidates": [c("t", TIDE, at(0.70))], "mode": "explicit"},
+    {"name": "contained_relation_words_differ_stores", "text": "User lives in Porto.",
+     "embedding": [1, 0],
+     "candidates": [c("b", "User's brother Rui lives in Porto and works at Farfetch.", at(0.80))],
+     "mode": "explicit"},
+    {"name": "contained_needs_shorter_text", "text": "User lives in Porto near the river with two cats.",
+     "embedding": [1, 0], "candidates": [c("p", "User lives in Porto.", at(0.80))], "mode": "explicit"},
+    {"name": "near_duplicate_beats_contained", "text": TIDE_NEW, "embedding": [1, 0],
+     "candidates": [c("t", TIDE, at(0.72)), c("n", "User is based in Porto", at(0.90))],
+     "mode": "explicit"},
+    {"name": "contained_best_similarity_wins", "text": TIDE_NEW, "embedding": [1, 0],
+     "candidates": [c("t", TIDE, at(0.70)),
+                    c("u", "User lives in Porto and works at Tidewater as a data engineer since 2026.", at(0.80))],
+     "mode": "explicit"},
+    {"name": "contained_reports_pinned", "text": TIDE_NEW, "embedding": [1, 0],
+     "candidates": [c("t", TIDE, at(0.71), pinned=True)], "mode": "explicit"},
+    {"name": "contained_without_embedding_stores", "text": TIDE_NEW, "embedding": [1, 0],
+     "candidates": [c("t", TIDE)], "mode": "explicit"},
+]
+
+
 def main() -> None:
     normalize = [{"input": s, "expected": reference_normalize(s)} for s in NORMALIZE_INPUTS]
     decide = []
@@ -233,6 +349,7 @@ def main() -> None:
         "_generator": "tests/parity/fixtures/generate-write-gate-v1.py. Expected values come from an independent Python reference implementation, not from the Rust code under test.",
         "version": 1,
         "default_threshold": DEFAULT_THRESHOLD,
+        "contained_min_cosine": CONTAINED_MIN_COSINE,
         "normalize": normalize,
         "decide": decide,
     }

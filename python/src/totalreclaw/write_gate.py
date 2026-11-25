@@ -55,6 +55,9 @@ logger = logging.getLogger(__name__)
 #: Cosine threshold (core ``STORE_DEDUP_COSINE_THRESHOLD``).
 STORE_DEDUP_THRESHOLD = 0.85
 
+#: Minimum cosine for the explicit-mode ``contained`` rule (core ``CONTAINED_MIN_COSINE``).
+CONTAINED_MIN_COSINE = 0.65
+
 #: How long a written fact stays in the ledger. Covers subgraph indexing lag
 #: (normally under a minute) with a wide margin.
 LEDGER_TTL_SECONDS = 15 * 60
@@ -76,7 +79,7 @@ MODES = ("auto", "explicit", "exact_only")
 class GateMatch:
     fact_id: str
     text: str
-    kind: str  # "exact" | "near_duplicate"
+    kind: str  # "exact" | "near_duplicate" | "contained"
     similarity: float
     pinned: bool
 
@@ -188,6 +191,33 @@ def _py_decide(text, embedding, candidates, threshold, mode) -> dict:
         sim = _cosine(embedding, emb)
         if sim >= threshold and (best is None or sim > best_sim):
             best, best_sim = c, sim
+    if best is None and mode == "explicit":
+        # Lazy import: forget_guard must not import write_gate at module load.
+        from .forget_guard import _adds_relation_word, _tokens_and_anchors
+
+        new_tokens, new_anchors = _tokens_and_anchors(text)
+        cbest, csim = None, 0.0
+        for c in candidates:
+            if not c.get("id"):
+                continue
+            emb = c.get("embedding")
+            if not emb or len(emb) != len(embedding):
+                continue
+            sim = _cosine(embedding, emb)
+            if sim < CONTAINED_MIN_COSINE or (cbest is not None and sim <= csim):
+                continue
+            existing, _ = _tokens_and_anchors(c.get("text") or "")
+            if (
+                new_tokens
+                and len(new_tokens) < len(existing)
+                and new_anchors <= existing
+                and (new_tokens <= existing or new_anchors)
+                and not _adds_relation_word(new_tokens, existing)
+                and not _adds_relation_word(existing, new_tokens)
+            ):
+                cbest, csim = c, sim
+        if cbest is not None:
+            return {"action": "confirm", "match": _match_dict(cbest, "contained", csim)}
     if best is None:
         return {"action": "store", "match": None}
     return {

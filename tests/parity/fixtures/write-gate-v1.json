@@ -2,6 +2,7 @@
   "_generator": "tests/parity/fixtures/generate-write-gate-v1.py. Expected values come from an independent Python reference implementation, not from the Rust code under test.",
   "version": 1,
   "default_threshold": 0.85,
+  "contained_min_cosine": 0.65,
   "normalize": [
     {
       "input": "User is vegetarian",
@@ -584,6 +585,307 @@
           "similarity": 1.0,
           "pinned": false
         }
+      }
+    },
+    {
+      "name": "contained_short_rewording_confirms_in_explicit_mode",
+      "text": "User lives in Porto and works at Tidewater.",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "t",
+          "text": "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small climate-tech startup, where they are building the company's carbon-accounting dashboard.",
+          "embedding": [
+            0.71,
+            0.7042016756583301
+          ]
+        }
+      ],
+      "mode": "explicit",
+      "threshold": null,
+      "expected": {
+        "action": "confirm",
+        "match": {
+          "fact_id": "t",
+          "text": "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small climate-tech startup, where they are building the company's carbon-accounting dashboard.",
+          "kind": "contained",
+          "similarity": 0.7099999780370745,
+          "pinned": false
+        }
+      }
+    },
+    {
+      "name": "contained_is_explicit_only_auto",
+      "text": "User lives in Porto and works at Tidewater.",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "t",
+          "text": "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small climate-tech startup, where they are building the company's carbon-accounting dashboard.",
+          "embedding": [
+            0.71,
+            0.7042016756583301
+          ]
+        }
+      ],
+      "mode": "auto",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "contained_is_explicit_only_exact_only",
+      "text": "User lives in Porto and works at Tidewater.",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "t",
+          "text": "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small climate-tech startup, where they are building the company's carbon-accounting dashboard.",
+          "embedding": [
+            0.71,
+            0.7042016756583301
+          ]
+        }
+      ],
+      "mode": "exact_only",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "contained_below_floor_stores",
+      "text": "User lives in Porto and works at Tidewater.",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "t",
+          "text": "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small climate-tech startup, where they are building the company's carbon-accounting dashboard.",
+          "embedding": [
+            0.64,
+            0.7683749084919419
+          ]
+        }
+      ],
+      "mode": "explicit",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "contained_new_anchor_stores",
+      "text": "User moved to Braga.",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "t",
+          "text": "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small climate-tech startup, where they are building the company's carbon-accounting dashboard.",
+          "embedding": [
+            0.7,
+            0.714142842854285
+          ]
+        }
+      ],
+      "mode": "explicit",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "contained_relation_words_differ_stores",
+      "text": "User lives in Porto.",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "b",
+          "text": "User's brother Rui lives in Porto and works at Farfetch.",
+          "embedding": [
+            0.8,
+            0.5999999999999999
+          ]
+        }
+      ],
+      "mode": "explicit",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "contained_needs_shorter_text",
+      "text": "User lives in Porto near the river with two cats.",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "p",
+          "text": "User lives in Porto.",
+          "embedding": [
+            0.8,
+            0.5999999999999999
+          ]
+        }
+      ],
+      "mode": "explicit",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
+      }
+    },
+    {
+      "name": "near_duplicate_beats_contained",
+      "text": "User lives in Porto and works at Tidewater.",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "t",
+          "text": "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small climate-tech startup, where they are building the company's carbon-accounting dashboard.",
+          "embedding": [
+            0.72,
+            0.6939740629158989
+          ]
+        },
+        {
+          "id": "n",
+          "text": "User is based in Porto",
+          "embedding": [
+            0.9,
+            0.4358898943540673
+          ]
+        }
+      ],
+      "mode": "explicit",
+      "threshold": null,
+      "expected": {
+        "action": "confirm",
+        "match": {
+          "fact_id": "n",
+          "text": "User is based in Porto",
+          "kind": "near_duplicate",
+          "similarity": 0.8999999933607958,
+          "pinned": false
+        }
+      }
+    },
+    {
+      "name": "contained_best_similarity_wins",
+      "text": "User lives in Porto and works at Tidewater.",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "t",
+          "text": "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small climate-tech startup, where they are building the company's carbon-accounting dashboard.",
+          "embedding": [
+            0.7,
+            0.714142842854285
+          ]
+        },
+        {
+          "id": "u",
+          "text": "User lives in Porto and works at Tidewater as a data engineer since 2026.",
+          "embedding": [
+            0.8,
+            0.5999999999999999
+          ]
+        }
+      ],
+      "mode": "explicit",
+      "threshold": null,
+      "expected": {
+        "action": "confirm",
+        "match": {
+          "fact_id": "u",
+          "text": "User lives in Porto and works at Tidewater as a data engineer since 2026.",
+          "kind": "contained",
+          "similarity": 0.7999999928474427,
+          "pinned": false
+        }
+      }
+    },
+    {
+      "name": "contained_reports_pinned",
+      "text": "User lives in Porto and works at Tidewater.",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "t",
+          "text": "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small climate-tech startup, where they are building the company's carbon-accounting dashboard.",
+          "embedding": [
+            0.71,
+            0.7042016756583301
+          ],
+          "pinned": true
+        }
+      ],
+      "mode": "explicit",
+      "threshold": null,
+      "expected": {
+        "action": "confirm",
+        "match": {
+          "fact_id": "t",
+          "text": "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small climate-tech startup, where they are building the company's carbon-accounting dashboard.",
+          "kind": "contained",
+          "similarity": 0.7099999780370745,
+          "pinned": true
+        }
+      }
+    },
+    {
+      "name": "contained_without_embedding_stores",
+      "text": "User lives in Porto and works at Tidewater.",
+      "embedding": [
+        1,
+        0
+      ],
+      "candidates": [
+        {
+          "id": "t",
+          "text": "User moved from Lisbon to Porto (around Oct/Nov 2026) to join Tidewater, a small climate-tech startup, where they are building the company's carbon-accounting dashboard."
+        }
+      ],
+      "mode": "explicit",
+      "threshold": null,
+      "expected": {
+        "action": "store",
+        "match": null
       }
     }
   ]

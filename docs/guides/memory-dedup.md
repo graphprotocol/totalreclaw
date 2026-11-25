@@ -131,6 +131,7 @@ In the Python client (Hermes), auto-extraction, `totalreclaw_remember`, the USER
 
 - **Same text** (ignoring case, spacing and trailing punctuation): never stored twice. `totalreclaw_remember` answers `already_stored`.
 - **Very similar text** (cosine >= 0.85): auto-extraction skips it. `totalreclaw_remember` answers `possible_duplicate` with the stored text, and the agent stores it with `force=true` only if it adds or changes information. The USER.md mirror stores it, because a changed value ("lives in Porto" after "lives in Lisbon") scores as similar as a paraphrase.
+- **A shorter text contained in one stored fact** (every name and content word of the new text appears in that fact, no relation word such as "sister" on only one side, cosine >= 0.65): `totalreclaw_remember` answers `possible_duplicate` with `match: "contained"`. Auto-extraction does not apply this rule and leaves the case to its LLM dedup context, because a changed value in the same slot scores in the same cosine band.
 - **Pinned facts** are never replaced by this check.
 
 ---

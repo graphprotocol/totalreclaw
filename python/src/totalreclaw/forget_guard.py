@@ -46,6 +46,8 @@ SUPERSET_MIN_COSINE = 0.80
 ANCHOR_MIN_COSINE = 0.80
 #: Minimum cosine for a ``clause`` match (one clause states the forgotten fact).
 CLAUSE_MIN_COSINE = 0.60
+#: Minimum cosine for a ``paraphrase`` match (no shared content token).
+PARAPHRASE_MIN_COSINE = 0.80
 #: Minimum cosine for releasing an entry the remember text mentions.
 RELEASE_MIN_COSINE = 0.60
 
@@ -53,6 +55,19 @@ RELEASE_MIN_COSINE = 0.60
 _CLAUSE_CONJUNCTIONS = frozenset(("and", "but", "so", "because", "while", "which", "who"))
 #: Mirrors ``CLAUSE_PUNCTUATION``.
 _CLAUSE_PUNCTUATION_RE = re.compile("[()\\[\\]{},;:.!?\u2014\u2013]")
+
+#: Mirrors ``totalreclaw_core::forget_guard::RELATION_WORDS``. Keep sorted.
+RELATION_WORDS = frozenset((
+    "aunt", "aunts", "baby", "boss", "boyfriend", "brother", "brothers", "child",
+    "children", "coach", "colleague", "colleagues", "cousin", "cousins", "coworker",
+    "coworkers", "dad", "daughter", "daughters", "dentist", "doctor", "family", "father",
+    "flatmate", "friend", "friends", "girlfriend", "grandfather", "grandma", "grandmother",
+    "grandpa", "grandparent", "grandparents", "husband", "inlaw", "inlaws", "kid", "kids",
+    "landlord", "laws", "manager", "mom", "mother", "mum", "neighbor", "neighbour",
+    "nephew", "niece", "parent", "parents", "partner", "roommate", "sister", "sisters",
+    "son", "sons", "spouse", "teacher", "teammate", "teammates", "tenant", "therapist",
+    "uncle", "wife",
+))
 
 #: Mirrors ``totalreclaw_core::forget_guard::STOPWORDS``. Keep sorted.
 STOPWORDS = frozenset((
@@ -198,13 +213,18 @@ def _flush_clause(words: list[str], out: list[tuple[set[str], int]]) -> None:
         words.clear()
 
 
+def _adds_relation_word(base: set, cand: set) -> bool:
+    """True when *cand* has a relation word that *base* lacks."""
+    return any(t not in base and t in RELATION_WORDS for t in cand)
+
+
 def _py_match_forgotten(
     text: str, embedding: Optional[Sequence[float]], entries: Sequence[dict]
 ) -> Optional[dict]:
     if not text or not text.strip() or not entries:
         return None
     norm = _normalize_text(text)
-    cand = set(guard_tokens(text))
+    cand, cand_anchors = _tokens_and_anchors(text)
     clauses = _candidate_clauses(text)
     for entry in entries:
         etext = entry.get("text") or ""
@@ -215,14 +235,21 @@ def _py_match_forgotten(
         if cos is None:
             continue
         ent, anchors = _tokens_and_anchors(etext)
-        if not ent or not cand or not (ent & cand):
+        if not ent or not cand:
+            continue
+        adds_rel = _adds_relation_word(ent, cand)
+        if not (ent & cand):
+            # No shared content word: only a pure-semantic paraphrase can match
+            # (see the Rust module docs for the three exclusions).
+            if not anchors and not cand_anchors and not adds_rel and len(ent) != len(cand) and cos >= PARAPHRASE_MIN_COSINE:
+                return {"id": entry.get("id", ""), "reason": "paraphrase", "cosine": cos}
             continue
         if cand <= ent and cos >= SUBSET_MIN_COSINE:
             return {"id": entry.get("id", ""), "reason": "subset", "cosine": cos}
-        if ent <= cand and cos >= SUPERSET_MIN_COSINE:
+        if not adds_rel and ent <= cand and cos >= SUPERSET_MIN_COSINE:
             return {"id": entry.get("id", ""), "reason": "superset", "cosine": cos}
         shared = len(anchors & cand)
-        if len(anchors) >= 2 and shared >= 2 and shared * 2 >= len(anchors) and cos >= ANCHOR_MIN_COSINE:
+        if not adds_rel and len(anchors) >= 2 and shared >= 2 and shared * 2 >= len(anchors) and cos >= ANCHOR_MIN_COSINE:
             return {"id": entry.get("id", ""), "reason": "anchor", "cosine": cos}
         if cos >= CLAUSE_MIN_COSINE and any(toks == ent and words > len(ent) for toks, words in clauses):
             return {"id": entry.get("id", ""), "reason": "clause", "cosine": cos}
@@ -237,7 +264,9 @@ def _py_forget_release_ids(
     cand = set(guard_tokens(text))
     ids: list[str] = []
     for entry in entries:
-        if _py_match_forgotten(text, embedding, [entry]) is not None:
+        m = _py_match_forgotten(text, embedding, [entry])
+        # A paraphrase match does not release (see the Rust ``forget_release_ids``).
+        if m is not None and m["reason"] != "paraphrase":
             ids.append(entry.get("id", ""))
             continue
         eemb = entry.get("embedding")
