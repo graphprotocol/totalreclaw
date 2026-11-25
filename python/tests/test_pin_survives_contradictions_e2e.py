@@ -301,6 +301,9 @@ async def test_h14_pinned_blob_without_shared_entity_still_blocks_contradictions
     assert "pinned conflicts 2" in caplog.text
     assert "pinned_candidates=2" in caplog.text
     assert "no_shared_entity=0 out_of_band=0" in caplog.text
+    # The legacy key counts in-band candidates core did not skip; the
+    # correctly named key counts candidates that share no entity name.
+    assert "no_name_overlap=0" in caplog.text
     assert chain.stored == []
     assert chain.forgotten == []
     assert chain.facts[PINNED_ID]["isActive"] is True
@@ -324,6 +327,7 @@ async def test_h14_pinned_without_any_name_match_logs_no_shared_entity(caplog) -
     _extract_round(_state_with(client), [unrelated])
     assert "pinned conflicts 0" in caplog.text
     assert "pinned_candidates=1 no_shared_entity=1 out_of_band=0" in caplog.text
+    assert "no_name_overlap=1" in caplog.text
     assert len(chain.stored) == 1
 
 

@@ -32,7 +32,7 @@ import re
 import unicodedata
 from typing import List
 
-__all__ = ["extract_query_entities"]
+__all__ = ["extract_query_entities", "derive_entities_for_write"]
 
 
 def normalize_entity(name: str) -> str:
@@ -184,3 +184,34 @@ def extract_query_entities(query: str) -> List[str]:
         _add(m.group(1))
 
     return list(found.keys())
+
+
+#: Entity type given to heuristically derived entities. The heuristic only finds
+#: names, not kinds, so it uses the most generic of the v1 entity types.
+DERIVED_ENTITY_TYPE = "concept"
+
+#: Same per-claim cap the v1 claim builder applies.
+_MAX_DERIVED_ENTITIES = 8
+
+
+def derive_entities_for_write(text: str) -> List[dict]:
+    """Derive v1 claim entities (``{"name", "type"}``) from fact text.
+
+    For explicit remembers, which carry no LLM-extracted entities. Uses
+    :func:`extract_query_entities`, the helper recall uses, so a stored fact
+    and a later query agree on entity names. Never raises: any error returns
+    ``[]`` (the write then proceeds without entities).
+    """
+    try:
+        names = extract_query_entities(text or "")
+        return [
+            {"name": n, "type": DERIVED_ENTITY_TYPE}
+            for n in names[:_MAX_DERIVED_ENTITIES]
+        ]
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).debug(
+            "entity derivation failed; storing without entities", exc_info=True
+        )
+        return []

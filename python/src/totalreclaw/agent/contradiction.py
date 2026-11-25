@@ -115,10 +115,16 @@ def _pinned_candidate_stats(
 ) -> "tuple[int, int, int]":
     """Count, for one fact, its pinned candidates and why they did not match.
 
-    Returns ``(pinned_candidates, no_shared_entity, out_of_band)``. A pinned
-    candidate is ``out_of_band`` when its cosine is outside the resolver band,
-    ``no_shared_entity`` when it is in band but core raised no pinned skip for
-    it (no name or entity link), and neither when core skipped the new fact because of it.
+    Returns ``(pinned_candidates, in_band_not_skipped, out_of_band)``. A
+    pinned candidate is ``out_of_band`` when its cosine is outside the
+    resolver band. It is ``in_band_not_skipped`` when it is in band and core
+    raised no pinned skip for it, whatever its entity state: it may share an
+    entity with the new fact (core still declined to skip) or share none. It
+    is neither when core skipped the new fact because of it. The summary log
+    prints ``in_band_not_skipped`` under the key ``no_shared_entity``, kept
+    unchanged for log greps; the name overstates what is counted. The true
+    count of pinned candidates sharing no entity name with the new fact is
+    :func:`_no_name_overlap_count`, logged as ``no_name_overlap``.
     Observability only: nothing here changes what is stored.
     """
     skipped_ids = {
@@ -135,8 +141,38 @@ def _pinned_candidate_stats(
         if not (CONTRADICTION_THRESHOLD_LOWER <= sim < CONTRADICTION_THRESHOLD_UPPER):
             oob += 1
         elif cand.get("id") not in skipped_ids:
+            # In band and not skipped. NOT necessarily "no shared entity".
             no_share += 1
     return pinned_n, no_share, oob
+
+
+def _no_name_overlap_count(
+    embedding: List[float],
+    candidates: List[dict],
+    actions: List[dict],
+    new_names: "set[str]",
+    normalize: Any,
+) -> int:
+    """Count in-band, not-skipped pinned candidates that share no entity name
+    with the new fact. ``new_names`` holds normalized names; ``normalize`` is
+    the name normalizer."""
+    skipped_ids = {
+        a.get("existing_id")
+        for a in actions
+        if a.get("type") == "skip_new" and a.get("reason") == SKIP_REASON_EXISTING_PINNED
+    }
+    n = 0
+    for cand in candidates:
+        claim = cand.get("claim") or {}
+        if claim.get("st") != "p" or cand.get("id") in skipped_ids:
+            continue
+        sim = _cosine(embedding, cand.get("embedding") or [])
+        if not (CONTRADICTION_THRESHOLD_LOWER <= sim < CONTRADICTION_THRESHOLD_UPPER):
+            continue
+        cand_names = {normalize(r.get("n", "")) for r in claim.get("e", [])}
+        if not (new_names & cand_names):
+            n += 1
+    return n
 
 
 async def detect_and_resolve_contradictions(
@@ -216,6 +252,7 @@ async def detect_and_resolve_contradictions(
     pinned_conflicts = 0
     pinned_candidates = 0
     no_shared_entity = 0
+    no_name_overlap = 0
     out_of_band = 0
     pinned_llm_no = pinned_unconfirmed = pinned_high_checked = 0
     calls_left = pin_check.PIN_CHECK_MAX_CALLS_PER_CYCLE
@@ -398,6 +435,10 @@ async def detect_and_resolve_contradictions(
                 totalreclaw_core.normalize_entity_name(r.get("n", ""))
                 for r in new_claim_json_obj.get("e", [])
             }
+            no_name_overlap += _no_name_overlap_count(
+                embedding, candidates, actions, new_names,
+                totalreclaw_core.normalize_entity_name,
+            )
             dropped = False
             for cand_id, high in hits:
                 cand = cand_by_id.get(cand_id) or {}
@@ -472,7 +513,8 @@ async def detect_and_resolve_contradictions(
     log.info(
         "Contradiction detection: %d/%d facts passed (removed %d, pinned conflicts %d)"
         " pinned_candidates=%d no_shared_entity=%d out_of_band=%d"
-        " pinned_llm_no=%d pinned_unconfirmed=%d pinned_high_checked=%d",
+        " pinned_llm_no=%d pinned_unconfirmed=%d pinned_high_checked=%d"
+        " no_name_overlap=%d",
         len(kept),
         len(new_facts),
         len(new_facts) - len(kept),
@@ -483,5 +525,6 @@ async def detect_and_resolve_contradictions(
         pinned_llm_no,
         pinned_unconfirmed,
         pinned_high_checked,
+        no_name_overlap,
     )
     return kept

@@ -325,11 +325,23 @@ async def remember(
                 logger.info("memory mirror: not storing entry: %s", why)
                 return json.dumps({"stored": False, "skipped": "forgotten"})
 
+        # An explicit remember carries no LLM-extracted entities. Derive them
+        # with the helper recall uses, so a later pin of this fact takes
+        # core's entity-id contradiction path. Never fails the write.
+        try:
+            from totalreclaw.entity_extract import derive_entities_for_write
+
+            derived_entities = derive_entities_for_write(text) or None
+        except Exception:
+            logger.debug("remember: entity derivation failed", exc_info=True)
+            derived_entities = None
+
         fact_id = await client.remember(
             text,
             embedding=embedding,
             importance=importance_val,
             fact_type=fact_type,
+            entities=derived_entities,
             provenance="user",  # explicit remember → user provenance
             scope=scope,
             reasoning=reasoning,
