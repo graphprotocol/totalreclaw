@@ -33,8 +33,9 @@ const TROUBLESHOOTING = [
   {
     issue: 'Slow recall / search taking a long time',
     solution:
-      'First-time recall downloads the embedding model (~344MB one-time). Subsequent searches ' +
-      'take longer as the vault and the candidate-pool limit grow; the first recall after start-up is slower while the embedding model loads. If recall remains slow, try restarting the MCP server to ' +
+      'First-time recall downloads the embedding model (~344MB one-time), and the first recall ' +
+      'after each start-up is slower while the model loads. After that, search time grows with ' +
+      'vault size and the candidate-pool limit. If recall remains slow, try restarting the MCP server to ' +
       'clear stale caches. Large vaults (10K+ facts) may benefit from upgrading to Pro for higher ' +
       'candidate pool limits.',
   },
