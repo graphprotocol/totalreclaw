@@ -301,4 +301,21 @@ describe('window slicing, stage isolation, reentrancy, truncation', () => {
     await r.poll();
     expect(r.calls.length).toBe(1);
   });
+
+  it('an oversized single message is sent budget-sized and logged as a warning', async () => {
+    const r = setup();
+    const file = path.join(sessionsDir(r.home), 'huge.trajectory.jsonl');
+    fs.writeFileSync(file, '');
+    fs.appendFileSync(file, [
+      JSON.stringify({ type: 'prompt.submitted', data: { prompt: 'z'.repeat(30_000) } }),
+      JSON.stringify({ type: 'model.completed', data: { assistantTexts: ['ok'] } }),
+      JSON.stringify({ type: 'prompt.submitted', data: { prompt: 'second' } }),
+      JSON.stringify({ type: 'model.completed', data: { assistantTexts: ['ok2'] } }),
+    ].join('\n') + '\n');
+    await r.poll();
+    expect(r.calls.length).toBe(1);
+    expect(r.calls[0].messages.length).toBe(1);
+    expect(r.warns.some((w) => w.includes('huge.trajectory.jsonl') && w.includes('30000 chars'))).toBe(true);
+    expect(r.warns.some((w) => w.includes('zzzz'))).toBe(false);
+  });
 });

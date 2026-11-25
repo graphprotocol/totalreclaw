@@ -36,3 +36,18 @@ it('returns [] for a zero-facts answer', async () => {
   mocked.mockResolvedValueOnce('{"topics":[],"facts":[]}');
   await expect(extractFacts(MSGS, 'turn')).resolves.toEqual([]);
 });
+
+it('hard-cuts a single oversized first message instead of dropping it', async () => {
+  mocked.mockClear();
+  mocked.mockResolvedValueOnce('{"topics":[],"facts":[]}');
+  const big = [
+    { role: 'user', content: 'I work at Tidewater. ' + 'y'.repeat(30_000) },
+    { role: 'assistant', content: 'Noted.' },
+  ];
+  await extractFacts(big, 'full');
+  expect(mocked).toHaveBeenCalledTimes(1);
+  const userPrompt = (mocked.mock.calls[0][1] as Array<{ role: string; content: string }>)[1].content;
+  expect(userPrompt).toContain('I work at Tidewater.');
+  expect(userPrompt.length).toBeGreaterThan(11_000);
+  expect(userPrompt.length).toBeLessThan(12_500);
+});

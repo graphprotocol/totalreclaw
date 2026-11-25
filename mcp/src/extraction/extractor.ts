@@ -297,7 +297,12 @@ function truncateMessages(messages: Array<{ role: string; content: string }>, ma
 
   for (const msg of messages) {
     const line = `[${msg.role}]: ${msg.content}`;
-    if (totalChars + line.length > maxChars) break;
+    if (totalChars + line.length > maxChars) {
+      // A first message longer than the whole budget is hard-cut, not dropped:
+      // extraction sees its first maxChars rather than an empty prompt.
+      if (lines.length === 0) lines.push(line.slice(0, maxChars));
+      break;
+    }
     lines.push(line);
     totalChars += line.length;
   }

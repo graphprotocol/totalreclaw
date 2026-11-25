@@ -224,6 +224,7 @@ export function startTrajectoryPoller(
   };
 
   const pollBody = async (): Promise<void> => {
+    let inFlight: string | null = null; // file whose extraction is mid-pipeline
     try {
       await deps.ensureInitialized();
       if (deps.isPairingPending()) return;
@@ -321,6 +322,12 @@ export function startTrajectoryPoller(
         const sliceLen = sliceToPromptBudget(messages);
         const batch = messages.slice(0, sliceLen);
         const batchEnd = sliceLen < messages.length ? endOffsets[sliceLen - 1] : newOffset;
+        if (sliceLen === 1 && `[${batch[0].role}]: ${batch[0].content}`.length > PROMPT_CHAR_BUDGET) {
+          deps.logger.warn(
+            `extractd: ${path.basename(file)}: one message of ${batch[0].content.length} chars exceeds the ${PROMPT_CHAR_BUDGET}-char prompt; only its first part is extracted`,
+          );
+        }
+        inFlight = path.basename(file);
         if (sliceLen < messages.length) {
           deps.logger.info(
             `extractd: ${path.basename(file)}: window of ${messages.length} messages split; extracting the first ${sliceLen}, the rest stays for the next poll`,
@@ -361,6 +368,7 @@ export function startTrajectoryPoller(
             };
           }
           stateChanged = true;
+          inFlight = null;
           continue;
         }
         deps.logger.info(`extractd: extraction returned ${rawFacts.length} raw facts`);
@@ -382,12 +390,16 @@ export function startTrajectoryPoller(
         // slice that was sent and clear the outage fields.
         state[file] = { offset: batchEnd, turnsAccum: 0 };
         stateChanged = true;
+        inFlight = null;
       }
 
       if (stateChanged) saveState(stateFile, state, deps.logger);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       deps.logger.error(`extractd: poll iteration failed: ${msg}`);
+      if (inFlight) {
+        deps.logger.warn(`extractd: ${inFlight}: window kept for the next poll`);
+      }
     }
   };
 
