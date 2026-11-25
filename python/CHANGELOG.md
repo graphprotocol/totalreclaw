@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`totalreclaw_export` no longer leaves plaintext vault dumps on disk indefinitely (internal#645).** Each export run now deletes `totalreclaw-export-*.json` files older than 24 hours from `~/.totalreclaw/exports` (nothing outside that directory, no symlinks), and re-asserts the directory mode 0700 (files were already 0600). Small vaults are still returned inline without writing a file.
 
+- **`totalreclaw_export` no longer leaves plaintext vault dumps on disk indefinitely (internal#645).** Each export run, and the first session start of each Hermes process, now deletes `totalreclaw-export-*.json` files older than 24 hours from `~/.totalreclaw/exports` (nothing outside that directory, no symlinks), and re-asserts the directory mode 0700 (files were already 0600). Small vaults are still returned inline without writing a file.
+
 - **The Session Crystal skip log now names the PII decision and category (internal#731).** The line reads `Session Crystal skipped: sensitive content (decision=... category=...)`; the text is never logged.
 
 - **Quota copy takes its numbers from the relay.** The session-start quota nudge, the upgrade tool description and SKILL.md no longer hardcode the Free or Pro cap: they use `free_writes_limit` and the new `upgrade_writes_limit` from `/v1/billing/status`, which the relay sources from Stripe. The nudge is skipped when the relay sends no limit, instead of assuming 250.

@@ -725,7 +725,8 @@ def _prune_old_exports(directory: Path, max_age_seconds: float = EXPORT_RETENTIO
     cutoff = time.time() - max_age_seconds
     try:
         entries = list(directory.iterdir())
-    except OSError:
+    except OSError as e:
+        logger.warning("could not list exports dir %s for pruning: %s", directory.name, e)
         return 0
     for entry in entries:
         name = entry.name
@@ -742,6 +743,25 @@ def _prune_old_exports(directory: Path, max_age_seconds: float = EXPORT_RETENTIO
         except OSError as e:
             logger.warning("could not prune old export %s: %s", name, e)
     return removed
+
+
+_startup_prune_done = False
+
+
+def prune_exports_once_per_process() -> None:
+    """Prune stale export dumps the first time it is called in this process.
+
+    Called from the session-start hook so a dump is removed even if the user
+    never exports again (internal#645). Never raises, never blocks on the network.
+    """
+    global _startup_prune_done
+    if _startup_prune_done:
+        return
+    _startup_prune_done = True
+    try:
+        _prune_old_exports(_exports_dir())
+    except Exception as e:  # noqa: BLE001 — must never break session start
+        logger.warning("startup export prune failed: %s", e)
 
 
 def _export_filename() -> str:
@@ -833,8 +853,8 @@ def _write_export_file(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         os.chmod(path.parent, 0o700)
-    except OSError:
-        pass
+    except OSError as e:
+        logger.warning("could not set exports dir %s to 0700: %s", path.parent.name, e)
     _prune_old_exports(path.parent)
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
