@@ -209,6 +209,13 @@ The lenient mode exists as a defensive hatch for the edge case where a user has 
 
 Once the relay has `authKeyHash` and the client has the EOA, the Smart Account address is resolved via `SimpleAccountFactory.getAddress(owner, salt)` — a pure view call. No transaction is submitted during setup. The first actual on-chain write happens when the user stores their first memory, at which point the relay constructs a UserOp with `initCode` populated (so the bundler deploys the Smart Account as part of the same transaction that records the first fact). See [02 — Write Path](./02-write-path.md) for that flow.
 
+**Pair-time reporting (totalreclaw-relay#79).** After a relay-brokered pairing completes, the gateway's ack to the relay carries the paired Smart Account: `{"type": "ack", "wallet_address": "0x…"}` (lowercased). The relay uses it to look up the account's plan and shows it on the pair page's "You're all set" screen. The address is public (on-chain) and is the only identity sent; nothing derived from the phrase beyond it is sent. Rules, identical in MCP (`mcp/src/pair-remote-client.ts`) and Python (`python/src/totalreclaw/pair/remote_client.py`):
+
+- Phrase path: the address is resolved through the same derivation each client uses at startup, started in parallel with the completion handler, and awaited for at most 3 s before the ack.
+- Bundle path (`derived-bundle-v1`): the address is `account.smart_account`, with no RPC.
+- The address is sent only when completion returned `state: "active"`. If the completion fails, the gateway nacks instead (`{"type": "nack", "error": "<code>"}`) and the page shows the error; only short snake_case codes are forwarded, anything else becomes `completion_failed`.
+- If the address lookup fails, returns something that isn't an address, or misses the 3 s cap, the ack is the plain `{"type": "ack"}`, which the relay treats exactly as before (page unchanged). The resolver never falls back to the EOA, unlike Python's `client._derive_smart_account_address`.
+
 ---
 
 ## Related reading

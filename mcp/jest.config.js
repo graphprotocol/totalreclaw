@@ -38,6 +38,8 @@ module.exports = {
     'node_modules/(?!(@noble/hashes|@scure/bip39|@scure/base)/)',
   ],
   resolver: '<rootDir>/tests/jest-resolver.js',
+  // totalreclaw-relay#79: no test reaches the Smart Account RPC via the pair ack.
+  setupFilesAfterEnv: ['<rootDir>/tests/setup-no-smart-account-rpc.ts'],
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',

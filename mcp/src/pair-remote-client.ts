@@ -14,7 +14,10 @@
  *   5. Block on the WS until the relay pushes `{type:"forward", client_pubkey, nonce, ciphertext}`.
  *   6. Decrypt locally via x25519 ECDH + AES-256-GCM.
  *   7. Hand the decrypted phrase to the caller's completePairing handler
- *      (writes credentials.json) and ack/nack the relay.
+ *      (writes credentials.json) and ack/nack the relay. The ack carries
+ *      `wallet_address` (the paired Smart Account, public) when known, so
+ *      the relay can show the account's plan on the pair page
+ *      (totalreclaw-relay#79).
  *
  * Phrase-safety:
  *   - Relay sees only ciphertext.
@@ -68,6 +71,49 @@ export const DEFAULT_RELAY_URL = 'wss://api.totalreclaw.xyz';
 const OPEN_TIMEOUT_MS = 10_000;
 
 const DEFAULT_AWAIT_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Upper bound on how long the ack waits for the Smart Account address.
+ * `resolveWalletAddress` runs in parallel with `completePairing`, so this
+ * only bites when the RPC is slower than registration + the credentials
+ * write. Mirrors Python's `WALLET_RESOLVE_TIMEOUT_S`.
+ */
+export const WALLET_RESOLVE_TIMEOUT_MS = 3_000;
+
+const WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
+
+const NACK_CODE_RE = /^[a-z0-9_]{1,64}$/;
+
+/** Lowercased `0x` + 40-hex address, or undefined. */
+function cleanWallet(value: unknown): string | undefined {
+  return typeof value === 'string' && WALLET_RE.test(value) ? value.toLowerCase() : undefined;
+}
+
+/**
+ * The nack `error` for a non-active completion. Only short snake_case codes
+ * pass through: handlers put `err.message` in `error`, and the relay logs it
+ * and returns it to the browser. Mirrors Python's `_nack_code`.
+ */
+function nackCode(error: unknown): string {
+  return typeof error === 'string' && NACK_CODE_RE.test(error) ? error : 'completion_failed';
+}
+
+/** Best-effort: the resolver's address if it lands before `deadlineMs`. */
+async function awaitWallet(
+  pending: Promise<unknown> | undefined,
+  deadlineMs: number,
+): Promise<string | undefined> {
+  if (!pending) return undefined;
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), Math.max(0, deadlineMs - Date.now()));
+  });
+  try {
+    return cleanWallet(await Promise.race([pending.catch(() => undefined), timeout]));
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -209,6 +255,17 @@ export interface AwaitPhraseUploadOptions {
   completePairingBundle?: RelayCompleteBundleHandler;
   phraseValidator?: PhraseValidator;
   timeoutMs?: number;
+  /**
+   * Optional (totalreclaw-relay#79): map the validated phrase to the paired
+   * Smart Account address. Started in parallel with `completePairing` and
+   * awaited for at most `walletTimeoutMs` before the ack; the address rides
+   * on the ack as `wallet_address` only when completion returned
+   * `state: 'active'`. MUST resolve `undefined` rather than a fallback
+   * (never the EOA). Failure or timeout sends the plain ack. The bundle path
+   * needs no resolver: the address is `bundle.account.smart_account`.
+   */
+  resolveWalletAddress?: (mnemonic: string) => Promise<string | undefined>;
+  walletTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +453,9 @@ export async function awaitPhraseUpload(
   }
 
   let result: RelayCompletionResult;
+  let bundleWallet: string | undefined;
+  let pendingWallet: Promise<string | undefined> | undefined;
+  let walletDeadlineMs = 0;
 
   if (payloadType === 'derived-bundle-v1') {
     if (!opts.completePairingBundle) {
@@ -442,6 +502,7 @@ export async function awaitPhraseUpload(
       bundleJson = '';
     }
 
+    bundleWallet = cleanWallet(bundle.account.smart_account);
     try {
       result = await opts.completePairingBundle({ bundle, session });
     } catch (err) {
@@ -473,6 +534,18 @@ export async function awaitPhraseUpload(
       throw new Error('pair-remote-client: phrase failed BIP-39 validation');
     }
 
+    // Start the (network-bound) address lookup now so it overlaps the
+    // completion handler's own network work instead of adding to it.
+    if (opts.resolveWalletAddress) {
+      walletDeadlineMs = Date.now() + (opts.walletTimeoutMs ?? WALLET_RESOLVE_TIMEOUT_MS);
+      try {
+        pendingWallet = opts.resolveWalletAddress(mnemonic);
+        // A late rejection after we stopped waiting must not go unhandled.
+        pendingWallet.catch(() => undefined);
+      } catch {
+        pendingWallet = undefined;
+      }
+    }
     try {
       result = await opts.completePairing({ mnemonic, session });
     } catch (err) {
@@ -485,12 +558,15 @@ export async function awaitPhraseUpload(
   }
 
   if (result.state !== 'active') {
-    safeSend(ws, { type: 'nack', error: result.error ?? 'completion_failed' });
+    safeSend(ws, { type: 'nack', error: nackCode(result.error) });
     safeClose(ws);
     return result;
   }
 
-  safeSend(ws, { type: 'ack' });
+  // The address is public (on-chain) — never phrase material. Without one
+  // the relay answers the browser with the plain 204 (page unchanged).
+  const wallet = bundleWallet ?? (await awaitWallet(pendingWallet, walletDeadlineMs));
+  safeSend(ws, wallet ? { type: 'ack', wallet_address: wallet } : { type: 'ack' });
   safeClose(ws);
   return result;
 }

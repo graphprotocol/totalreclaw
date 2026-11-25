@@ -179,7 +179,12 @@ async def test_valid_bundle_invokes_complete_pairing_bundle_and_acks():
         assert captured[0].account.smart_account.lower() == TEST_SMART_ACCOUNT.lower()
         assert result["state"] == "active"
         await asyncio.sleep(0.1)
-        assert relay.ack_received is not None
+        # totalreclaw-relay#79: the bundle already carries the Smart Account,
+        # so the ack reports it with no RPC and no resolver.
+        assert relay.ack_received == {
+            "type": "ack",
+            "wallet_address": TEST_SMART_ACCOUNT.lower(),
+        }
         assert relay.nack_received is None
     finally:
         await relay.stop()
@@ -447,3 +452,32 @@ async def test_sidecar_completed_client_never_eagerly_resolves_data_edge(
         "core's hardcoded PRODUCTION DataEdge default regardless of which "
         "relay the client is actually configured against"
     )
+
+
+@pytest.mark.asyncio
+async def test_bundle_completion_not_active_nacks_without_wallet():
+    """A completion that did not reach ``active`` nacks (as MCP) and never
+    advertises the account (the relay would show a plan for credentials that
+    were not written). Free-text errors are not forwarded."""
+    relay = _BundleRelayStub(token="tok-bundle-err")
+    relay.set_bundle_payload("derived-bundle-v1", _canonical_bundle_json().encode("utf-8"))
+    await relay.start()
+    try:
+        session = await _open_session(relay)
+
+        async def complete_bundle(bundle: DerivedBundle) -> dict:
+            return {"state": "error", "error": "write failed"}
+
+        async def complete_phrase(phrase: str) -> dict:
+            raise AssertionError("unreachable")
+
+        await await_phrase_upload(
+            session,
+            complete_pairing=complete_phrase,
+            complete_pairing_bundle=complete_bundle,
+        )
+        await asyncio.sleep(0.1)
+        assert relay.ack_received is None
+        assert relay.nack_received == {"type": "nack", "error": "completion_failed"}
+    finally:
+        await relay.stop()

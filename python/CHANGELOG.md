@@ -8,7 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The pair page now shows the paired account's plan (totalreclaw-relay#79).** After a relay pairing completes, the ack to the relay carries the paired Smart Account address (`wallet_address`), so the relay can show the tier, monthly usage and an upgrade button on the "You're all set" screen. The address is resolved in parallel with writing credentials and waited for at most 3 s (`WALLET_RESOLVE_TIMEOUT_S`); a bundle pairing uses the bundle's `account.smart_account`. It is sent only when pairing completed (`state == "active"`). If the lookup fails or is slow, the ack is unchanged and the page looks as before. The lookup never falls back to the EOA (new `client.derive_smart_account_address_strict`). Wired in the Hermes pair tool and the pair sidecar. Tests: `tests/test_pair_remote_client.py`, `tests/test_pair_completion_bundle.py`; `tests/conftest.py` stubs the RPC for every test.
+
 ### Fixed
+
+- **A failed relay pairing no longer says "You're all set".** When the completion handler returned a failure instead of raising (for example, writing the credentials failed), the gateway still sent the relay a plain ack, so the pair page reported success with nothing saved. It now nacks, as MCP does, and the page shows the error. Only short snake_case error codes are forwarded; free text such as an exception message (which can contain local paths) becomes `completion_failed`.
 
 - **Agent-facing wording (internal#651, #727, #514, #472).**
   - Hermes SKILL.md and the system-prompt block name `USER.md` / `MEMORY.md` / "built-in memory" as the exception: when the user names the built-in store, the agent uses the built-in `memory` tool (the mirror still copies it into the vault).

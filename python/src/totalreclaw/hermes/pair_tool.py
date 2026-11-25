@@ -277,7 +277,11 @@ def _run_relay_pair_on_thread(
     Returns ``_OpenedSession(url, pin, expires_at)``. Raises on
     relay open failure (rate-limit, bad gateway, etc).
     """
-    from ..pair.remote_client import await_phrase_upload, open_remote_pair_session
+    from ..pair.remote_client import (
+        await_phrase_upload,
+        open_remote_pair_session,
+        resolve_paired_smart_account,
+    )
 
     handshake_q: "queue.Queue[Any]" = queue.Queue(maxsize=1)
 
@@ -359,6 +363,8 @@ def _run_relay_pair_on_thread(
                     result = await await_phrase_upload(
                         session,
                         complete_pairing=_complete_pairing_async,
+                        # totalreclaw-relay#79: lets the pair page show the plan.
+                        resolve_wallet_address=resolve_paired_smart_account,
                     )
                     logger.info(
                         "pair.relay_completion_done token=%s… outcome=ok state=%s",

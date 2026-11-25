@@ -143,11 +143,8 @@ import { type MemoryTypeV1, type MemoryScope } from './v1-types.js';
 
 import { validateMnemonic, generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
-import { mnemonicToAccount } from 'viem/accounts';
-import { createPublicClient, http, type Address } from 'viem';
-import { gnosis, baseSepolia } from 'viem/chains';
-import { toSimpleSmartAccount } from 'permissionless/accounts';
-import { entryPoint07Address } from 'viem/account-abstraction';
+import { gnosis } from 'viem/chains';
+import { deriveSmartAccountAddress } from './smart-account-address.js';
 import crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -518,27 +515,7 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
   // Derive Smart Account address via CREATE2 (deterministic, same on all chains).
   // First derive on Base Sepolia (free tier default), then query billing to detect
   // Pro tier and switch to Gnosis if needed.
-  const entryPointAddr = (process.env.TOTALRECLAW_ENTRYPOINT_ADDRESS || entryPoint07Address) as Address;
-  const ownerAccount = mnemonicToAccount(mnemonic);
-
-  // Smart Account address is deterministic via CREATE2 — use Base Sepolia for derivation
-  // (same address regardless of chain).
-  const publicClient = createPublicClient({
-    chain: baseSepolia,
-    transport: http(),
-  });
-
-  const smartAccount = await toSimpleSmartAccount({
-    // @ts-ignore - viem/permissionless type intersection conflict
-    client: publicClient,
-    owner: ownerAccount,
-    entryPoint: {
-      address: entryPointAddr,
-      version: '0.7',
-    },
-  });
-
-  const smartAccountAddress = smartAccount.address.toLowerCase();
+  const smartAccountAddress = await deriveSmartAccountAddress(mnemonic);
 
   // Resolve chain + DataEdge from the relay's billing response, verbatim (#439).
   // The relay is authoritative: it returns `chain_id` + `data_edge_address` in
