@@ -12,6 +12,8 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use unicode_normalization::UnicodeNormalization;
 
+use crate::Result;
+
 type HmacSha256 = Hmac<Sha256>;
 
 /// Normalize text for deterministic fingerprinting.
@@ -41,6 +43,36 @@ pub fn normalize_text(text: &str) -> String {
     }
 
     result.trim().to_string()
+}
+
+/// Lowercase, then NFC. The one normalisation order of index scheme 1
+/// (tokenizer, `fpKeyV2` fingerprint). Uses `str::to_lowercase`, which is
+/// context-sensitive for final sigma (`Σ` at the end of a word becomes `ς`).
+/// Entity names go through `claims::normalize_entity_name`, which lowercases
+/// per character (`σ`); both orders are frozen by the scheme-1 vectors.
+pub(crate) fn lowercase_nfc(text: &str) -> String {
+    text.to_lowercase().nfc().collect()
+}
+
+/// Scheme-1 text normalisation: lowercase, NFC, collapse whitespace, trim.
+pub fn normalize_text_v2(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for word in lowercase_nfc(text).split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    out
+}
+
+/// Content fingerprint v2 (index scheme 1):
+/// `hex(HMAC-SHA256(fpKeyV2, normalize_text_v2(text)))`, where
+/// `fpKeyV2 = HKDF(dedupKey, "", "totalreclaw-content-fp-v2")`.
+/// Not interchangeable with [`generate_content_fingerprint`] (v1).
+pub fn generate_content_fingerprint_v2(plaintext: &str, dedup_key: &[u8; 32]) -> Result<String> {
+    let key = crate::crypto::derive_content_fp_key_v2(dedup_key)?;
+    Ok(key.hmac_hex(normalize_text_v2(plaintext).as_bytes()))
 }
 
 /// Compute an HMAC-SHA256 content fingerprint.

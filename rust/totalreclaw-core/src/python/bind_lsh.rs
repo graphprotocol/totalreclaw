@@ -45,6 +45,14 @@ impl PyLshHasher {
         self.inner.hash(&embedding).map_err(to_pyerr)
     }
 
+    /// Hash an embedding vector to KEYED bucket tags (index scheme 1).
+    ///
+    /// Returns a list of hex strings (one per table). ``lshBucketKey`` is derived
+    /// from the seed inside core and never exposed.
+    fn hash_keyed(&self, embedding: Vec<f64>) -> PyResult<Vec<String>> {
+        self.inner.hash_keyed(&embedding).map_err(to_pyerr)
+    }
+
     /// Number of hash tables.
     #[getter]
     fn tables(&self) -> usize {

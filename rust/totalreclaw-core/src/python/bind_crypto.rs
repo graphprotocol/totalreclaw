@@ -97,9 +97,59 @@ pub(crate) fn py_generate_blind_indices(text: &str) -> Vec<String> {
     blind::generate_blind_indices(text)
 }
 
+/// Keyed blind-tag generator (index scheme 1).
+///
+/// Construct from the vault's ``encryption_key``; ``indexKey`` is derived
+/// inside core and never exposed (no key getter, no ``__repr__``).
+#[pyclass(name = "BlindIndexer")]
+pub(crate) struct PyBlindIndexer {
+    pub(crate) inner: blind::BlindIndexer,
+}
+
+#[pymethods]
+impl PyBlindIndexer {
+    #[new]
+    fn new(encryption_key: &[u8]) -> PyResult<Self> {
+        let key = bytes_to_array32(encryption_key)?;
+        let inner = blind::BlindIndexer::new(&key).map_err(to_pyerr)?;
+        Ok(Self { inner })
+    }
+
+    /// Stem tags of a text, sorted and deduplicated (list of hex strings).
+    fn stem_tags(&self, text: &str) -> Vec<String> {
+        self.inner.stem_tags(text)
+    }
+
+    /// Tag of an entity name (normalised in core).
+    fn entity_tag(&self, name: &str) -> String {
+        self.inner.entity_tag(name)
+    }
+
+    /// Tag of the digest-fact marker.
+    fn digest_marker_tag(&self) -> String {
+        self.inner.digest_marker_tag()
+    }
+}
+
+/// Sort ascending and deduplicate a list of tags (call before batching a query).
+#[pyfunction]
+#[pyo3(name = "sort_dedup_tags")]
+pub(crate) fn py_sort_dedup_tags(tags: Vec<String>) -> Vec<String> {
+    blind::sort_dedup_tags(tags)
+}
+
 // ---------------------------------------------------------------------------
 // Content fingerprint
 // ---------------------------------------------------------------------------
+
+/// Content fingerprint v2 (index scheme 1): HMAC under ``fpKeyV2``, derived in
+/// core from ``dedup_key``. Not interchangeable with ``generate_content_fingerprint``.
+#[pyfunction]
+#[pyo3(name = "generate_content_fingerprint_v2")]
+pub(crate) fn py_generate_content_fingerprint_v2(plaintext: &str, dedup_key: &[u8]) -> PyResult<String> {
+    let key = bytes_to_array32(dedup_key)?;
+    fingerprint::generate_content_fingerprint_v2(plaintext, &key).map_err(to_pyerr)
+}
 
 /// Compute HMAC-SHA256 content fingerprint. Returns 64-char hex string.
 #[pyfunction]

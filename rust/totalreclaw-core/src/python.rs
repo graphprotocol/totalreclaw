@@ -109,6 +109,10 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_generate_blind_indices, m)?)?;
     m.add_function(wrap_pyfunction!(py_generate_content_fingerprint, m)?)?;
     m.add_function(wrap_pyfunction!(py_normalize_text, m)?)?;
+    // Keyed blind indices, index scheme 1 (internal#573)
+    m.add_class::<PyBlindIndexer>()?;
+    m.add_function(wrap_pyfunction!(py_sort_dedup_tags, m)?)?;
+    m.add_function(wrap_pyfunction!(py_generate_content_fingerprint_v2, m)?)?;
 
     // Embedding codec (canonical f16 + universal decoder) — internal#479 Part A
     m.add_function(wrap_pyfunction!(py_encode_embedding_canonical, m)?)?;
@@ -120,6 +124,8 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Protobuf
     m.add_function(wrap_pyfunction!(py_encode_fact_protobuf, m)?)?;
     m.add_function(wrap_pyfunction!(py_encode_tombstone_protobuf, m)?)?;
+    m.add_function(wrap_pyfunction!(py_encode_fact_protobuf_keyed, m)?)?;
+    m.add_function(wrap_pyfunction!(py_encode_tombstone_protobuf_keyed, m)?)?;
 
     // Debrief
     m.add_function(wrap_pyfunction!(py_parse_debrief_response, m)?)?;
@@ -182,6 +188,7 @@ fn totalreclaw_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "managed")]
     {
         m.add_function(wrap_pyfunction!(py_generate_search_trapdoors, m)?)?;
+        m.add_function(wrap_pyfunction!(py_generate_search_trapdoors_keyed, m)?)?;
         m.add_function(wrap_pyfunction!(py_parse_search_response, m)?)?;
         m.add_function(wrap_pyfunction!(py_parse_broadened_response, m)?)?;
         m.add_function(wrap_pyfunction!(py_decrypt_and_rerank, m)?)?;

@@ -233,6 +233,24 @@ pub fn generate_search_trapdoors(
     Ok(trapdoors)
 }
 
+/// Keyed search trapdoors (index scheme 1): stem tags of the query, one entity
+/// tag per name in `entity_names`, and keyed LSH bucket tags, combined, sorted
+/// and deduplicated. The result is final: split it into batches as is, so a
+/// tail batch cannot reveal which family it belongs to.
+pub fn generate_search_trapdoors_keyed(
+    query: &str,
+    entity_names: &[String],
+    query_embedding: &[f32],
+    indexer: &crate::blind::BlindIndexer,
+    lsh_hasher: &LshHasher,
+) -> Result<Vec<String>> {
+    let mut trapdoors = indexer.stem_tags(query);
+    trapdoors.extend(entity_names.iter().map(|name| indexer.entity_tag(name)));
+    let embedding_f64: Vec<f64> = query_embedding.iter().map(|&f| f as f64).collect();
+    trapdoors.extend(lsh_hasher.hash_keyed(&embedding_f64)?);
+    Ok(blind::sort_dedup_tags(trapdoors))
+}
+
 /// Generate trapdoors for multiple query reformulations in one call.
 ///
 /// Convenience batch wrapper around `generate_search_trapdoors` for the

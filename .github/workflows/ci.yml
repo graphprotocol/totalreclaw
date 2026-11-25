@@ -348,6 +348,10 @@ jobs:
       # (see #489/#491: no flaky toolchain fetches in test jobs).
       - name: PyO3 pyfunction <-> registration parity
         run: python scripts/check-pyfunction-parity.py
+      - name: Keyed blind indices fixture is reproducible from the independent generator (internal#573)
+        run: |
+          python3 tests/parity/fixtures/generate-keyed-blind-indices-v1.py
+          git diff --exit-code -- tests/parity/fixtures/keyed-blind-indices-v1.json
       - name: Run tests
         run: cd rust/totalreclaw-core && cargo test
 
@@ -377,6 +381,8 @@ jobs:
         run: cd python && python -m pytest ../tests/parity/test_outer_protobuf_parity.py -v -p no:cacheprovider
       - name: decayScore rule parity — Python leg (#789)
         run: cd python && python -m pytest ../tests/parity/test_decay_score_parity.py -v -p no:cacheprovider
+      - name: Keyed blind indices — PyO3 parity (index scheme 1, internal#573)
+        run: cd python && python -m pytest ../tests/parity/test_keyed_blind_indices_parity.py -v -p no:cacheprovider
       # Hermes runs its own bundled Python 3.14. Install the client there with
       # --only-binary :all:, reusing the abi3 core wheel built above, so any
       # dependency (core included) that would need a compiler on 3.14 fails
@@ -459,6 +465,8 @@ jobs:
         run: cd tests/parity && npx tsx outer-protobuf-parity.test.ts
       - name: decayScore rule parity — core WASM, MCP, plugin (#789)
         run: cd tests/parity && npx tsx decay-score-parity.test.ts
+      - name: Keyed blind indices — WASM parity (index scheme 1, internal#573)
+        run: cd tests/parity && npx tsx keyed-blind-indices-parity.test.ts
       - name: Forget-guard parity (TS/WASM side, internal#605)
         run: cd tests/parity && npx tsx forget-guard-parity.test.ts
       - name: Topical dedup-context parity (TS/WASM side, PRD-04 DEP-3)

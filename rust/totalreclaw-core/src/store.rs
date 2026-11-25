@@ -12,7 +12,7 @@
 
 use base64::Engine;
 
-use crate::blind;
+use crate::blind::{self, BlindIndexer};
 use crate::crypto;
 use crate::fingerprint;
 use crate::lsh::LshHasher;
@@ -356,6 +356,92 @@ pub fn prepare_fact_v1(
     };
 
     let protobuf_bytes = protobuf::encode_fact_protobuf(&payload);
+
+    Ok(PreparedFact {
+        fact_id,
+        timestamp,
+        owner: owner.to_string(),
+        encrypted_blob_hex,
+        blind_indices,
+        decay_score,
+        source: source.to_string(),
+        content_fp,
+        agent_id: agent_id.to_string(),
+        encrypted_embedding: Some(encrypted_embedding),
+        protobuf_bytes,
+    })
+}
+
+/// Prepare a Memory Taxonomy v1 tombstone with `index_scheme = 1` (field 14).
+pub fn prepare_tombstone_v1_keyed(fact_id: &str, owner: &str) -> Vec<u8> {
+    protobuf::encode_tombstone_protobuf_keyed(fact_id, owner)
+}
+
+/// Prepare a Memory Taxonomy v1 fact with KEYED blind indices (index scheme 1).
+///
+/// Like [`prepare_fact_v1`], except:
+/// - `blind_indices` = stem tags + keyed LSH tags + one tag per entity name
+///   (+ the digest marker tag when `digest_marker`), all derived here, sorted
+///   and deduplicated;
+/// - `content_fp` is the v2 fingerprint (`fpKeyV2`);
+/// - the protobuf carries field 14 `index_scheme = 1`.
+///
+/// Derives `indexKey`, `lshBucketKey` and `fpKeyV2` from the keys it is given.
+/// Calls no unkeyed function.
+pub fn prepare_fact_v1_keyed(
+    envelope_json: &str,
+    text_for_blind_indices: &str,
+    entity_names: &[String],
+    digest_marker: bool,
+    encryption_key: &[u8; 32],
+    dedup_key: &[u8; 32],
+    lsh_hasher: &LshHasher,
+    embedding: &[f32],
+    importance: f64,
+    source: &str,
+    owner: &str,
+    agent_id: &str,
+) -> Result<PreparedFact> {
+    let fact_id = uuid::Uuid::now_v7().to_string();
+    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+
+    let encrypted_blob_b64 = crypto::encrypt(envelope_json, encryption_key)?;
+    let encrypted_blob_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&encrypted_blob_b64)
+        .map_err(|e| crate::Error::Crypto(e.to_string()))?;
+    let encrypted_blob_hex = hex::encode(&encrypted_blob_bytes);
+
+    let indexer = BlindIndexer::new(encryption_key)?;
+    let mut tags = indexer.stem_tags(text_for_blind_indices);
+    let embedding_f64: Vec<f64> = embedding.iter().map(|&f| f as f64).collect();
+    tags.extend(lsh_hasher.hash_keyed(&embedding_f64)?);
+    tags.extend(entity_names.iter().map(|name| indexer.entity_tag(name)));
+    if digest_marker {
+        tags.push(indexer.digest_marker_tag());
+    }
+    let blind_indices = blind::sort_dedup_tags(tags);
+
+    let content_fp = fingerprint::generate_content_fingerprint_v2(text_for_blind_indices, dedup_key)?;
+    let encrypted_embedding = encrypt_embedding(embedding, encryption_key)?;
+    // decayScore is a liveness flag, not importance (#789). Importance is
+    // carried in the encrypted envelope only, as in `prepare_fact_v1`.
+    let _ = importance;
+    let decay_score = live_decay_score();
+
+    let payload = FactPayload {
+        id: fact_id.clone(),
+        timestamp: timestamp.clone(),
+        owner: owner.to_string(),
+        encrypted_blob_hex: encrypted_blob_hex.clone(),
+        blind_indices: blind_indices.clone(),
+        decay_score,
+        source: source.to_string(),
+        content_fp: content_fp.clone(),
+        agent_id: agent_id.to_string(),
+        encrypted_embedding: Some(encrypted_embedding.clone()),
+        version: protobuf::PROTOBUF_VERSION_V4,
+    };
+    let protobuf_bytes = protobuf::encode_fact_protobuf_keyed(&payload)?;
 
     Ok(PreparedFact {
         fact_id,

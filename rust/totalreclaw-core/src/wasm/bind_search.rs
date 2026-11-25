@@ -5,6 +5,8 @@
 //! export keeps its exact `js_name`, so the JS-visible surface is unchanged.
 
 use super::*;
+#[cfg(feature = "managed")]
+use super::bind_crypto::WasmBlindIndexer;
 
 // ---------------------------------------------------------------------------
 // Search pipeline (feature-gated: managed)
@@ -26,6 +28,31 @@ pub fn wasm_generate_search_trapdoors(
 ) -> Result<JsValue, JsError> {
     let trapdoors = search::generate_search_trapdoors(query, query_embedding, &lsh_hasher.inner)
         .map_err(to_js_error)?;
+    serde_wasm_bindgen::to_value(&trapdoors).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Keyed search trapdoors (index scheme 1): stem tags + one entity tag per name +
+/// keyed LSH tags, sorted and deduplicated. `entity_names`: JSON array of strings.
+/// Returns a JsValue (JSON array of hex strings); final, batch as is.
+#[cfg(feature = "managed")]
+#[wasm_bindgen(js_name = "generateSearchTrapdoorsKeyed")]
+pub fn wasm_generate_search_trapdoors_keyed(
+    query: &str,
+    entity_names: JsValue,
+    query_embedding: &[f32],
+    indexer: &WasmBlindIndexer,
+    lsh_hasher: &WasmLshHasher,
+) -> Result<JsValue, JsError> {
+    let entity_names: Vec<String> = serde_wasm_bindgen::from_value(entity_names)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    let trapdoors = search::generate_search_trapdoors_keyed(
+        query,
+        &entity_names,
+        query_embedding,
+        &indexer.inner,
+        &lsh_hasher.inner,
+    )
+    .map_err(to_js_error)?;
     serde_wasm_bindgen::to_value(&trapdoors).map_err(|e| JsError::new(&e.to_string()))
 }
 

@@ -9,7 +9,8 @@
 //!   9: (removed in v3 — now encrypted inside field 4),
 //!   10: content_fp (string),
 //!   11: (removed in v3 — now encrypted inside field 4),
-//!   12: sequence_id (int64, server-assigned), 13: encrypted_embedding (string)
+//!   12: sequence_id (int64, server-assigned), 13: encrypted_embedding (string),
+//!   14: index_scheme (varint; 1 = keyed blind indices, absent = legacy)
 
 /// A fact payload ready for protobuf encoding and on-chain submission.
 #[derive(Debug, Clone)]
@@ -38,8 +39,40 @@ pub const DEFAULT_PROTOBUF_VERSION: u32 = 3;
 /// Signals that the inner encrypted blob is a v1 JSON payload.
 pub const PROTOBUF_VERSION_V4: u32 = 4;
 
-/// Encode a fact payload as minimal protobuf wire format.
+/// Outer protobuf field 14 value for keyed blind indices (HKDF/HMAC scheme 1).
+/// Covers: the three key labels, the tag domains, the lowercase-then-NFC
+/// tokenizer, stems-only, the LSH message format and `fpKeyV2`. A change to any
+/// of them is scheme 2.
+pub const INDEX_SCHEME_KEYED_V1: u32 = 1;
+
+/// Encode a fact payload as minimal protobuf wire format (legacy: UNKEYED
+/// tags, no field 14). For scheme-1 facts use [`encode_fact_protobuf_keyed`].
 pub fn encode_fact_protobuf(fact: &FactPayload) -> Vec<u8> {
+    encode_fact(fact, 0)
+}
+
+/// Encode a scheme-1 fact: field 5 sorted ascending and deduplicated, and
+/// field 14 `index_scheme = 1`. Always writes outer version 4 (`fact.version`
+/// is ignored). Rejects any tag that is not 64 lowercase hex characters.
+/// This is a shape check only, not a keyedness guarantee: a legacy unkeyed
+/// `sha256(word)` is also 64 lowercase hex and passes it. Keyed tags must come
+/// from `BlindIndexer` / `prepare_fact_v1_keyed`; the wire-boundary test
+/// (no output equals a legacy sha256) is the control for callers.
+pub fn encode_fact_protobuf_keyed(fact: &FactPayload) -> crate::Result<Vec<u8>> {
+    for tag in &fact.blind_indices {
+        if tag.len() != 64 || !tag.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+            return Err(crate::Error::InvalidInput(
+                "keyed blind index must be 64 lowercase hex characters".into(),
+            ));
+        }
+    }
+    let mut keyed = fact.clone();
+    keyed.version = PROTOBUF_VERSION_V4;
+    Ok(encode_fact(&keyed, INDEX_SCHEME_KEYED_V1))
+}
+
+/// `index_scheme == 0` writes the legacy layout byte for byte.
+fn encode_fact(fact: &FactPayload, index_scheme: u32) -> Vec<u8> {
     let mut buf = Vec::with_capacity(512);
 
     // Field 1: id (string)
@@ -53,8 +86,15 @@ pub fn encode_fact_protobuf(fact: &FactPayload) -> Vec<u8> {
         write_bytes(&mut buf, 4, &blob_bytes);
     }
     // Field 5: blind_indices (repeated string)
-    for index in &fact.blind_indices {
-        write_string(&mut buf, 5, index);
+    if index_scheme == 0 {
+        for index in &fact.blind_indices {
+            write_string(&mut buf, 5, index);
+        }
+    } else {
+        let sorted: std::collections::BTreeSet<&String> = fact.blind_indices.iter().collect();
+        for index in sorted {
+            write_string(&mut buf, 5, index);
+        }
     }
     // Field 6: decay_score (double)
     write_double(&mut buf, 6, fact.decay_score);
@@ -75,6 +115,10 @@ pub fn encode_fact_protobuf(fact: &FactPayload) -> Vec<u8> {
     if let Some(ref emb) = fact.encrypted_embedding {
         write_string(&mut buf, 13, emb);
     }
+    // Field 14: index_scheme (varint) — only for keyed payloads
+    if index_scheme != 0 {
+        write_varint_field(&mut buf, 14, index_scheme);
+    }
 
     buf
 }
@@ -84,10 +128,33 @@ pub fn encode_fact_protobuf(fact: &FactPayload) -> Vec<u8> {
 /// `version`: outer protobuf schema version (3 legacy, 4 for v1 taxonomy).
 /// A value of 0 defaults to `DEFAULT_PROTOBUF_VERSION` (3) for back-compat.
 pub fn encode_tombstone_protobuf(fact_id: &str, owner: &str, version: u32) -> Vec<u8> {
+    encode_tombstone(fact_id, owner, version, &chrono::Utc::now().to_rfc3339(), 0)
+}
+
+/// Encode a scheme-1 tombstone: [`encode_tombstone_protobuf`] with outer
+/// version 4 plus field 14 `index_scheme = 1`. A tombstone without field 14 is
+/// ignored by the keyed-scheme indexer.
+pub fn encode_tombstone_protobuf_keyed(fact_id: &str, owner: &str) -> Vec<u8> {
+    encode_tombstone_protobuf_keyed_at(fact_id, owner, &chrono::Utc::now().to_rfc3339())
+}
+
+/// [`encode_tombstone_protobuf_keyed`] with an explicit timestamp (field 2),
+/// for byte-exact tests.
+pub fn encode_tombstone_protobuf_keyed_at(fact_id: &str, owner: &str, timestamp: &str) -> Vec<u8> {
+    encode_tombstone(fact_id, owner, PROTOBUF_VERSION_V4, timestamp, INDEX_SCHEME_KEYED_V1)
+}
+
+fn encode_tombstone(
+    fact_id: &str,
+    owner: &str,
+    version: u32,
+    timestamp: &str,
+    index_scheme: u32,
+) -> Vec<u8> {
     let mut buf = Vec::with_capacity(128);
 
     write_string(&mut buf, 1, fact_id);
-    write_string(&mut buf, 2, &chrono::Utc::now().to_rfc3339());
+    write_string(&mut buf, 2, timestamp);
     write_string(&mut buf, 3, owner);
     // Empty encrypted blob
     write_bytes(&mut buf, 4, &[]);
@@ -102,6 +169,9 @@ pub fn encode_tombstone_protobuf(fact_id: &str, owner: &str, version: u32) -> Ve
     };
     write_varint_field(&mut buf, 8, v);
     // Fields 9 (source) and 11 (agent_id) removed in v3
+    if index_scheme != 0 {
+        write_varint_field(&mut buf, 14, index_scheme);
+    }
 
     buf
 }

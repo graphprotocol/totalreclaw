@@ -1128,4 +1128,30 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("does not match"));
     }
+
+    #[test]
+    fn keyed_blind_indices_bundle_path_equals_phrase_path() {
+        // A bundle host holds encryption_key, dedup_key and lsh_seed but no phrase.
+        // It must derive the same keyed tags as the phrase path (strict and lenient).
+        let bundle = derive_test_bundle();
+        let strict = crypto::derive_keys_from_mnemonic(TEST_MNEMONIC).unwrap();
+        let lenient = crypto::derive_keys_from_mnemonic_lenient(TEST_MNEMONIC).unwrap();
+        let from_bundle = crate::blind::BlindIndexer::new(&bundle.vault.encryption_key).unwrap();
+        let from_strict = crate::blind::BlindIndexer::new(&strict.encryption_key).unwrap();
+        let from_lenient = crate::blind::BlindIndexer::new(&lenient.encryption_key).unwrap();
+        let text = "prefers dark mode";
+        assert_eq!(from_bundle.stem_tags(text), from_strict.stem_tags(text));
+        assert_eq!(from_bundle.stem_tags(text), from_lenient.stem_tags(text));
+        assert_eq!(from_bundle.entity_tag("Postgres"), from_strict.entity_tag("Postgres"));
+
+        let embedding: Vec<f64> = (0..16).map(|i| (i as f64 * 0.3).cos()).collect();
+        let lsh_phrase_seed = crypto::derive_lsh_seed(TEST_MNEMONIC, &strict.salt).unwrap();
+        let phrase = crate::lsh::LshHasher::new(&lsh_phrase_seed, 16).unwrap();
+        let hosted = crate::lsh::LshHasher::new(&bundle.vault.lsh_seed, 16).unwrap();
+        assert_eq!(phrase.hash_keyed(&embedding).unwrap(), hosted.hash_keyed(&embedding).unwrap());
+        assert_eq!(
+            crate::fingerprint::generate_content_fingerprint_v2(text, &strict.dedup_key).unwrap(),
+            crate::fingerprint::generate_content_fingerprint_v2(text, &bundle.vault.dedup_key).unwrap()
+        );
+    }
 }

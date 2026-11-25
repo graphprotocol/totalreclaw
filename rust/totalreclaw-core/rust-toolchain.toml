@@ -1,0 +1,9 @@
+# Pins the release toolchain for this crate. The keyed-blind-index tokenizer
+# (`char::is_alphanumeric`, `is_whitespace`, `str::to_lowercase`) and
+# `unicode-normalization` depend on Unicode tables; an unpinned toolchain bump
+# can change tags for newly assigned characters. Bump deliberately, and
+# regenerate / re-check tests/parity/fixtures/keyed-blind-indices-v1.json.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+targets = ["wasm32-unknown-unknown"]

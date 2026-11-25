@@ -105,9 +105,67 @@ pub fn wasm_generate_blind_indices(text: &str) -> Result<JsValue, JsError> {
     serde_wasm_bindgen::to_value(&indices).map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Keyed blind-tag generator (index scheme 1). Construct from the vault's
+/// `encryptionKey`; `indexKey` is derived inside core and never exposed (no
+/// key getter, no string conversion).
+#[wasm_bindgen]
+pub struct WasmBlindIndexer {
+    pub(crate) inner: blind::BlindIndexer,
+}
+
+#[wasm_bindgen]
+impl WasmBlindIndexer {
+    /// `encryption_key_hex`: 64-char hex string (32 bytes).
+    #[wasm_bindgen(constructor)]
+    pub fn new(encryption_key_hex: &str) -> Result<WasmBlindIndexer, JsError> {
+        let key = parse_key_hex(encryption_key_hex, "encryption_key")?;
+        let inner = blind::BlindIndexer::new(&key).map_err(to_js_error)?;
+        Ok(WasmBlindIndexer { inner })
+    }
+
+    /// Stem tags of a text, sorted and deduplicated. JSON array of hex strings.
+    #[wasm_bindgen(js_name = "stemTags")]
+    pub fn stem_tags(&self, text: &str) -> Result<JsValue, JsError> {
+        serde_wasm_bindgen::to_value(&self.inner.stem_tags(text))
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Tag of an entity name (normalised in core).
+    #[wasm_bindgen(js_name = "entityTag")]
+    pub fn entity_tag(&self, name: &str) -> String {
+        self.inner.entity_tag(name)
+    }
+
+    /// Tag of the digest-fact marker.
+    #[wasm_bindgen(js_name = "digestMarkerTag")]
+    pub fn digest_marker_tag(&self) -> String {
+        self.inner.digest_marker_tag()
+    }
+}
+
+/// Sort ascending and deduplicate a list of tags (call before batching a query).
+#[wasm_bindgen(js_name = "sortDedupTags")]
+pub fn wasm_sort_dedup_tags(tags: JsValue) -> Result<JsValue, JsError> {
+    let tags: Vec<String> =
+        serde_wasm_bindgen::from_value(tags).map_err(|e| JsError::new(&e.to_string()))?;
+    serde_wasm_bindgen::to_value(&blind::sort_dedup_tags(tags))
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // Content fingerprint
 // ---------------------------------------------------------------------------
+
+/// Content fingerprint v2 (index scheme 1): HMAC under `fpKeyV2`, which core
+/// derives from `dedupKey`. Not interchangeable with `generateContentFingerprint`.
+#[wasm_bindgen(js_name = "generateContentFingerprintV2")]
+pub fn wasm_generate_content_fingerprint_v2(
+    plaintext: &str,
+    dedup_key_hex: &str,
+) -> Result<String, JsError> {
+    let key = parse_key_hex(dedup_key_hex, "dedup_key")?;
+    fingerprint::generate_content_fingerprint_v2(plaintext, &key).map_err(to_js_error)
+}
 
 /// Compute HMAC-SHA256 content fingerprint.
 ///
