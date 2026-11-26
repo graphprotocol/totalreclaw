@@ -618,8 +618,8 @@ export const FACT_INDEX_SCHEME_QUERY = `
 /**
  * Read the keyed-index scheme of one fact, for the pin/retype guard.
  *
- * Returns the scheme number (1 = keyed) only for a fact that exists, belongs
- * to `owner` and carries a numeric `indexScheme`. Returns `null` for everything
+ * Returns 1 (keyed) only for a fact that exists, belongs
+ * to `owner` and carries `indexScheme` 1. Returns `null` for everything
  * else: missing fact, owner mismatch, a GraphQL error body (the old subgraph
  * answers a validation error), a malformed body, any network failure or any
  * relay error other than a read denial. A read denial (`RelayReadBlocked`)
@@ -674,8 +674,10 @@ export async function lookupFactIndexScheme(
   if (typeof fact.owner !== 'string' || fact.owner.toLowerCase() !== owner.toLowerCase()) {
     return refuse('owner_mismatch');
   }
-  if (typeof fact.indexScheme !== 'number') return refuse('not_keyed');
-  return fact.indexScheme;
+  // Anything but scheme 1 (missing, non-numeric, 0, a future 2) is refused here,
+  // so every refusal logs its reason code. The result is 1 or null.
+  if (fact.indexScheme !== 1) return refuse('not_keyed');
+  return 1;
 }
 
 /** Fetch a single fact by its ID (the client-generated UUID). Returns null if not found or inactive. */
