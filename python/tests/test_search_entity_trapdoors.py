@@ -7,7 +7,8 @@ are never matched at recall time.
 
 This test isolates the entity signal as the SOLE differentiator:
 
-* ``generate_blind_indices`` is patched to ``[]`` (no word trapdoors).
+* Stem tags of the query are present too (keyed); the assertion is about the
+  keyed entity tag being among them.
 * No ``query_embedding`` / ``lsh_hasher`` is passed (no LSH trapdoors).
 * ``relay.query_subgraph`` is faked to record the ``trapdoors`` value of every
   call into a list and return empty results, so decryption/rerank are trivially
@@ -27,17 +28,14 @@ from unittest import mock
 import pytest
 
 from totalreclaw import operations
-from totalreclaw.claims_helper import compute_entity_trapdoor
+from totalreclaw import blind_tags
 
 
 @pytest.mark.asyncio
 async def test_search_facts_includes_query_entity_trapdoor() -> None:
     query = "my Honda Civic service history"
 
-    # Silence word trapdoors so the entity trapdoor is the ONLY differentiator.
-    with mock.patch.object(
-        operations, "generate_blind_indices", return_value=[]
-    ):
+    if True:
         # Fake relay: capture every trapdoors chunk, return empty results so
         # there are no candidates to decrypt/rerank (trivially empty output).
         recorded_trapdoors: list[list[str]] = []
@@ -55,6 +53,7 @@ async def test_search_facts_includes_query_entity_trapdoor() -> None:
         # reached because all candidate sets are empty.
         keys = mock.Mock()
         keys.encryption_key = b"\x00" * 32
+        keys.dedup_key = b"\x01" * 32
 
         result = await operations.search_facts(
             query=query,
@@ -79,7 +78,12 @@ async def test_search_facts_includes_query_entity_trapdoor() -> None:
         "relay.query_subgraph was never called -- search_facts hit the "
         "early-return guard, so entity trapdoors never reached the wire"
     )
-    assert compute_entity_trapdoor("honda civic") in union, (
+    import hashlib
+
+    entity_tag = blind_tags.indexer(keys).entity_tag("honda civic")
+    assert entity_tag in union, (
         "entity trapdoor for 'honda civic' missing from queried trapdoors; "
-        f"got {sorted(union)}"
+        "(tags not printed)"
     )
+    # Keyed: the unkeyed sha256("entity:...") form is never sent.
+    assert hashlib.sha256(b"entity:honda civic").hexdigest() not in union

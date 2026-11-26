@@ -12,7 +12,6 @@ What changed from python 1.x:
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from dataclasses import dataclass
@@ -25,15 +24,12 @@ from totalreclaw.claims_helper import (
     DIGEST_CATEGORY,
     DIGEST_CLAIM_CAP,
     DIGEST_SOURCE_AGENT,
-    DIGEST_TRAPDOOR,
     PROTOBUF_VERSION_V4,
     TYPE_TO_CATEGORY_V1,
     V1_SCHEMA_VERSION,
     build_canonical_claim,
     build_canonical_claim_v1,
     build_digest_claim,
-    compute_entity_trapdoor,
-    compute_entity_trapdoors,
     extract_digest_from_claim,
     hours_since,
     is_digest_blob,
@@ -254,77 +250,51 @@ def test_protobuf_version_v4_constant_is_4() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Entity trapdoors — byte-exact cross-client parity anchors
+# Entity names for keyed tags (internal#573). The old client-side
+# ``compute_entity_trapdoor(s)`` is gone; ``blind_tags.entity_names`` selects
+# names and core ``BlindIndexer.entity_tag`` hashes them (keyed). Byte parity
+# is covered by ``test_keyed_tags_573.py``.
 # ---------------------------------------------------------------------------
 
 
-POSTGRES_TRAPDOOR_HEX = hashlib.sha256(b"entity:postgresql").hexdigest()
+def test_entity_names_dedupes_and_keeps_order() -> None:
+    from totalreclaw import blind_tags
 
-
-def test_compute_entity_trapdoor_postgresql_hardcoded() -> None:
-    """Cross-client parity anchor — must match the plugin's output byte-for-byte."""
-    assert (
-        compute_entity_trapdoor("PostgreSQL")
-        == "1e364278f621eefbf64332d67597c5f2366b8527f46301dbe288b63920e89569"
-    )
-    assert compute_entity_trapdoor("PostgreSQL") == POSTGRES_TRAPDOOR_HEX
-
-
-def test_compute_entity_trapdoor_is_deterministic() -> None:
-    a = compute_entity_trapdoor("PostgreSQL")
-    b = compute_entity_trapdoor("PostgreSQL")
-    assert a == b
-    assert len(a) == 64
-    assert all(c in "0123456789abcdef" for c in a)
-
-
-def test_compute_entity_trapdoor_normalizes_case_and_whitespace() -> None:
-    a = compute_entity_trapdoor("PostgreSQL")
-    b = compute_entity_trapdoor("postgresql")
-    c = compute_entity_trapdoor("  POSTGRESQL  ")
-    assert a == b == c
-
-
-def test_compute_entity_trapdoor_has_namespace_prefix() -> None:
-    entity_td = compute_entity_trapdoor("postgresql")
-    word_hash = hashlib.sha256(b"postgresql").hexdigest()
-    assert entity_td != word_hash
-    expected = hashlib.sha256(b"entity:postgresql").hexdigest()
-    assert entity_td == expected
-
-
-def test_compute_entity_trapdoors_dedupes_multiple_aliases() -> None:
-    td = compute_entity_trapdoors(
+    names = blind_tags.entity_names(
         [
             _Entity(name="Pedro", type="person"),
-            _Entity(name="pedro", type="person"),
-            _Entity(name="  PEDRO ", type="person"),
+            _Entity(name="PostgreSQL", type="tool"),
+            _Entity(name="Pedro", type="person"),
         ]
     )
-    assert len(td) == 1
+    assert names == ["Pedro", "PostgreSQL"]
 
 
-def test_compute_entity_trapdoors_accepts_dict_entities() -> None:
-    td = compute_entity_trapdoors(
+def test_entity_names_accepts_dict_entities() -> None:
+    from totalreclaw import blind_tags
+
+    assert blind_tags.entity_names(
         [{"name": "Pedro", "type": "person"}, {"name": "PostgreSQL", "type": "tool"}]
-    )
-    assert len(td) == 2
+    ) == ["Pedro", "PostgreSQL"]
 
 
-def test_compute_entity_trapdoors_empty_inputs() -> None:
-    assert compute_entity_trapdoors(None) == []
-    assert compute_entity_trapdoors([]) == []
+def test_entity_names_empty_inputs() -> None:
+    from totalreclaw import blind_tags
+
+    assert blind_tags.entity_names(None) == []
+    assert blind_tags.entity_names([]) == []
 
 
-def test_compute_entity_trapdoors_skips_bad_names() -> None:
-    td = compute_entity_trapdoors(
+def test_entity_names_skips_bad_names() -> None:
+    from totalreclaw import blind_tags
+
+    assert blind_tags.entity_names(
         [
             _Entity(name="", type="person"),
             _Entity(name="   ", type="person"),
             _Entity(name="Real", type="person"),
         ]
-    )
-    assert any(t == compute_entity_trapdoor("Real") for t in td)
+    ) == ["Real"]
 
 
 # ---------------------------------------------------------------------------
@@ -487,20 +457,8 @@ def test_read_claim_from_blob_back_compat_alias() -> None:
 
 
 # ---------------------------------------------------------------------------
-# DIGEST_TRAPDOOR + constants (unchanged from v0)
+# Digest constants (the unkeyed DIGEST_TRAPDOOR is gone, internal#573)
 # ---------------------------------------------------------------------------
-
-
-def test_digest_trapdoor_matches_documented_primitive() -> None:
-    expected = hashlib.sha256(b"type:digest").hexdigest()
-    assert DIGEST_TRAPDOOR == expected
-    assert len(DIGEST_TRAPDOOR) == 64
-
-
-def test_digest_trapdoor_hardcoded_value() -> None:
-    assert DIGEST_TRAPDOOR == (
-        "5e6dcf483f027cb81f78f05474a4986c236af915dcb48cd8a376485eec5598ba"
-    )
 
 
 def test_digest_constants() -> None:

@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from totalreclaw.crypto import derive_keys_from_mnemonic, encrypt, generate_blind_indices
+from totalreclaw import blind_tags
+from totalreclaw.crypto import derive_keys_from_mnemonic, encrypt
+from totalreclaw.entity_extract import extract_query_entities
 from totalreclaw.operations import (
     DEFAULT_TRAPDOOR_BATCH_SIZE,
     search_facts,
@@ -48,7 +50,10 @@ _MANY_CHUNKS_QUERY = "Pedro prefers dark mode and likes strong coffee in the mor
 
 
 def _assert_at_least_n_chunks(query: str, n: int = 3) -> None:
-    word_trapdoors = generate_blind_indices(query)
+    keys = derive_keys_from_mnemonic(TEST_MNEMONIC)
+    word_trapdoors = blind_tags.query_trapdoors(
+        keys, query, entity_names=extract_query_entities(query)
+    )
     chunk_count = -(-len(word_trapdoors) // DEFAULT_TRAPDOOR_BATCH_SIZE)  # ceil div
     assert chunk_count >= n, (
         f"test query only yields {chunk_count} trapdoor chunk(s) "

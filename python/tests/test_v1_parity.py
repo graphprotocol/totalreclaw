@@ -206,12 +206,12 @@ def test_canonical_v1_fixture_validates() -> None:
 
 
 def test_python_rust_protobuf_v4_byte_identical() -> None:
-    """Python ``encode_fact_protobuf`` produces byte-for-byte identical output
-    to the Rust core's encoder when both are given the same FactPayload."""
+    """Python ``encode_fact_protobuf_keyed`` produces byte-for-byte identical output
+    to the Rust core's keyed encoder when both are given the same FactPayload."""
     from totalreclaw.protobuf import (
         PROTOBUF_VERSION_V4 as PY_V4,
         FactPayload,
-        encode_fact_protobuf,
+        encode_fact_protobuf_keyed,
     )
 
     fp = FactPayload(
@@ -226,9 +226,9 @@ def test_python_rust_protobuf_v4_byte_identical() -> None:
         agent_id="a",
         version=PY_V4,
     )
-    py_bytes = encode_fact_protobuf(fp)
+    py_bytes = encode_fact_protobuf_keyed(fp)
 
-    rust_bytes = core.encode_fact_protobuf(
+    rust_bytes = core.encode_fact_protobuf_keyed(
         json.dumps({
             "id": "test-x",
             "timestamp": "2026-04-17T00:00:00Z",
@@ -250,9 +250,10 @@ def test_python_rust_protobuf_v4_byte_identical() -> None:
     )
 
 
-def test_python_rust_protobuf_v3_byte_identical() -> None:
-    """v3 (default / legacy) encoding also byte-matches Rust core."""
-    from totalreclaw.protobuf import FactPayload, encode_fact_protobuf
+def test_python_rust_protobuf_v3_input_forced_to_v4_byte_identical() -> None:
+    """A payload carrying version 3 is forced to 4 by the keyed encoders,
+    in Python and in core alike (byte-identical)."""
+    from totalreclaw.protobuf import FactPayload, encode_fact_protobuf_keyed
 
     fp = FactPayload(
         id="test-x",
@@ -266,9 +267,9 @@ def test_python_rust_protobuf_v3_byte_identical() -> None:
         agent_id="a",
         version=3,
     )
-    py_bytes = encode_fact_protobuf(fp)
+    py_bytes = encode_fact_protobuf_keyed(fp)
 
-    rust_bytes = core.encode_fact_protobuf(
+    rust_bytes = core.encode_fact_protobuf_keyed(
         json.dumps({
             "id": "test-x",
             "timestamp": "2026-04-17T00:00:00Z",

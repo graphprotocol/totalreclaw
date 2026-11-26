@@ -1,5 +1,5 @@
-"""Mechanism test: write-side entity trapdoors collide with read-side query
-entity trapdoors when surface forms align (#370).
+"""Mechanism test: write-side entity tags collide with read-side query
+entity tags when surface forms align (#370; keyed since internal#573).
 
 Pins the byte-match invariant for the ALIGNED case: a canonical entity named
 verbatim in a query must produce a colliding trapdoor across write/read. This
@@ -13,13 +13,26 @@ punctuation) is documented below as a known limitation, not a regression.
 
 import hashlib
 
-from totalreclaw.claims_helper import compute_entity_trapdoor
+from totalreclaw import blind_tags
+from totalreclaw.crypto import DerivedKeys
 from totalreclaw.entity_extract import extract_query_entities
+
+# Fixture-only vault keys (not a real vault).
+_KEYS = DerivedKeys(
+    salt=b"\x01" * 32, auth_key=b"\x02" * 32,
+    encryption_key=b"\x03" * 32, dedup_key=b"\x04" * 32,
+)
+_IX = blind_tags.indexer(_KEYS)
+
+
+def compute_entity_trapdoor(name: str) -> str:
+    """Write-side tag for an entity name (keyed, via core)."""
+    return _IX.entity_tag(name)
 
 
 def _read_trapdoors(query: str) -> set[str]:
-    """The trapdoor set the read path (search_facts) generates from a query."""
-    return {compute_entity_trapdoor(name) for name in extract_query_entities(query)}
+    """The entity tags the read path (search_facts) generates from a query."""
+    return {_IX.entity_tag(name) for name in extract_query_entities(query)}
 
 
 class TestEntityTrapdoorRoundtrip:
@@ -40,10 +53,10 @@ class TestEntityTrapdoorRoundtrip:
             "rotate the postgres credentials"
         )
 
-    def test_recipe_is_unkeyed_sha256(self):
-        # Pin the production recipe: unkeyed sha256("entity:" + normalize(name)).
-        # Consistent with word trapdoors (rust/totalreclaw-core/src/blind.rs).
-        assert compute_entity_trapdoor("Acme") == hashlib.sha256(
+    def test_recipe_is_keyed_not_plain_sha256(self):
+        # Keyed tags (internal#573): the unkeyed sha256("entity:" + name)
+        # recipe must no longer be what is produced.
+        assert compute_entity_trapdoor("Acme") != hashlib.sha256(
             b"entity:acme"
         ).hexdigest()
 

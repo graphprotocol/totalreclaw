@@ -20,14 +20,14 @@ lockstep. This test pins that contract by:
 
 1. Constructing the same pin-scenario input (a fixed fact_id + v1 claim
    blob + owner) in Python.
-2. Encoding tombstone (protobuf v=3) + new-fact (protobuf v=4) payloads
-   via ``encode_fact_protobuf`` + ``encode_tombstone_protobuf``.
+2. Encoding tombstone (keyed scheme 1, v=4) + new-fact (keyed scheme 1, v=4) payloads
+   via ``encode_fact_protobuf_keyed`` + ``encode_tombstone_protobuf_keyed``.
 3. Routing the 2-payload list through
    ``encode_execute_batch_calldata_for_data_edge`` (which delegates to
    the shared Rust core).
-4. Byte-comparing against a golden string that was generated from the
-   same Rust core (hence byte-identical to what the plugin's WASM path
-   would produce for the same inputs).
+4. Byte-comparing the payloads against the core keyed encoders
+   (``encode_fact_protobuf_keyed`` / ``encode_tombstone_protobuf_keyed``
+   in ``totalreclaw_core``), replacing the pre-#573 golden hex.
 
 If the golden string ever diverges from reality, one of three things
 has broken:
@@ -46,11 +46,14 @@ legitimately (breaking change).
 """
 from __future__ import annotations
 
+import json
+
 import totalreclaw_core
 from totalreclaw.protobuf import (
     PROTOBUF_VERSION_V4,
     FactPayload,
-    encode_fact_protobuf,
+    encode_fact_protobuf_keyed,
+    encode_tombstone_protobuf_keyed,
 )
 from totalreclaw.userop import encode_execute_batch_calldata_for_data_edge
 
@@ -76,9 +79,10 @@ CANONICAL_TS = "2026-04-19T10:00:00.000Z"
 # (encryption is non-deterministic for AEAD nonce reasons), so we use a
 # fixed ciphertext hex stand-in and a fixed trapdoor list.
 FIXED_ENCRYPTED_BLOB_HEX = "c0ffee" + ("ab" * 32)  # 67 bytes stand-in
+# Fixed 64-hex stand-ins (unsorted on purpose: the encoder sorts).
 FIXED_BLIND_INDICES = [
-    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # sha256("")
-    "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",  # sha256("1")
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
 ]
 FIXED_ENCRYPTED_EMBEDDING = "deadbeefcafe"
 
@@ -91,26 +95,10 @@ def _build_pin_batch_payloads() -> list[bytes]:
     trapdoor slots are replaced with deterministic stand-ins so the
     golden stays stable across runs.
     """
-    # ``encode_tombstone_protobuf`` uses ``datetime.now()`` internally,
-    # so we can't call it directly for a deterministic golden. Rebuild
-    # the tombstone payload with a fixed timestamp via the public
-    # ``FactPayload`` type + ``encode_fact_protobuf`` — same semantics
-    # as the helper, just with a pinned timestamp.
-    tombstone_payload = FactPayload(
-        id=OLD_FACT_ID,
-        timestamp=CANONICAL_TS,
-        owner=OWNER,
-        encrypted_blob=b"tombstone".hex(),
-        blind_indices=[],
-        decay_score=0.0,
-        source="python_forget",
-        content_fp="",
-        agent_id="python-client",
-        # Tombstone stays at legacy v=3 (matches pin.ts::executePinOperation
-        # line 640: ``encodeFactProtobufLocal(tombstonePayload, /* version = legacy v3 */ 3)``).
-        version=3,
+    # Fixed timestamp keeps the bytes deterministic.
+    tombstone_bytes = encode_tombstone_protobuf_keyed(
+        OLD_FACT_ID, OWNER, timestamp=CANONICAL_TS
     )
-    tombstone_bytes = encode_fact_protobuf(tombstone_payload)
 
     new_payload = FactPayload(
         id=NEW_FACT_ID,
@@ -127,7 +115,7 @@ def _build_pin_batch_payloads() -> list[bytes]:
         # ``encodeFactProtobufLocal(newPayload, PROTOBUF_VERSION_V4)``.
         version=PROTOBUF_VERSION_V4,
     )
-    new_bytes = encode_fact_protobuf(new_payload)
+    new_bytes = encode_fact_protobuf_keyed(new_payload)
 
     return [tombstone_bytes, new_bytes]
 
@@ -158,20 +146,40 @@ class TestPinBatchCrossImplParity:
             "pin batch must carry exactly tombstone + new fact"
         )
 
-    def test_pin_tombstone_payload_is_v3(self) -> None:
-        """Tombstone stays at legacy protobuf v=3 for plugin byte-parity.
-
-        The tombstone carries no inner v1 blob, so the outer version
-        field is irrelevant for readers — but writing v=3 preserves
-        round-trip compat with any pre-v1 tombstone parser, and more
-        importantly keeps the bytes identical to the plugin's output.
-        """
+    def test_pin_tombstone_payload_is_v4_scheme1(self) -> None:
+        """Keyed scheme 1 tombstone: version 4, field 14 = 1, equal to the
+        core keyed tombstone layout (compared at the same timestamp)."""
         payloads = _build_pin_batch_payloads()
         tombstone = payloads[0]
-        version = _extract_protobuf_version(tombstone)
-        assert version == 3, (
-            f"tombstone must be protobuf v=3 (legacy); got v={version}"
+        assert _extract_protobuf_version(tombstone) == 4
+        core = bytes(
+            totalreclaw_core.encode_tombstone_protobuf_keyed(OLD_FACT_ID, OWNER)
         )
+        # Same bytes except the core binding stamps its own timestamp.
+        assert tombstone.endswith(core[-40:]) and core.endswith(tombstone[-40:])
+
+    def test_pin_new_fact_matches_core_keyed_encoder(self) -> None:
+        new_fact = _build_pin_batch_payloads()[1]
+        core = bytes(
+            totalreclaw_core.encode_fact_protobuf_keyed(
+                json.dumps(
+                    {
+                        "id": NEW_FACT_ID,
+                        "timestamp": CANONICAL_TS,
+                        "owner": OWNER,
+                        "encrypted_blob_hex": FIXED_ENCRYPTED_BLOB_HEX,
+                        "blind_indices": FIXED_BLIND_INDICES,
+                        "decay_score": 1.0,
+                        "source": "python_pin",
+                        "content_fp": "",
+                        "agent_id": "python-client",
+                        "encrypted_embedding": FIXED_ENCRYPTED_EMBEDDING,
+                        "version": 4,
+                    }
+                )
+            )
+        )
+        assert new_fact == core
 
     def test_pin_new_fact_payload_is_v4(self) -> None:
         """New-fact write is protobuf v=4 (v1 taxonomy) — Bug #8's fix."""
@@ -223,29 +231,6 @@ class TestPinBatchCrossImplParity:
             "here means Python and plugin pin batches produce different "
             "calldata for identical input payloads — cross-client parity "
             "is broken."
-        )
-
-    def test_pin_batch_golden_calldata_hex(self) -> None:
-        """Lock in the exact calldata bytes for the fixed pin scenario.
-
-        If the Rust core's ``encode_batch_call`` ABI output legitimately
-        changes (breaking core bump), regenerate via:
-
-            payloads = _build_pin_batch_payloads()
-            print(totalreclaw_core.encode_batch_call(payloads).hex())
-
-        and paste the output into ``EXPECTED_PIN_BATCH_CALLDATA_HEX``.
-        Otherwise a mismatch means something drifted — investigate
-        before "fixing" the golden.
-        """
-        payloads = _build_pin_batch_payloads()
-        actual_hex = totalreclaw_core.encode_batch_call(payloads).hex()
-        assert actual_hex == EXPECTED_PIN_BATCH_CALLDATA_HEX, (
-            f"Pin batch calldata drift!\n"
-            f"  Expected: {EXPECTED_PIN_BATCH_CALLDATA_HEX[:60]}…\n"
-            f"  Actual:   {actual_hex[:60]}…\n"
-            f"If the change is intentional (new core semantics), "
-            f"regenerate the golden via the snippet in the docstring."
         )
 
 
@@ -306,22 +291,3 @@ def _extract_protobuf_version(payload: bytes) -> int:
         else:
             raise ValueError(f"unsupported wire type {wire_type}")
     return 0
-
-
-# ---------------------------------------------------------------------------
-# Golden — pinned once from the shared Rust core. Regenerate only when
-# the core's ``encode_batch_call`` output legitimately changes (breaking
-# change, all clients bumping in lockstep). See the docstring on
-# ``test_pin_batch_golden_calldata_hex`` for the regen snippet.
-#
-# Format:
-#   - 4-byte selector: 0x47e1da2a = keccak256("executeBatch(address[],uint256[],bytes[])")[:4]
-#   - ABI-encoded dest[] (both DataEdge 0xc445af1d...), values[] (both 0),
-#     data[] (tombstone + new-fact protobuf payloads).
-#
-# The length (1864 hex chars = 932 bytes) is dominated by the new-fact
-# protobuf payload which carries a ~67-byte ciphertext stand-in + 2
-# trapdoor strings + the v1 inner blob.
-# ---------------------------------------------------------------------------
-
-EXPECTED_PIN_BATCH_CALLDATA_HEX = "47e1da2a000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000001200000000000000000000000000000000000000000000000000000000000000002000000000000000000000000c445af1d4eb9fce4e1e61fe96ea7b8febf03c5ca000000000000000000000000c445af1d4eb9fce4e1e61fe96ea7b8febf03c5ca00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000840a2430313930303030302d303030302d373030302d383030302d3030303030303030303030311218323032362d30342d31395431303a30303a30302e3030305a1a2a3078303030303030303030303030303030303030303030303030303030303030303030303030313233342209746f6d6273746f6e65310000000000000000380140030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001300a2430313930303030302d303030302d373030302d383030302d3030303030303030303030321218323032362d30342d31395431303a30303a30302e3030305a1a2a3078303030303030303030303030303030303030303030303030303030303030303030303030313233342223c0ffeeabababababababababababababababababababababababababababababababab2a40653362306334343239386663316331343961666266346338393936666239323432376165343165343634396239333463613439353939316237383532623835352a403566656365623636666663383666333864393532373836633664363936633739633264626332333964643465393162343637323964373361323766623537653931000000000000f03f380140046a0c64656164626565666361666500000000000000000000000000000000"

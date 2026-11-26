@@ -33,8 +33,8 @@ from totalreclaw.crypto import (  # noqa: E402
     compute_auth_key_hash,
     decrypt,
     encrypt,
-    generate_content_fingerprint,
 )
+from totalreclaw import blind_tags  # noqa: E402
 
 TEST_MNEMONIC = (
     "abandon abandon abandon abandon abandon abandon "
@@ -91,20 +91,25 @@ def test_ciphertext_cross_decrypts_between_clients(mnemonic_client, bundle_clien
 
 def test_content_fingerprint_matches(mnemonic_client, bundle_client):
     text = "Pedro prefers dark mode"
-    fp_mnemonic = generate_content_fingerprint(text, mnemonic_client._keys.dedup_key)
-    fp_bundle = generate_content_fingerprint(text, bundle_client._keys.dedup_key)
+    fp_mnemonic = blind_tags.content_fp(mnemonic_client._keys, text)
+    fp_bundle = blind_tags.content_fp(bundle_client._keys, text)
     assert fp_mnemonic == fp_bundle
 
 
 def test_blind_indices_match(mnemonic_client, bundle_client):
-    """Blind indices are unkeyed (plain SHA-256 of tokens) by design, so
-    this is trivially true for ANY two clients — included because the spec
-    names it explicitly, but the vault-identity proof is the other tests
-    in this file (auth_key_hash, ciphertext, fingerprint, LSH buckets)."""
-    from totalreclaw.crypto import generate_blind_indices
-
+    """Keyed tags (internal#573): the bundle host derives the same stem,
+    entity and LSH tags as the phrase host for the same vault."""
     text = "Alice likes distributed systems and Rust programming"
-    assert generate_blind_indices(text) == generate_blind_indices(text)
+    emb = [0.1 * i for i in range(640)]
+    m = blind_tags.fact_tags(
+        mnemonic_client._keys, text, embedding=emb,
+        lsh_hasher=mnemonic_client._get_lsh_hasher(), entity_names=["Alice"],
+    )
+    b = blind_tags.fact_tags(
+        bundle_client._keys, text, embedding=emb,
+        lsh_hasher=bundle_client._get_lsh_hasher(), entity_names=["Alice"],
+    )
+    assert m == b and len(m) > 20
 
 
 def test_lsh_buckets_match(mnemonic_client, bundle_client):
@@ -112,8 +117,8 @@ def test_lsh_buckets_match(mnemonic_client, bundle_client):
     mnemonic_hasher = mnemonic_client._get_lsh_hasher()
     bundle_hasher = bundle_client._get_lsh_hasher()
 
-    mnemonic_hashes = mnemonic_hasher.hash(embedding)
-    bundle_hashes = bundle_hasher.hash(embedding)
+    mnemonic_hashes = mnemonic_hasher.hash_keyed(embedding)
+    bundle_hashes = bundle_hasher.hash_keyed(embedding)
 
     assert len(mnemonic_hashes) == 20
     assert len(bundle_hashes) == 20

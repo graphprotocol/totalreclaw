@@ -31,14 +31,13 @@ from .crypto import (
     DerivedKeys,
     encrypt,
     decrypt,
-    generate_blind_indices,
-    generate_content_fingerprint,
     encrypt_embedding,
     decrypt_embedding,
 )
+from . import blind_tags
 from .embedding import get_embedding, get_embedding_dims
 from .lsh import LSHHasher
-from .protobuf import FactPayload, encode_fact_protobuf, encode_tombstone_protobuf
+from .protobuf import FactPayload, encode_fact_protobuf_keyed, encode_tombstone_protobuf_keyed
 from .relay import RelayClient, RelayReadBlocked, SubgraphQueryError, log_rate_limited, parse_subgraph_data
 from .reranker import RerankerCandidate, RerankerResult, default_pin_boost, rerank
 from .tuning_loop import maybe_write_feedback_for_pin
@@ -54,8 +53,6 @@ from .userop import (
 from .claims_helper import (
     PROTOBUF_VERSION_V4,
     build_canonical_claim_v1,
-    compute_entity_trapdoor,
-    compute_entity_trapdoors,
     entity_refs_from_blob,
     is_digest_blob,
     is_stub_blob_hex,
@@ -398,18 +395,18 @@ async def store_fact(
     encrypted_blob = encrypt(blob_plaintext, keys.encryption_key)
     encrypted_hex = base64.b64decode(encrypted_blob).hex()
 
-    word_indices = generate_blind_indices(text)
+    # Keyed tags (internal#573): stems + keyed LSH + keyed entity tags, one
+    # sorted deduplicated list, all hashing inside core.
+    all_indices = blind_tags.fact_tags(
+        keys,
+        text,
+        embedding=embedding if embedding else None,
+        lsh_hasher=lsh_hasher,
+        entity_names=blind_tags.entity_names(entities),
+    )
 
-    lsh_indices: list[str] = []
-    if lsh_hasher and embedding:
-        lsh_indices = lsh_hasher.hash(embedding)
-
-    entity_trapdoors = compute_entity_trapdoors(entities) if entities else []
-
-    all_indices = word_indices + lsh_indices + entity_trapdoors
-
-    # Content fingerprint
-    content_fp = generate_content_fingerprint(text, keys.dedup_key)
+    # Content fingerprint (v2, keyed)
+    content_fp = blind_tags.content_fp(keys, text)
 
     # Encrypt embedding if available
     encrypted_emb: Optional[str] = None
@@ -431,7 +428,7 @@ async def store_fact(
         version=PROTOBUF_VERSION_V4,
     )
 
-    protobuf_bytes = encode_fact_protobuf(payload)
+    protobuf_bytes = encode_fact_protobuf_keyed(payload)
 
     # Build and submit a proper ERC-4337 UserOperation
     await build_and_send_userop(
@@ -472,7 +469,7 @@ async def store_fact(
 #: Per-blind-index wire cost: a 64-hex-char SHA-256 string field (key + len +
 #: 64 bytes ≈ 66; 68 for margin). Blind indices DOMINATE a fact's calldata and
 #: scale with the UNIQUE (stemmed) token count, not the char count — the review
-#: of PR #461 measured real ``encode_fact_protobuf`` output at ~2× a char-linear
+#: of PR #461 measured real fact protobuf output at ~2× a char-linear
 #: estimate for representative prose (~88 indices for a 300-char fact once stems
 #: are counted), so we bound the real term by COMPUTING the index count.
 _BYTES_PER_BLIND_INDEX = 68
@@ -499,24 +496,26 @@ MAX_BATCH_BYTES: int = 32_000
 MAX_BATCH_GROUP_COUNT: int = 15
 
 
-def estimate_payload_bytes(payload: dict) -> int:
+def estimate_payload_bytes(
+    payload: dict, tag_count: Optional[Callable[[dict], int]] = None
+) -> int:
     """Estimate a single fact's on-chain executeBatch calldata contribution.
 
-    Bounds the REAL ``encode_fact_protobuf`` output (verified measured-safe,
+    Bounds the REAL ``encode_fact_protobuf_keyed`` output (verified measured-safe,
     ``est ≥ real``, in ``test_batch_sizing_rc4.py``). Terms:
 
       * fixed overhead (scalar fields + cipher nonce/tag) — ``_BYTES_FIXED_OVERHEAD``;
       * the encrypted claim blob ≈ ciphertext of ``text`` + ``extra_metadata``;
       * the blind indices — the dominant, entropy-dependent term — bounded by
-        the ACTUAL ``generate_blind_indices(text)`` count × per-index wire cost
-        (a char-linear estimate cannot bound this, hence the PR #461 review
-        NO-GO);
+        the ACTUAL tag count × per-index wire cost (a char-linear estimate
+        cannot bound this, hence the PR #461 review NO-GO). The count comes
+        from the optional ``tag_count(payload) -> int`` callable, which a
+        caller holding the vault keys builds with
+        :func:`totalreclaw.blind_tags.tag_counter` (stems + entity names);
       * the encrypted embedding + its LSH indices when an embedding is present.
 
-    ``generate_blind_indices`` is a fast pure Rust call and import is not a
-    latency-critical path (the same call happens again during the real store),
-    so recomputing it here is cheap. Falls back to a conservative char-based
-    index count if the core module is unavailable.
+    Keyed tags need the vault key, so without ``tag_count`` (or if it
+    raises) this falls back to a conservative char-based index count.
     """
     text = payload.get("text") or ""
     # The encrypted claim blob stores the canonical-claim JSON as UTF-8 BYTES
@@ -531,9 +530,13 @@ def estimate_payload_bytes(payload: dict) -> int:
         # encrypted blob — count them (1.5× for JSON + cipher slack).
         est += int(len(_json.dumps(meta)) * 1.5)
 
-    try:
-        n_indices = len(generate_blind_indices(text))
-    except Exception:
+    n_indices = None
+    if tag_count is not None:
+        try:
+            n_indices = int(tag_count(payload))
+        except Exception:
+            n_indices = None
+    if n_indices is None:
         # Conservative fallback: ~2 stemmed indices per ~6-char word.
         n_indices = int(len(text) / 3)
     est += n_indices * _BYTES_PER_BLIND_INDEX
@@ -543,7 +546,12 @@ def estimate_payload_bytes(payload: dict) -> int:
     return est
 
 
-def group_payloads_by_size(payloads: list, max_count: int, max_bytes: int):
+def group_payloads_by_size(
+    payloads: list,
+    max_count: int,
+    max_bytes: int,
+    tag_count: Optional[Callable[[dict], int]] = None,
+):
     """Yield successive batch groups respecting BOTH a count and a byte cap.
 
     A group is flushed before appending a fact whose addition would exceed
@@ -554,7 +562,7 @@ def group_payloads_by_size(payloads: list, max_count: int, max_bytes: int):
     group: list = []
     group_bytes = 0
     for p in payloads:
-        est = estimate_payload_bytes(p)
+        est = estimate_payload_bytes(p, tag_count)
         if group and (len(group) >= max_count or group_bytes + est > max_bytes):
             yield group
             group = []
@@ -663,6 +671,7 @@ async def group_and_store_adaptive(
     *,
     max_errors: Optional[int] = None,
     error_limit_msg: Optional[str] = None,
+    tag_count: Optional[Callable[[dict], int]] = None,
 ) -> tuple[list[str], list[str]]:
     """Single source of truth for byte-capped batching + halve-on-simfail.
 
@@ -685,7 +694,9 @@ async def group_and_store_adaptive(
     """
     all_ids: list[str] = []
     all_errors: list[str] = []
-    for group in group_payloads_by_size(payloads, max_count, max_bytes):
+    for group in group_payloads_by_size(
+        payloads, max_count, max_bytes, tag_count
+    ):
         ids, errs = await _store_group_adaptive(store_fn, group)
         all_ids.extend(ids)
         if errs:
@@ -849,19 +860,15 @@ async def store_fact_batch(
         encrypted_blob = encrypt(blob_plaintext, keys.encryption_key)
         encrypted_hex = base64.b64decode(encrypted_blob).hex()
 
-        word_indices = generate_blind_indices(text)
-
-        lsh_indices: list[str] = []
-        if lsh_hasher and embedding:
-            lsh_indices = lsh_hasher.hash(embedding)
-
-        entity_trapdoors = (
-            compute_entity_trapdoors(entities) if entities else []
+        all_indices = blind_tags.fact_tags(
+            keys,
+            text,
+            embedding=embedding if embedding else None,
+            lsh_hasher=lsh_hasher,
+            entity_names=blind_tags.entity_names(entities),
         )
 
-        all_indices = word_indices + lsh_indices + entity_trapdoors
-
-        content_fp = generate_content_fingerprint(text, keys.dedup_key)
+        content_fp = blind_tags.content_fp(keys, text)
 
         encrypted_emb: Optional[str] = None
         if embedding:
@@ -881,7 +888,7 @@ async def store_fact_batch(
             version=PROTOBUF_VERSION_V4,
         )
 
-        protobuf_payloads.append(encode_fact_protobuf(payload))
+        protobuf_payloads.append(encode_fact_protobuf_keyed(payload))
 
     # One UserOp for all N facts — ~8s regardless of N, vs 15 × ~4s
     # sequential = 60s for the single-fact path.
@@ -947,28 +954,17 @@ async def search_facts(
     # Normalize owner address to lowercase for subgraph Bytes! type
     owner = owner.lower() if owner else owner
 
-    # Generate search trapdoors from query text
-    word_trapdoors = generate_blind_indices(query)
-
-    # Generate LSH trapdoors from embedding (if available)
-    lsh_trapdoors: list[str] = []
-    if lsh_hasher and query_embedding:
-        lsh_trapdoors = lsh_hasher.hash(query_embedding)
-
-    # Entity trapdoors -- orthogonal exact-match signal (#370 read-side).
-    # Same hash fn as the write side (claims_helper.compute_entity_trapdoor)
-    # so query entities match stored entity-trapdoors byte-for-byte. Heuristic
-    # extraction (entity_extract.extract_query_entities); err toward recall --
-    # rerank filters false positives. NOTE: widens all_trapdoors (a few extra
-    # chunks, larger candidate pool); p95 + pool-cap validated in Task 6.
-    entity_trapdoors: list[str] = []
-    for _name in extract_query_entities(query):
-        _td = compute_entity_trapdoor(_name)
-        if _td not in entity_trapdoors:
-            entity_trapdoors.append(_td)
-
-    # Combine all trapdoors
-    all_trapdoors = word_trapdoors + lsh_trapdoors + entity_trapdoors
+    # Keyed trapdoors (internal#573): stems + entity tags (+ keyed LSH when an
+    # embedding is present), final sorted list straight from core. Entity
+    # names are the heuristic extraction (entity_extract.extract_query_entities);
+    # we err toward recall -- rerank filters false positives.
+    all_trapdoors = blind_tags.query_trapdoors(
+        keys,
+        query,
+        query_embedding=query_embedding if query_embedding else None,
+        lsh_hasher=lsh_hasher,
+        entity_names=extract_query_entities(query),
+    )
 
     if not all_trapdoors:
         return []
@@ -1309,7 +1305,7 @@ async def forget_fact(
         )
 
     smart_account = sender or owner
-    tombstone_bytes = encode_tombstone_protobuf(fact_id, owner)
+    tombstone_bytes = encode_tombstone_protobuf_keyed(fact_id, owner)
 
     try:
         await build_and_send_userop(
@@ -1375,6 +1371,83 @@ def _status_long_name(short: str | None) -> str:
     if not short:
         return "active"
     return _STATUS_SHORT_TO_LONG.get(short, "active")
+
+
+# ---------------------------------------------------------------------------
+# Pin / retype guard (internal#573, index scheme 1)
+# ---------------------------------------------------------------------------
+
+#: Dedicated guard query. ``indexScheme`` appears in this one query only; the
+#: old subgraph has no such field, so adding it to any read query would break
+#: every read after a rollback.
+FACT_INDEX_SCHEME_QUERY = """
+  query FactIndexScheme($id: ID!) {
+    fact(id: $id) {
+      id
+      owner
+      indexScheme
+    }
+  }
+"""
+
+#: User-facing copy (proposed; needs owner approval). Do not suggest saving
+#: the memory again: re-storing old text would create a twin.
+INDEX_SCHEME_UNCONFIRMED_MSG = (
+    "This memory can't be changed right now because its storage format "
+    "could not be confirmed. Nothing was changed. Try again later."
+)
+
+INDEX_SCHEME_UNCONFIRMED_CODE = "index_scheme_unconfirmed"
+
+
+class IndexSchemeUnconfirmedError(ValueError):
+    """Raised by pin/unpin when the target fact is not confirmed keyed."""
+
+    def __init__(self, message: str = INDEX_SCHEME_UNCONFIRMED_MSG):
+        super().__init__(message)
+
+
+async def require_keyed_fact(
+    fact_id: str,
+    owner: str,
+    relay: RelayClient,
+    *,
+    wrote_here: Optional[Callable[[str], bool]] = None,
+) -> None:
+    """Refuse unless the fact is confirmed to be index-scheme 1 (fail closed).
+
+    Facts this process wrote (``wrote_here(fact_id)`` true) skip the query:
+    this process only encodes keyed payloads. Anything else queries the
+    subgraph; a missing fact, owner mismatch, ``indexScheme`` other than 1, a
+    GraphQL error (the old subgraph has no such field), a malformed body or
+    any relay error raises :class:`IndexSchemeUnconfirmedError`. A read block
+    (:class:`RelayReadBlocked`) propagates unchanged. Logs a reason code
+    only, never fact content or query bodies.
+    """
+    if wrote_here is not None and wrote_here(fact_id):
+        logger.debug("index-scheme guard: written_here")
+        return
+    reason: Optional[str] = None
+    try:
+        body = await relay.query_subgraph(FACT_INDEX_SCHEME_QUERY, {"id": fact_id})
+        fact = parse_subgraph_data(body).get("fact")
+    except RelayReadBlocked:
+        raise
+    except Exception:
+        reason = "query_error"
+        fact = None
+    if reason is None:
+        if not isinstance(fact, dict):
+            reason = "not_found"
+        elif str(fact.get("owner") or "").lower() != str(owner or "").lower():
+            reason = "owner_mismatch"
+        else:
+            scheme = fact.get("indexScheme")
+            if isinstance(scheme, bool) or scheme != 1:
+                reason = "not_keyed"
+    if reason is not None:
+        logger.warning("index-scheme guard refused: %s", reason)
+        raise IndexSchemeUnconfirmedError()
 
 
 async def _fetch_fact_by_id(
@@ -1736,6 +1809,7 @@ async def _change_claim_status(
     data_edge_address: Optional[str] = None,
     profile: str = "background",
     deadline_s: Optional[float] = None,
+    wrote_here: Optional[Callable[[str], bool]] = None,
 ) -> dict:
     """Shared implementation for ``pin_fact`` / ``unpin_fact``.
 
@@ -1866,6 +1940,11 @@ async def _change_claim_status(
             "idempotent": True,
         }
 
+    # 3b. Index-scheme guard (internal#573): before any claim build, feedback
+    # write or UserOp. Raises IndexSchemeUnconfirmedError unless the fact is
+    # confirmed keyed (or this process wrote it).
+    await require_keyed_fact(fact_id, owner, relay, wrote_here=wrote_here)
+
     # 4. Build the new v1.1 canonical claim. ALWAYS v1 on the pin path —
     # matches ``skill/plugin/pin.ts::executePinOperation`` step 4.
     v1_view = _project_source_to_v1(
@@ -1922,20 +2001,22 @@ async def _change_claim_status(
     new_claim_text = v1_view["text"]
     new_entity_objs = v1_view["entities"] or []
 
-    new_word_indices: list[str] = generate_blind_indices(new_claim_text) if new_claim_text else []
-    new_lsh_indices: list[str] = []
+    new_embedding: Optional[list[float]] = None
     new_encrypted_emb: Optional[str] = None
     if new_claim_text:
         try:
             new_embedding = get_embedding(new_claim_text)
-            if lsh_hasher and new_embedding:
-                new_lsh_indices = lsh_hasher.hash(new_embedding)
             new_encrypted_emb = encrypt_embedding(new_embedding, keys.encryption_key)
         except Exception:
-            # Best-effort: if embedding fails, word + entity trapdoors still surface the claim.
+            # Best-effort: if embedding fails, stem + entity tags still surface the claim.
             pass
-    new_entity_trapdoors = compute_entity_trapdoors(new_entity_objs) if new_entity_objs else []
-    new_blind_indices = new_word_indices + new_lsh_indices + new_entity_trapdoors
+    new_blind_indices = blind_tags.fact_tags(
+        keys,
+        new_claim_text or "",
+        embedding=new_embedding if new_embedding else None,
+        lsh_hasher=lsh_hasher,
+        entity_names=blind_tags.entity_names(new_entity_objs),
+    )
 
     payload = FactPayload(
         id=new_fact_id,
@@ -2002,12 +2083,11 @@ async def _change_claim_status(
     # at index 1 — identical on-chain shape to the pre-2.2.3 two-UserOp
     # flow from the subgraph's point of view.
     #
-    # The outer protobuf versioning from the pre-2.2.3 flow is preserved
-    # verbatim: tombstone at v=3 (legacy; matches ``skill/plugin/pin.ts``
-    # byte-for-byte), new fact at v=4 (v1 taxonomy — Bug #8 fix from
-    # 2.2.2 still required).
-    tombstone_bytes = encode_tombstone_protobuf(fact_id, owner)
-    new_protobuf = encode_fact_protobuf(payload)
+    # Both payloads use the keyed encoders (internal#573): the tombstone is
+    # v=4 with an empty blob, decay 0, is_active 0 and field 14 = 1; the new
+    # fact is v=4 (v1 taxonomy) with field 14 = 1.
+    tombstone_bytes = encode_tombstone_protobuf_keyed(fact_id, owner)
+    new_protobuf = encode_fact_protobuf_keyed(payload)
 
     await build_and_send_userop_batch(
         sender=smart_account,
@@ -2059,6 +2139,7 @@ async def pin_fact(
     data_edge_address: Optional[str] = None,
     profile: str = "background",
     deadline_s: Optional[float] = None,
+    wrote_here: Optional[Callable[[str], bool]] = None,
 ) -> dict:
     """Pin a claim so auto-resolution cannot supersede it.
 
@@ -2115,6 +2196,7 @@ async def pin_fact(
         data_edge_address=data_edge_address,
         profile=profile,
         deadline_s=deadline_s,
+        wrote_here=wrote_here,
     )
 
 
@@ -2131,6 +2213,7 @@ async def unpin_fact(
     data_edge_address: Optional[str] = None,
     profile: str = "background",
     deadline_s: Optional[float] = None,
+    wrote_here: Optional[Callable[[str], bool]] = None,
 ) -> dict:
     """Inverse of :func:`pin_fact` — move a pinned claim back to ``active``.
 
@@ -2152,6 +2235,7 @@ async def unpin_fact(
         data_edge_address=data_edge_address,
         profile=profile,
         deadline_s=deadline_s,
+        wrote_here=wrote_here,
     )
 
 

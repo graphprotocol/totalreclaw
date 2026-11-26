@@ -93,6 +93,7 @@ def _build_relay_mock(keys, *, fact_id: str, text: str, status: str | None = Non
                         "createdAt": "1760000000",
                         "isActive": True,
                         "contentFp": "abc123",
+                        "indexScheme": 1,
                     }
                 }
             }
@@ -329,6 +330,7 @@ class TestPinFact:
                             "createdAt": "1760000000",
                             "isActive": True,
                             "contentFp": "abc123",
+                            "indexScheme": 1,
                         }
                     }
                 }

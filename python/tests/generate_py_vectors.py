@@ -10,6 +10,12 @@ from totalreclaw.crypto import (
     compute_auth_key_hash,
     derive_lsh_seed,
     encrypt,
+)
+
+# This generator emits the LEGACY (unkeyed) vectors in crypto_vectors.json.
+# The client wrappers are gone (internal#573), so call core directly. Test
+# tooling only: no client source calls the unkeyed functions.
+from totalreclaw_core import (  # noqa: E402
     generate_blind_indices,
     generate_content_fingerprint,
 )
@@ -48,7 +54,7 @@ def main() -> None:
 
     embedding = make_embedding(42, 1024)
     hasher = LSHHasher(lsh_seed, 1024, 20, 32)
-    buckets = hasher.hash(embedding)
+    buckets = hasher.core.hash(embedding)  # legacy unkeyed buckets (vector file)
 
     vectors = {
         "mnemonic": TEST_MNEMONIC,

@@ -90,6 +90,12 @@ def _client_version() -> str:
         return "unknown"
 
 
+#: Index-scheme header sent on every subgraph and bundler request (internal#573).
+#: The relay refuses trapdoor queries and UserOps without it.
+INDEX_SCHEME_HEADER = "X-TotalReclaw-Index-Scheme"
+INDEX_SCHEME_VALUE = "1"
+
+
 def _client_header_value(client_id: str) -> str:
     """Build the ``X-TotalReclaw-Client`` value: ``<client_id>/<version>``
     (e.g. ``python-client/2.4.5``). The relay buckets analytics on the part
@@ -948,6 +954,7 @@ class RelayClient:
         headers = {
             "Content-Type": "application/json",
             "X-TotalReclaw-Client": _client_header_value(self._client_id),
+            INDEX_SCHEME_HEADER: INDEX_SCHEME_VALUE,
         }
         if self._is_test:
             headers["X-TotalReclaw-Test"] = "true"

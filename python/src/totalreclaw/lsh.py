@@ -17,7 +17,7 @@ class LSHHasher:
     """Random Hyperplane LSH hasher.
 
     All state is deterministic from the seed -- no randomness at hash time.
-    Construct once per session; call ``hash()`` for every store/search operation.
+    Construct once per session; call ``hash_keyed()`` for every store/search operation.
     """
 
     def __init__(
@@ -29,21 +29,21 @@ class LSHHasher:
     ):
         self._inner = totalreclaw_core.LshHasher(seed, dims, n_tables, n_bits)
 
-    def hash(self, embedding: list[float]) -> list[str]:
-        """Hash an embedding vector to an array of blind-hashed bucket IDs.
+    def hash_keyed(self, embedding: list[float]) -> list[str]:
+        """Keyed LSH bucket tags, one per table, in table order (not sorted).
 
-        For each table:
-          1. Compute the N-bit signature (sign of dot product with each hyperplane).
-          2. Build the bucket string: ``lsh_t{tableIndex}_{binarySignature}``.
-          3. SHA-256 the bucket string to produce a blind hash (hex).
+        Keyed by the vault's LSH bucket key inside core; no unkeyed variant
+        exists on this class.
 
         Args:
             embedding: The embedding vector (must have ``dims`` elements).
-
-        Returns:
-            List of ``n_tables`` hex strings (one blind hash per table).
         """
-        return self._inner.hash(embedding)
+        return self._inner.hash_keyed(embedding)
+
+    @property
+    def core(self):
+        """The underlying core hasher (for core keyed-trapdoor generation)."""
+        return self._inner
 
     # -----------------------------------------------------------------------
     # Accessors

@@ -12,8 +12,8 @@ from totalreclaw.protobuf import (
     _write_double,
     _write_string,
     _write_varint_field,
-    encode_fact_protobuf,
-    encode_tombstone_protobuf,
+    encode_fact_protobuf_keyed,
+    encode_tombstone_protobuf_keyed,
     encode_varint,
 )
 
@@ -107,6 +107,11 @@ class TestFieldTags:
 # ---------------------------------------------------------------------------
 
 
+T1 = "a" * 64
+T2 = "b" * 64
+T3 = "c" * 64
+
+
 def _make_sample_fact(**overrides: object) -> FactPayload:
     """Create a sample FactPayload with sensible defaults."""
     defaults = dict(
@@ -114,7 +119,7 @@ def _make_sample_fact(**overrides: object) -> FactPayload:
         timestamp="2026-03-29T12:00:00.000Z",
         owner="0x2c0CF74B2b76110708CA431796367779e3738250",
         encrypted_blob="deadbeef",
-        blind_indices=["abc123", "def456"],
+        blind_indices=[T1, T2],
         decay_score=1.0,
         source="python_test",
         content_fp="fp_abc",
@@ -129,61 +134,61 @@ class TestEncodeFactProtobuf:
 
     def test_produces_bytes(self) -> None:
         fact = _make_sample_fact()
-        result = encode_fact_protobuf(fact)
+        result = encode_fact_protobuf_keyed(fact)
         assert isinstance(result, bytes)
         assert len(result) > 0
 
     def test_deterministic(self) -> None:
         """Same input should produce identical output."""
         fact = _make_sample_fact()
-        assert encode_fact_protobuf(fact) == encode_fact_protobuf(fact)
+        assert encode_fact_protobuf_keyed(fact) == encode_fact_protobuf_keyed(fact)
 
     def test_contains_id(self) -> None:
         """The encoded bytes should contain the fact ID as UTF-8."""
         fact = _make_sample_fact()
-        result = encode_fact_protobuf(fact)
+        result = encode_fact_protobuf_keyed(fact)
         assert fact.id.encode("utf-8") in result
 
     def test_contains_owner(self) -> None:
         fact = _make_sample_fact()
-        result = encode_fact_protobuf(fact)
+        result = encode_fact_protobuf_keyed(fact)
         assert fact.owner.encode("utf-8") in result
 
     def test_contains_encrypted_blob_bytes(self) -> None:
         """encrypted_blob hex should be decoded to raw bytes in the output."""
         fact = _make_sample_fact(encrypted_blob="cafebabe")
-        result = encode_fact_protobuf(fact)
+        result = encode_fact_protobuf_keyed(fact)
         assert b"\xca\xfe\xba\xbe" in result
 
     def test_source_not_in_wire_format(self) -> None:
         """In v3, source is encrypted inside field 4, not written as field 9."""
         fact = _make_sample_fact()
-        result = encode_fact_protobuf(fact)
+        result = encode_fact_protobuf_keyed(fact)
         assert b"python_test" not in result
 
     def test_decay_score_encoding(self) -> None:
         """decay_score=1.0 should appear as a little-endian double."""
         fact = _make_sample_fact(decay_score=1.0)
-        result = encode_fact_protobuf(fact)
+        result = encode_fact_protobuf_keyed(fact)
         packed = struct.pack("<d", 1.0)
         assert packed in result
 
     def test_is_active_always_true(self) -> None:
         """is_active is hardcoded to 1 (true)."""
         fact = _make_sample_fact()
-        result = encode_fact_protobuf(fact)
+        result = encode_fact_protobuf_keyed(fact)
         # Field 7, wire type 0: tag = (7 << 3) | 0 = 56 = 0x38, value = 1
         tag = encode_varint(0x38)
         val = encode_varint(1)
         assert tag + val in result
 
-    def test_version_always_three(self) -> None:
-        """version is hardcoded to 3 (XChaCha20 + encrypted metadata envelope)."""
+    def test_version_always_four(self) -> None:
+        """Keyed scheme 1 forces version 4 whatever the payload says."""
         fact = _make_sample_fact()
-        result = encode_fact_protobuf(fact)
-        # Field 8, wire type 0: tag = (8 << 3) | 0 = 64 = 0x40, value = 3
+        result = encode_fact_protobuf_keyed(fact)
+        # Field 8, wire type 0: tag = (8 << 3) | 0 = 64 = 0x40, value = 4
         tag = encode_varint(0x40)
-        val = encode_varint(3)
+        val = encode_varint(4)
         assert tag + val in result
 
 
@@ -238,30 +243,30 @@ class TestRepeatedFields:
         return count
 
     def test_multiple_blind_indices(self) -> None:
-        fact = _make_sample_fact(blind_indices=["aaa", "bbb", "ccc"])
-        result = encode_fact_protobuf(fact)
+        fact = _make_sample_fact(blind_indices=[T1, T2, T3])
+        result = encode_fact_protobuf_keyed(fact)
         count = self._count_field(result, 5)
         assert count == 3, f"Expected 3 occurrences of field 5, got {count}"
 
     def test_empty_blind_indices(self) -> None:
         """No blind_indices should produce no field 5 entries."""
         fact = _make_sample_fact(blind_indices=[])
-        result = encode_fact_protobuf(fact)
+        result = encode_fact_protobuf_keyed(fact)
         count = self._count_field(result, 5)
         assert count == 0, f"Expected 0 occurrences of field 5, got {count}"
 
     def test_single_blind_index(self) -> None:
-        fact = _make_sample_fact(blind_indices=["only_one"])
-        result = encode_fact_protobuf(fact)
-        assert b"only_one" in result
+        fact = _make_sample_fact(blind_indices=[T1])
+        result = encode_fact_protobuf_keyed(fact)
+        assert T1.encode() in result
         count = self._count_field(result, 5)
         assert count == 1
 
     def test_blind_index_content(self) -> None:
         """Each blind index string should appear in the encoded output."""
-        indices = ["hash_a", "hash_b"]
+        indices = [T1, T2]
         fact = _make_sample_fact(blind_indices=indices)
-        result = encode_fact_protobuf(fact)
+        result = encode_fact_protobuf_keyed(fact)
         for idx in indices:
             assert idx.encode("utf-8") in result
 
@@ -276,14 +281,14 @@ class TestOptionalEncryptedEmbedding:
 
     def test_absent(self) -> None:
         fact = _make_sample_fact(encrypted_embedding=None)
-        result = encode_fact_protobuf(fact)
+        result = encode_fact_protobuf_keyed(fact)
         # Field 13 tag: (13 << 3) | 2 = 106 = 0x6a
         tag = encode_varint(0x6A)
         assert tag not in result
 
     def test_present(self) -> None:
         fact = _make_sample_fact(encrypted_embedding="encrypted_vec_hex")
-        result = encode_fact_protobuf(fact)
+        result = encode_fact_protobuf_keyed(fact)
         assert b"encrypted_vec_hex" in result
         tag = encode_varint(0x6A)
         assert tag in result
@@ -291,7 +296,7 @@ class TestOptionalEncryptedEmbedding:
     def test_empty_string_omitted(self) -> None:
         """An empty string should not write the field (protobuf convention)."""
         fact = _make_sample_fact(encrypted_embedding="")
-        result = encode_fact_protobuf(fact)
+        result = encode_fact_protobuf_keyed(fact)
         tag = encode_varint(0x6A)
         assert tag not in result
 
@@ -305,37 +310,42 @@ class TestEncodeTombstoneProtobuf:
     """Verify tombstone payloads for soft-delete."""
 
     def test_produces_bytes(self) -> None:
-        result = encode_tombstone_protobuf("fact-123", "0xOwner")
+        result = encode_tombstone_protobuf_keyed("fact-123", "0xOwner")
         assert isinstance(result, bytes)
         assert len(result) > 0
 
     def test_contains_fact_id(self) -> None:
-        result = encode_tombstone_protobuf("fact-123", "0xOwner")
+        result = encode_tombstone_protobuf_keyed("fact-123", "0xOwner")
         assert b"fact-123" in result
 
     def test_contains_owner(self) -> None:
-        result = encode_tombstone_protobuf("fact-123", "0xOwner")
+        result = encode_tombstone_protobuf_keyed("fact-123", "0xOwner")
         assert b"0xOwner" in result
 
-    def test_encrypted_blob_is_tombstone(self) -> None:
-        """encrypted_blob should be the raw bytes of 'tombstone'."""
-        result = encode_tombstone_protobuf("fact-123", "0xOwner")
-        assert b"tombstone" in result
+    def test_encrypted_blob_is_empty(self) -> None:
+        """Scheme-1 tombstone: empty blob, so the legacy marker is gone."""
+        result = encode_tombstone_protobuf_keyed("fact-123", "0xOwner")
+        assert b"tombstone" not in result
+        assert b"\x22\x00" in result
+
+    def test_is_active_false(self) -> None:
+        result = encode_tombstone_protobuf_keyed("fact-123", "0xOwner")
+        assert encode_varint(0x38) + encode_varint(0) in result
 
     def test_decay_score_zero(self) -> None:
         """Tombstones should have decay_score=0.0."""
-        result = encode_tombstone_protobuf("fact-123", "0xOwner")
+        result = encode_tombstone_protobuf_keyed("fact-123", "0xOwner")
         packed_zero = struct.pack("<d", 0.0)
         assert packed_zero in result
 
     def test_source_not_in_wire_format(self) -> None:
         """In v3, source is encrypted inside field 4, not written as field 9."""
-        result = encode_tombstone_protobuf("fact-123", "0xOwner")
+        result = encode_tombstone_protobuf_keyed("fact-123", "0xOwner")
         assert b"python_forget" not in result
 
     def test_agent_id_not_in_wire_format(self) -> None:
         """In v3, agent_id is encrypted inside field 4, not written as field 11."""
-        result = encode_tombstone_protobuf("fact-123", "0xOwner")
+        result = encode_tombstone_protobuf_keyed("fact-123", "0xOwner")
         assert b"python-client" not in result
 
 
@@ -401,13 +411,14 @@ class TestRoundTripStructure:
         they are encrypted inside field 4.
         """
         fact = _make_sample_fact(encrypted_embedding="enc_emb")
-        data = encode_fact_protobuf(fact)
+        data = encode_fact_protobuf_keyed(fact)
         fields = self._parse_fields(data)
 
         field_numbers = {f[0] for f in fields}
+        assert 14 in field_numbers and fields[-1][:1] == (14,)
         # Fields 1-8, 10, 13 expected. Fields 9, 11 removed in v3.
         # Field 12 (sequence_id) is server-assigned.
-        expected = {1, 2, 3, 4, 5, 6, 7, 8, 10, 13}
+        expected = {1, 2, 3, 4, 5, 6, 7, 8, 10, 13, 14}
         assert expected.issubset(field_numbers), (
             f"Missing fields: {expected - field_numbers}"
         )
@@ -418,7 +429,7 @@ class TestRoundTripStructure:
     def test_field_wire_types(self) -> None:
         """Verify each field uses the correct wire type."""
         fact = _make_sample_fact(encrypted_embedding="enc_emb")
-        data = encode_fact_protobuf(fact)
+        data = encode_fact_protobuf_keyed(fact)
         fields = self._parse_fields(data)
 
         expected_wire_types = {
@@ -433,6 +444,7 @@ class TestRoundTripStructure:
             # 9 (source) and 11 (agent_id) removed in v3
             10: 2,  # content_fp: string
             13: 2,  # encrypted_embedding: string
+            14: 0,  # index_scheme: varint
         }
 
         for field_number, wire_type, _ in fields:
@@ -449,14 +461,14 @@ class TestRoundTripStructure:
             timestamp="2026-01-01T00:00:00.000Z",
             owner="0xOwner",
             encrypted_blob="aabb",
-            blind_indices=["idx1", "idx2"],
+            blind_indices=[T2, T1],
             decay_score=0.75,
             source="test_src",
             content_fp="fp123",
             agent_id="agent-1",
             encrypted_embedding="emb_data",
         )
-        data = encode_fact_protobuf(fact)
+        data = encode_fact_protobuf_keyed(fact)
         fields = self._parse_fields(data)
 
         # Build a dict; for repeated fields, collect into a list
@@ -469,10 +481,11 @@ class TestRoundTripStructure:
         assert field_map[2] == [b"2026-01-01T00:00:00.000Z"]
         assert field_map[3] == [b"0xOwner"]
         assert field_map[4] == [b"\xaa\xbb"]
-        assert field_map[5] == [b"idx1", b"idx2"]
+        assert field_map[5] == [T1.encode(), T2.encode()]  # sorted
         assert field_map[6] == [0.75]
         assert field_map[7] == [1]   # is_active = true
-        assert field_map[8] == [3]   # version = 3
+        assert field_map[8] == [4]   # version = 4
+        assert field_map[14] == [1]  # index scheme 1
         # Fields 9 (source) and 11 (agent_id) removed in v3
         assert 9 not in field_map, "Field 9 (source) should not be in v3 wire format"
         assert 11 not in field_map, "Field 11 (agent_id) should not be in v3 wire format"
@@ -482,7 +495,7 @@ class TestRoundTripStructure:
     def test_no_field_12(self) -> None:
         """Field 12 (sequence_id) should never be set by the client."""
         fact = _make_sample_fact(encrypted_embedding="x")
-        data = encode_fact_protobuf(fact)
+        data = encode_fact_protobuf_keyed(fact)
         fields = self._parse_fields(data)
         field_numbers = {f[0] for f in fields}
         assert 12 not in field_numbers

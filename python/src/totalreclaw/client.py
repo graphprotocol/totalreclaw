@@ -31,6 +31,7 @@ from .crypto import (
     compute_auth_key_hash,
     DerivedKeys,
 )
+from . import blind_tags
 from .lsh import LSHHasher
 from .relay import (
     RelayClient,
@@ -53,6 +54,7 @@ from .operations import (
     pin_fact,
     unpin_fact,
     get_fact_pin_status,
+    require_keyed_fact,
     find_existing_content_fps,
     fetch_recent_facts as _fetch_recent_facts,
     # internal#448 — byte-capped batching + halve-on-simfail hoisted into the
@@ -62,7 +64,7 @@ from .operations import (
     MAX_BATCH_GROUP_COUNT,
 )
 from .retype_setscope import execute_retype, execute_set_scope
-from .write_gate import ledger_for, view_cache_for
+from .write_gate import keyed_writes_for, ledger_for, view_cache_for
 from .userop import DATA_EDGE_ADDRESS as _PROD_DATA_EDGE_ADDRESS_DEFAULT
 from .userop import (
     NothingSentError,
@@ -200,6 +202,9 @@ def _ledger_rename(client, fact_id: str, result, pinned) -> None:
     id with the same text)."""
     try:
         if isinstance(result, dict) and result.get("success") and result.get("new_fact_id"):
+            # The rewrite payload was encoded by this process (keyed), so the
+            # pin / retype guard may skip its query for the new id (#573).
+            keyed_writes_for(client).add(str(result["new_fact_id"]))
             ledger_for(client).rename(fact_id, str(result["new_fact_id"]), pinned=pinned)
             view_cache_for(client).rename(fact_id, str(result["new_fact_id"]), pinned=pinned)
     except Exception:  # never fail a mutation over the ledger
@@ -1213,8 +1218,10 @@ class TotalReclaw:
         replaced, dropped or reverted. Take its facts out of the recent-write
         ledger so the write gate lets them be stored again."""
         led = ledger_for(self)
+        keyed = keyed_writes_for(self)
         for fact_id in fact_ids:
             led.forget(fact_id)
+            keyed.discard(fact_id)
 
     async def settle_pending_writes(
         self, *, profile: str = "background", deadline_s: Optional[float] = None
@@ -1356,7 +1363,7 @@ class TotalReclaw:
         lsh = self._get_lsh_hasher() if embedding else None
         if on_lost is None:
             on_lost = self._release_lost_writes
-        return await store_fact(
+        fact_id = await store_fact(
             text=text,
             wallet=self._wallet_context(chain_id),
             relay=self._relay,
@@ -1379,6 +1386,10 @@ class TotalReclaw:
             deadline_s=deadline_s,
             on_lost=on_lost,
         )
+        # This process encoded the payload (keyed): the pin / retype guard may
+        # skip its query for this id (#573).
+        keyed_writes_for(self).add(fact_id)
+        return fact_id
 
     async def remember_batch(
         self,
@@ -1522,12 +1533,14 @@ class TotalReclaw:
                 unsent.extend(position[id(f)] for f in group if id(f) in position)
                 raise
             except UserOpAmbiguousError as e:
+                keyed_writes_for(self).add_many(e.fact_ids)
                 maybe_ops.append({
                     "hashes": list(e.hashes), "nonce": e.nonce,
                     "sent_block": e.sent_block, "fact_ids": list(e.fact_ids),
                     "indices": [position[id(f)] for f in group if id(f) in position],
                 })
                 raise
+            keyed_writes_for(self).add_many(group_ids)
             for fact, fact_id in zip(group, group_ids):
                 if id(fact) in position:
                     stored_at[position[id(fact)]] = fact_id
@@ -1538,7 +1551,11 @@ class TotalReclaw:
         # raise so the failure is never silently dropped (duplicate rejections
         # are swallowed inside the helper).
         ids, errors = await group_and_store_adaptive(
-            _store_group, facts, MAX_BATCH_GROUP_COUNT, MAX_BATCH_BYTES
+            _store_group,
+            facts,
+            MAX_BATCH_GROUP_COUNT,
+            MAX_BATCH_BYTES,
+            tag_count=blind_tags.tag_counter(getattr(self, "_keys", None)),
         )
         results = [stored_at.get(i) for i in range(len(facts))]
         if errors and quota_refusals:
@@ -1658,6 +1675,7 @@ class TotalReclaw:
             # it indexes the tombstone; the ledger knows it is gone.
             ledger_for(self).forget(fact_id)
             view_cache_for(self).forget(fact_id)
+            keyed_writes_for(self).discard(fact_id)
         if success and snapshot:
             try:
                 self.forget_ledger.record(
@@ -1703,6 +1721,7 @@ class TotalReclaw:
             data_edge_address=self._data_edge_address,
             profile=profile,
             deadline_s=deadline_s,
+            wrote_here=keyed_writes_for(self).contains,
         )
         _ledger_rename(self, fact_id, result, pinned=True)
         return result
@@ -1730,9 +1749,22 @@ class TotalReclaw:
             data_edge_address=self._data_edge_address,
             profile=profile,
             deadline_s=deadline_s,
+            wrote_here=keyed_writes_for(self).contains,
         )
         _ledger_rename(self, fact_id, result, pinned=False)
         return result
+
+    async def ensure_keyed_fact(self, fact_id: str) -> None:
+        """Raise ``IndexSchemeUnconfirmedError`` unless ``fact_id`` is confirmed
+        index-scheme 1 (internal#573). Facts this client wrote skip the query."""
+        await self._ensure_address()
+        await self._ensure_registered()
+        await require_keyed_fact(
+            fact_id,
+            self._wallet_address,
+            self._relay,
+            wrote_here=keyed_writes_for(self).contains,
+        )
 
     async def get_fact_pin_status(self, fact_id: str) -> bool:
         """Whether ``fact_id`` is pinned (PRD-04 F1 / DEP-5).
@@ -1781,6 +1813,7 @@ class TotalReclaw:
             data_edge_address=self._data_edge_address,
             profile=profile,
             deadline_s=deadline_s,
+            wrote_here=keyed_writes_for(self).contains,
         )
         _ledger_rename(self, fact_id, result, pinned=None)
         return result
@@ -1810,6 +1843,7 @@ class TotalReclaw:
             data_edge_address=self._data_edge_address,
             profile=profile,
             deadline_s=deadline_s,
+            wrote_here=keyed_writes_for(self).contains,
         )
         _ledger_rename(self, fact_id, result, pinned=None)
         return result
@@ -1843,11 +1877,7 @@ class TotalReclaw:
             return []
         await self._ensure_address()
         await self._ensure_registered()
-        from .crypto import generate_content_fingerprint
-        fps = [
-            generate_content_fingerprint(t or "", self._keys.dedup_key)
-            for t in texts
-        ]
+        fps = [blind_tags.content_fp(self._keys, t or "") for t in texts]
         existing = await find_existing_content_fps(
             self._keys, self._wallet_address, self._relay, list(set(fps)),
         )

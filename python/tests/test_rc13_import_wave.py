@@ -448,14 +448,14 @@ async def test_find_duplicate_texts_maps_fingerprints():
     tr._ensure_address = _noop
     tr._ensure_registered = _noop
 
-    import totalreclaw.crypto as crypto_mod
+    from totalreclaw import blind_tags as blind_tags_mod
     fp_map = {"a": "fp-a", "b": "fp-b"}
 
-    def fake_fp(text, key):
+    def fake_fp(keys, text):
         return fp_map[text]
 
-    orig = crypto_mod.generate_content_fingerprint
-    crypto_mod.generate_content_fingerprint = fake_fp
+    orig = blind_tags_mod.content_fp
+    blind_tags_mod.content_fp = fake_fp
     try:
         async def fake_find(keys, owner, relay, fps):
             return {"fp-a"}
@@ -466,5 +466,5 @@ async def test_find_duplicate_texts_maps_fingerprints():
         finally:
             client_mod.find_existing_content_fps = orig_find
     finally:
-        crypto_mod.generate_content_fingerprint = orig
+        blind_tags_mod.content_fp = orig
     assert flags == [True, False]

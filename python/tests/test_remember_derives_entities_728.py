@@ -111,7 +111,7 @@ async def test_pin_preserves_entities_of_v1_claim(mock_send):
         "id": "old", "owner": tpu.OWNER.lower(),
         "encryptedBlob": tpu._encrypted_hex(source_blob, keys.encryption_key),
         "encryptedEmbedding": None, "decayScore": "0.7", "timestamp": "1760000000",
-        "createdAt": "1760000000", "isActive": True, "contentFp": "abc",
+        "createdAt": "1760000000", "isActive": True, "contentFp": "abc", "indexScheme": 1,
     }}})
     captured = {}
     real = operations.build_canonical_claim_v1

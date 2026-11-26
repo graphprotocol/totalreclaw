@@ -52,7 +52,7 @@ import json as _json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional, TypedDict
+from typing import Any, Callable, Optional, TypedDict
 
 from .memory_types import (
     V0_TO_V1_TYPE,
@@ -65,21 +65,26 @@ from .claims_helper import (
     PROTOBUF_VERSION_V4,
     VALID_PIN_STATUSES,
     build_canonical_claim_v1,
-    compute_entity_trapdoors,
 )
 from .crypto import (
     DerivedKeys,
     decrypt,
     encrypt,
     encrypt_embedding,
-    generate_blind_indices,
 )
+from . import blind_tags
 from .embedding import get_embedding
 from .lsh import LSHHasher
-from .protobuf import FactPayload, encode_fact_protobuf, encode_tombstone_protobuf
+from .protobuf import FactPayload, encode_fact_protobuf_keyed, encode_tombstone_protobuf_keyed
 from .relay import RelayClient, parse_subgraph_data
 from .userop import build_and_send_userop_batch
-from .operations import live_decay_score
+from .operations import (
+    INDEX_SCHEME_UNCONFIRMED_CODE,
+    INDEX_SCHEME_UNCONFIRMED_MSG,
+    IndexSchemeUnconfirmedError,
+    live_decay_score,
+    require_keyed_fact,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +326,7 @@ async def _rewrite_with_mutation(
     data_edge_address: Optional[str] = None,
     profile: str = "background",
     deadline_s: Optional[float] = None,
+    wrote_here: Optional[Callable[[str], bool]] = None,
 ) -> dict:
     """Shared write path for retype + set_scope.
 
@@ -424,6 +430,19 @@ async def _rewrite_with_mutation(
     next_state = dict(current)
     next_state[mutate_field] = mutate_value
 
+    # 3b. Index-scheme guard (internal#573): refuse unless the fact is
+    # confirmed keyed. Before any claim build, feedback write or UserOp. A
+    # read block propagates unchanged.
+    try:
+        await require_keyed_fact(fact_id, owner, relay, wrote_here=wrote_here)
+    except IndexSchemeUnconfirmedError:
+        return {
+            "success": False,
+            "fact_id": fact_id,
+            "error": INDEX_SCHEME_UNCONFIRMED_MSG,
+            "error_code": INDEX_SCHEME_UNCONFIRMED_CODE,
+        }
+
     # 4. Build new v1.1 canonical claim. Preserve pin_status across the
     # rewrite (issue #117 / TS PR #114).
     new_fact_id = str(uuid.uuid4())
@@ -471,27 +490,23 @@ async def _rewrite_with_mutation(
     # discoverable via blind-index search after the old fact tombstones.
     new_text = next_state["text"]
     new_entity_objs = next_state.get("entities") or []
-    new_word_indices: list[str] = (
-        generate_blind_indices(new_text) if new_text else []
-    )
-    new_lsh_indices: list[str] = []
+    new_embedding: Optional[list[float]] = None
     new_encrypted_emb: Optional[str] = None
     if new_text:
         try:
             new_embedding = get_embedding(new_text)
-            if lsh_hasher and new_embedding:
-                new_lsh_indices = lsh_hasher.hash(new_embedding)
             new_encrypted_emb = encrypt_embedding(
                 new_embedding, keys.encryption_key
             )
         except Exception:
-            # Best-effort — word + entity trapdoors still surface the claim.
+            # Best-effort — stem + entity tags still surface the claim.
             pass
-    new_entity_trapdoors = (
-        compute_entity_trapdoors(new_entity_objs) if new_entity_objs else []
-    )
-    new_blind_indices = (
-        new_word_indices + new_lsh_indices + new_entity_trapdoors
+    new_blind_indices = blind_tags.fact_tags(
+        keys,
+        new_text or "",
+        embedding=new_embedding if new_embedding else None,
+        lsh_hasher=lsh_hasher,
+        entity_names=blind_tags.entity_names(new_entity_objs),
     )
 
     new_payload = FactPayload(
@@ -508,11 +523,11 @@ async def _rewrite_with_mutation(
         version=PROTOBUF_VERSION_V4,
     )
 
-    # 6. Submit tombstone (v=3) + new fact (v=4) as ONE batched UserOp.
+    # 6. Submit the keyed tombstone + new fact (both v=4, field 14 = 1) as ONE batched UserOp.
     # Same atomic-batch pattern as ``_change_claim_status`` — one nonce,
     # one Pimlico round-trip, atomic on-chain.
-    tombstone_bytes = encode_tombstone_protobuf(fact_id, owner)
-    new_protobuf = encode_fact_protobuf(new_payload)
+    tombstone_bytes = encode_tombstone_protobuf_keyed(fact_id, owner)
+    new_protobuf = encode_fact_protobuf_keyed(new_payload)
 
     try:
         tx_hash = await build_and_send_userop_batch(
@@ -581,6 +596,7 @@ async def execute_retype(
     data_edge_address: Optional[str] = None,
     profile: str = "background",
     deadline_s: Optional[float] = None,
+    wrote_here: Optional[Callable[[str], bool]] = None,
 ) -> dict:
     """Re-type an existing memory.
 
@@ -616,6 +632,7 @@ async def execute_retype(
         data_edge_address=data_edge_address,
         profile=profile,
         deadline_s=deadline_s,
+        wrote_here=wrote_here,
         source_tag="python_retype",
     )
 
@@ -634,6 +651,7 @@ async def execute_set_scope(
     data_edge_address: Optional[str] = None,
     profile: str = "background",
     deadline_s: Optional[float] = None,
+    wrote_here: Optional[Callable[[str], bool]] = None,
 ) -> dict:
     """Re-scope an existing memory.
 
@@ -666,6 +684,7 @@ async def execute_set_scope(
         data_edge_address=data_edge_address,
         profile=profile,
         deadline_s=deadline_s,
+        wrote_here=wrote_here,
         source_tag="python_set_scope",
     )
 

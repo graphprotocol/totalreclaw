@@ -375,6 +375,7 @@ class TestBug8PinEmitsV4Pinned:
                             "createdAt": "1760000000",
                             "isActive": True,
                             "contentFp": "abc",
+                            "indexScheme": 1,
                         }
                     }
                 }
@@ -559,10 +560,9 @@ class TestBug8PinEmitsV4Pinned:
 
     @pytest.mark.asyncio
     @patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock)
-    async def test_pin_tombstone_remains_v3(self, mock_send, keys, eoa):
-        """The first payload (tombstone) should remain at v=3 — matches
-        plugin's behavior exactly (``pin.ts`` line 640: ``version = legacy v3``).
-        """
+    async def test_pin_tombstone_is_keyed_scheme_v4(self, mock_send, keys, eoa):
+        """The first payload (tombstone) is a keyed scheme-1 tombstone:
+        version 4, empty blob, inactive (internal#573)."""
         from totalreclaw.operations import pin_fact
 
         eoa_addr, eoa_pk = eoa
@@ -589,9 +589,8 @@ class TestBug8PinEmitsV4Pinned:
 
         tombstone_payload = captured[0]
         version = self._extract_protobuf_version(tombstone_payload)
-        # v=3 or v=0 (v=0 gets treated as default v=3 on decode).
-        assert version in (0, 3), (
-            f"tombstone should be protobuf v=3 (legacy); got v={version}"
+        assert version == 4, (
+            f"tombstone should be protobuf v=4 (keyed scheme 1); got v={version}"
         )
 
 

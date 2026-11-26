@@ -11,8 +11,6 @@ from totalreclaw.crypto import (
     derive_lsh_seed,
     encrypt,
     decrypt,
-    generate_blind_indices,
-    generate_content_fingerprint,
     encrypt_embedding,
     decrypt_embedding,
 )
@@ -107,46 +105,41 @@ class TestEncryption:
             assert abs(a - b) <= 2e-3
 
 
-class TestBlindIndices:
-    @pytest.mark.xfail(reason="Rust core includes stemmed variants not in TS fixtures")
-    def test_parity_with_typescript(self):
-        indices = generate_blind_indices(FIXTURES["blind_indices"]["input_text"])
-        assert indices == FIXTURES["blind_indices"]["expected"]
+class TestKeyedTags:
+    """The client-side unkeyed ``generate_blind_indices`` / fp v1 wrappers are
+    gone (internal#573); keyed parity lives in ``test_keyed_tags_573.py``."""
 
     def test_empty_string(self):
-        assert generate_blind_indices("") == []
+        from totalreclaw import blind_tags
 
-    def test_short_tokens_filtered(self):
-        indices = generate_blind_indices("I a b cc dd")
-        # "I" and "a" and "b" are < 2 chars, filtered. "cc" and "dd" remain.
-        assert len(indices) >= 2
-
-    def test_dedup(self):
-        indices = generate_blind_indices("hello hello hello")
-        # Same word repeated -- should dedup
-        unique_hashes = set(indices)
-        assert len(indices) == len(unique_hashes)
-
-
-class TestContentFingerprint:
-    def test_parity_with_typescript(self):
         keys = derive_keys_from_mnemonic(FIXTURES["mnemonic"])
-        fp = generate_content_fingerprint(
-            FIXTURES["content_fingerprint"]["input_text"],
-            keys.dedup_key,
-        )
-        assert fp == FIXTURES["content_fingerprint"]["expected_hex"]
+        assert blind_tags.fact_tags(keys, "") == []
 
+    def test_dedup_and_sorted(self):
+        from totalreclaw import blind_tags
+
+        keys = derive_keys_from_mnemonic(FIXTURES["mnemonic"])
+        tags = blind_tags.fact_tags(keys, "hello hello hello")
+        assert tags == sorted(set(tags))
+
+    def test_wrappers_removed(self):
+        import totalreclaw.crypto as c
+
+        assert not hasattr(c, "generate_blind_indices")
+        assert not hasattr(c, "generate_content_fingerprint")
+
+
+class TestContentFingerprintV2:
     def test_whitespace_normalization(self):
+        from totalreclaw import blind_tags
+
         keys = derive_keys_from_mnemonic(FIXTURES["mnemonic"])
-        fp1 = generate_content_fingerprint(
-            "  Hello   world  \n  test  ", keys.dedup_key
-        )
-        fp2 = generate_content_fingerprint("Hello world test", keys.dedup_key)
+        fp1 = blind_tags.content_fp(keys, "  Hello   world  \n  test  ")
+        fp2 = blind_tags.content_fp(keys, "Hello world test")
         assert fp1 == fp2
 
     def test_case_insensitive(self):
+        from totalreclaw import blind_tags
+
         keys = derive_keys_from_mnemonic(FIXTURES["mnemonic"])
-        fp1 = generate_content_fingerprint("Hello World", keys.dedup_key)
-        fp2 = generate_content_fingerprint("hello world", keys.dedup_key)
-        assert fp1 == fp2
+        assert blind_tags.content_fp(keys, "Hello World") == blind_tags.content_fp(keys, "hello world")

@@ -128,6 +128,7 @@ def _build_relay_mock(
                         "createdAt": "1760000000",
                         "isActive": True,
                         "contentFp": "abc123",
+                        "indexScheme": 1,
                     }
                 }
             }

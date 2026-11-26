@@ -389,6 +389,93 @@ def ledger_for(client: Any) -> RecentWriteLedger:
 
 
 # ---------------------------------------------------------------------------
+# Keyed-write record (internal#573, pin / retype guard)
+# ---------------------------------------------------------------------------
+
+class KeyedWriteRecord:
+    """Ids of facts whose payload THIS process encoded (keyed by construction).
+
+    The pin / retype index-scheme guard skips its subgraph query for these
+    ids: a freshly written fact may not be indexed yet, and the query would
+    otherwise get ``fact: null`` and refuse. Ids only (no text, no keys); in
+    memory only; thread-safe; same TTL and cap as the write ledger. Kept
+    apart from :class:`RecentWriteLedger` because that ledger also records
+    ops recovered from the on-disk pending queue, whose payloads an older
+    unkeyed install may have encoded.
+    """
+
+    def __init__(
+        self,
+        ttl_seconds: float = LEDGER_TTL_SECONDS,
+        max_entries: int = LEDGER_MAX_ENTRIES,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self._ttl = ttl_seconds
+        self._max = max_entries
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._ids: "OrderedDict[str, float]" = OrderedDict()
+
+    def _prune(self, now: float) -> None:
+        cutoff = now - self._ttl
+        for key in list(self._ids):
+            if self._ids[key] > cutoff:
+                break
+            del self._ids[key]
+        while len(self._ids) > self._max:
+            self._ids.popitem(last=False)
+
+    def add(self, fact_id: Optional[str]) -> None:
+        if not fact_id or not isinstance(fact_id, str):
+            return
+        now = self._clock()
+        with self._lock:
+            self._ids.pop(fact_id, None)
+            self._ids[fact_id] = now
+            self._prune(now)
+
+    def add_many(self, fact_ids: Any) -> None:
+        for fid in list(fact_ids or []):
+            self.add(fid)
+
+    def discard(self, fact_id: Optional[str]) -> None:
+        if not fact_id:
+            return
+        with self._lock:
+            self._ids.pop(fact_id, None)
+
+    def contains(self, fact_id: Optional[str]) -> bool:
+        if not fact_id:
+            return False
+        now = self._clock()
+        with self._lock:
+            self._prune(now)
+            return fact_id in self._ids
+
+
+_KEYED_WRITES: "weakref.WeakKeyDictionary[Any, KeyedWriteRecord]" = weakref.WeakKeyDictionary()
+_KEYED_WRITES_LOCK = threading.Lock()
+
+
+def keyed_writes_for(client: Any) -> KeyedWriteRecord:
+    """The keyed-write record for ``client`` (created on first use).
+
+    One record per client object, so ``TotalReclaw.from_bundle`` (which skips
+    ``__init__``) gets one too. A client that cannot be weak-referenced gets
+    a throwaway record, so the guard simply queries (fail closed).
+    """
+    with _KEYED_WRITES_LOCK:
+        try:
+            rec = _KEYED_WRITES.get(client)
+            if rec is None:
+                rec = KeyedWriteRecord()
+                _KEYED_WRITES[client] = rec
+            return rec
+        except TypeError:
+            return KeyedWriteRecord()
+
+
+# ---------------------------------------------------------------------------
 # Cached vault view (used when relay reads are paused)
 # ---------------------------------------------------------------------------
 

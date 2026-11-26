@@ -60,7 +60,7 @@ async def test_store_fact_blob_importance_and_active_decay_score(given, stored):
 
     with patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock), \
          patch("totalreclaw.operations.build_canonical_claim_v1", side_effect=_build), \
-         patch("totalreclaw.operations.encode_fact_protobuf", side_effect=_encode):
+         patch("totalreclaw.operations.encode_fact_protobuf_keyed", side_effect=_encode):
         await store_fact(text="Test fact", wallet=wallet, relay=relay, importance=given)
 
     assert seen["importance"] == stored
@@ -280,7 +280,7 @@ def test_session_crystal_importance_10_stored_as_10():
         async def remember(self, text, source="python-client", **fields):
             with patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock), \
                  patch("totalreclaw.operations.build_canonical_claim_v1", side_effect=_build), \
-                 patch("totalreclaw.operations.encode_fact_protobuf", side_effect=_encode):
+                 patch("totalreclaw.operations.encode_fact_protobuf_keyed", side_effect=_encode):
                 return await store_fact(
                     text=text, wallet=wallet, relay=relay, source=source, **fields
                 )

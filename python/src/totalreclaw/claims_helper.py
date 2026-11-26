@@ -23,7 +23,6 @@ The outer protobuf wrapper's ``version`` field MUST be set to
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -417,7 +416,6 @@ def _fact_to_dict(fact: Any) -> Dict[str, Any]:
 # Digest helpers (Stage 3b read path)
 # ---------------------------------------------------------------------------
 
-DIGEST_TRAPDOOR: str = hashlib.sha256(b"type:digest").hexdigest()
 DIGEST_CATEGORY: str = "dig"
 DIGEST_SOURCE_AGENT: str = "hermes-agent-digest"
 DIGEST_CLAIM_CAP: int = 200
@@ -757,34 +755,6 @@ def is_digest_stale(digest_version: int, current_max_created_at_unix: int) -> bo
 def should_recompile(count_new_claims: int, hours_since_compilation: float) -> bool:
     """Recompile guard: 10+ new claims OR 24h+ elapsed."""
     return count_new_claims >= 10 or hours_since_compilation >= 24
-
-
-# ---------------------------------------------------------------------------
-# Entity trapdoors
-# ---------------------------------------------------------------------------
-
-
-def compute_entity_trapdoor(name: str) -> str:
-    normalized = _core.normalize_entity_name(name)
-    return hashlib.sha256(b"entity:" + normalized.encode("utf-8")).hexdigest()
-
-
-def compute_entity_trapdoors(
-    entities: Optional[Sequence[Any]],
-) -> List[str]:
-    if not entities:
-        return []
-    seen: set[str] = set()
-    out: List[str] = []
-    for e in entities:
-        name = _attr(e, "name", None)
-        if not isinstance(name, str) or not name:
-            continue
-        td = compute_entity_trapdoor(name)
-        if td not in seen:
-            seen.add(td)
-            out.append(td)
-    return out
 
 
 # ---------------------------------------------------------------------------

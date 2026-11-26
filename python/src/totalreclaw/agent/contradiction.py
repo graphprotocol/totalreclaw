@@ -27,6 +27,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, List, Optional
 
+from .. import blind_tags
 from ..relay import RelayReadBlocked
 from .loop_runner import InterpreterShutdownError
 from . import pin_check
@@ -228,7 +229,6 @@ async def detect_and_resolve_contradictions(
     try:
         from totalreclaw.embedding import get_embedding
         from totalreclaw.claims_helper import (
-            compute_entity_trapdoor,
             to_entity_refs,
         )
     except ImportError:
@@ -270,14 +270,9 @@ async def detect_and_resolve_contradictions(
                 kept.append(fact)
                 continue
 
-            # Compute entity trapdoors to search for overlapping claims
-            entity_trapdoors = []
-            for entity in fact.entities:
-                name = entity.name if hasattr(entity, "name") else entity.get("name", "")
-                if name:
-                    entity_trapdoors.append(compute_entity_trapdoor(name))
-
-            if not entity_trapdoors:
+            # Only facts with at least one entity name can conflict; no tag is
+            # computed here (the recall below derives its own keyed trapdoors).
+            if not blind_tags.entity_names(fact.entities):
                 kept.append(fact)
                 continue
 

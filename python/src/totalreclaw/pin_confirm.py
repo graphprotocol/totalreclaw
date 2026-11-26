@@ -12,6 +12,7 @@ token store and turn rule as the sensitive-data confirmation, see
 """
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Optional
 
@@ -35,6 +36,10 @@ _ACTIONS: dict[str, tuple[str, str, str]] = {
         "A pinned memory already says something similar. Store this anyway?",
     ),
 }
+
+#: Actions that rewrite the fact (pin / retype / set_scope family) and so need
+#: the index-scheme guard before a confirmation is asked.
+_GUARDED_ACTIONS = frozenset({"unpin", "retype", "set_scope"})
 
 _NEXT_STEP = (
     "Relay message to the user and wait for their answer. Only if they confirm "
@@ -94,6 +99,13 @@ async def pinned_change_notice(
     """
     if not await client.get_fact_pin_status(fact_id):
         return None
+    if action in _GUARDED_ACTIONS:
+        # Index-scheme guard (internal#573) BEFORE any confirmation token is
+        # issued: a refusal raises IndexSchemeUnconfirmedError (a ValueError,
+        # reported by the tool as an error) and asks the user nothing.
+        res = client.ensure_keyed_fact(fact_id)
+        if inspect.isawaitable(res):
+            await res
     token = args.get("confirm_token")
     conv = kwargs.get("session_id")
     return confirm_or_notice(

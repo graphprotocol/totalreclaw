@@ -44,6 +44,8 @@ from .grant import (
     sign_digest,
 )
 from .relay import (
+    INDEX_SCHEME_HEADER,
+    INDEX_SCHEME_VALUE,
     RelayWriteQuotaExceeded,
     _client_header_value,
     raise_for_bundler_status,
@@ -1372,6 +1374,7 @@ def _make_ctx(
         "Authorization": f"Bearer {auth_key_hex}",
         "X-TotalReclaw-Client": _client_header_value(client_id),
         "X-Wallet-Address": wallet_address,
+        INDEX_SCHEME_HEADER: INDEX_SCHEME_VALUE,
     }
     if session_id:
         headers["X-TotalReclaw-Session"] = session_id
