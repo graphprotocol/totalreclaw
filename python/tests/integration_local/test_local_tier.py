@@ -169,8 +169,9 @@ async def test_l2_foreign_op_replaces_ours(stack, caplog):
     await a.write("next")
     await asyncio.sleep(8)
     mine = [p for p in stub.world.executed_payloads if not p.startswith(b"foreign")]
-    assert len(mine) == 1, "ours was replaced; only the next write executed"
-    assert len(stub.world.executed_payloads) == 2
+    # ours was replaced by the foreign op; once that mined, ours is proven dead and sent again
+    assert len(mine) == 2, "the replaced write was sent again, plus the next write"
+    assert len(stub.world.executed_payloads) == 3
     assert all(stub.world.executed_payloads.count(p) == 1 for p in stub.world.executed_payloads)
 
 
