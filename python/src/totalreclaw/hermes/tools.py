@@ -9,6 +9,7 @@ working unchanged.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -342,6 +343,13 @@ async def remember(
 
         from totalreclaw.write_gate import check_store, record_write
 
+        # #646/#650: resolve the account's earlier accepted writes BEFORE the
+        # duplicate gate decides, so a ledger entry for an op that turned out
+        # dead cannot hide a fact that was never stored. Cheap when nothing is
+        # pending; "an earlier write is still unresolved" surfaces as a typed
+        # nothing-was-sent error below.
+        await _settle_pending(client)
+
         mode = gate_mode or ("exact_only" if force_write else "explicit")
         decision = await check_store(
             client, text, embedding, mode=mode, exclude_ids=gate_exclude_ids,
@@ -451,8 +459,39 @@ async def remember(
             state.mark_write_quota_announced()
         return json.dumps(write_quota_tool_payload(e))
     except Exception as e:
+        from totalreclaw.userop import UserOpAmbiguousError
+
+        if isinstance(e, UserOpAmbiguousError):
+            # #646/#650: the op was sent and its fate is open. The write MAY be
+            # stored: remember it in the write ledger so a repeat is blocked,
+            # and say so instead of reporting a failure.
+            from totalreclaw.write_gate import record_write as _record_write
+
+            for fid in e.fact_ids:
+                _record_write(client, fid, text, embedding)
+            logger.warning("totalreclaw_remember sent but not yet confirmed: %s", e)
+            return json.dumps({
+                "stored": False,
+                "unconfirmed": True,
+                "fact_id": e.fact_ids[0] if e.fact_ids else None,
+                "reason": (
+                    "The write was sent but is not confirmed on-chain yet. It may "
+                    "already be stored: do not repeat it."
+                ),
+            })
         logger.error("totalreclaw_remember failed: %s", e)
         return json.dumps({"error": str(e)})
+
+
+async def _settle_pending(client) -> None:
+    """``client.settle_pending_writes`` when the client has it (test doubles
+    may not)."""
+    settle = getattr(client, "settle_pending_writes", None)
+    if settle is None:
+        return
+    res = settle(profile="interactive")
+    if inspect.isawaitable(res):
+        await res
 
 
 def _embed_for_remember(text: str, pii_result) -> Optional[list]:
