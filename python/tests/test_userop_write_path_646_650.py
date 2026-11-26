@@ -653,6 +653,9 @@ async def test_u32_stuck_predecessor_window_then_fast_fail_then_max_age(monkeypa
     del w.status_overrides[h]
     await one(b"u32-d", fact_ids=["d"])               # gate: stale record is dead/gone
     assert lost == [["a"]]
+    settle(w)
+    # a stale record proven terminally dropped is sent again, like a live one
+    assert w.executed_payloads.count(b"u32-a") == 1
 
 
 @pytest.mark.asyncio
@@ -879,4 +882,36 @@ async def test_resend_needs_proof_a_lagging_status_index_is_not_proof(monkeypatc
         await one(b"lag-b", fact_ids=["b"])
     settle(w, 3000)
     assert w.executed_payloads.count(b"lag-a") <= 1
+    w.assert_invariants()
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_the_send_tracks_the_accepted_op(monkeypatch):
+    """The send was cut short after the bundler accepted the op: the call parks the
+    hash, so the next write resolves it by hash instead of colliding with it."""
+    w = make(monkeypatch)
+    deploy(w)
+    orig = userop._relay_rpc
+    sent = asyncio.Event()
+
+    async def slow_send(http, relay_url, headers, method, params, rpc_id=1):
+        res = await orig(http, relay_url, headers, method, params, rpc_id)
+        if method == "eth_sendUserOperation":
+            sent.set()
+            await asyncio.sleep(30)          # real time: the caller cancels us here
+        return res
+
+    monkeypatch.setattr(userop, "_relay_rpc", slow_send)
+    task = asyncio.create_task(one(b"cut-a", fact_ids=["a"]))
+    await asyncio.wait_for(sent.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    recs = userop.pending_records(S)
+    assert len(recs) == 1 and recs[0].fact_ids == ["a"] and recs[0].nonce == 5
+    monkeypatch.setattr(userop, "_relay_rpc", orig)
+    await one(b"cut-b", fact_ids=["b"])
+    settle(w)
+    assert w.executed_payloads.count(b"cut-a") == 1 and w.executed_payloads.count(b"cut-b") == 1
+    assert w.ops and all(o.nonce in (5, 6) for o in w.ops.values())
     w.assert_invariants()

@@ -1189,10 +1189,6 @@ async def _settle_pending(
             if fate.success is False:
                 await _call_on_lost(rec.on_lost, rec.fact_ids)
             _drop_record(_stale, key, rec)
-            if lost_sink is not None and rec.resend_ok and rec.resends < 1 and (
-                fate.kind == "dead" or fate.terminal
-            ):
-                lost_sink.append(rec)
         elif fate.kind in ("dead", "gone"):
             logger.error(
                 "stale write %s is %s; facts %s were not stored",
@@ -1200,6 +1196,11 @@ async def _settle_pending(
             )
             await _call_on_lost(rec.on_lost, rec.fact_ids)
             _drop_record(_stale, key, rec)
+            # same proof rule as the live gate: dead, or terminal rejected / failed
+            if lost_sink is not None and rec.resend_ok and rec.resends < 1 and (
+                fate.kind == "dead" or fate.terminal
+            ):
+                lost_sink.append(rec)
 
 
 def _drop_record(table: dict[str, list[_PendingRecord]], key: str, rec: _PendingRecord) -> None:
@@ -1445,8 +1446,7 @@ async def _build_sign_send(
         raise
     except Exception as exc:
         if _is_shutdown_error(exc):
-            att["sending"] = False
-            raise
+            raise           # att["sending"] stays True: the caller tracks the attempt
         err = _jsonrpc_error_from_http(exc)
         if err is not None:
             att["sending"] = False
@@ -1464,6 +1464,16 @@ async def _build_sign_send(
             returned, local_hash,
         )
     return local_hash
+
+
+def _track_aborted_send(att: dict, nonce: int, is_deployed: bool, in_flight: list) -> None:
+    """A send was cut short (cancelled, interpreter shutdown) AFTER the op was
+    signed: the bundler may already hold it. Record the attempt so the call parks
+    it and the next gate resolves it by hash; otherwise a retry of the same fact
+    would build at the same nonce, meet it as "foreign" and write both."""
+    h = att.get("hash")
+    if att.get("sending") and h and h not in [a.hash for a in in_flight]:
+        in_flight.append(_Attempt(h, nonce, att.get("sent_block", 0), not is_deployed))
 
 
 async def _chain_deployed(http: httpx.AsyncClient, ctx: _Ctx) -> Optional[bool]:
@@ -1642,11 +1652,13 @@ async def _submit_userop_once(
                         _park(sender, in_flight, facts, on_lost)
                     raise
                 except asyncio.CancelledError:
+                    _track_aborted_send(att, nonce, is_deployed, in_flight)
                     if in_flight and not gone_confirmed:
                         _park(sender, in_flight, facts, on_lost)
                     raise
                 except Exception as e:
                     if _is_shutdown_error(e):
+                        _track_aborted_send(att, nonce, is_deployed, in_flight)
                         if in_flight and not gone_confirmed:
                             _park(sender, in_flight, facts, on_lost)
                         raise
