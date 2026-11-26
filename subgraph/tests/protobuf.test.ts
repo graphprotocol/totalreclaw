@@ -46,7 +46,7 @@ describe("protobuf decoder: shared index_scheme vectors", () => {
 
 describe("protobuf decoder: hardening", () => {
   test("oversized key does not alias field 14", () => {
-    // key varint = 2^32 + 0x70 (would read as field 14 if narrowed to i32), value 1.
+    // key varint = 2^39 + 0x70 (would read as field 14 if narrowed to i32), value 1.
     let d = decodeFact(Bytes.fromHexString("f08080808010" + "01"));
     assert.i32Equals(d.indexScheme as i32, 0);
   });

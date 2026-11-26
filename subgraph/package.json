@@ -16,7 +16,7 @@
     "test:e2e": "tsx --tsconfig tsconfig.node.json tests/e2e-ombh-validation.ts",
     "test:scaling": "tsx --tsconfig tsconfig.node.json tests/scaling-analysis.ts",
     "gen:vectors": "node scripts/gen-vector-tests.mjs",
-    "test": "node scripts/gen-vector-tests.mjs && graph test"
+    "test": "node scripts/gen-vector-tests.mjs && graph test -d"
   },
   "devDependencies": {
     "@graphprotocol/graph-cli": "^0.80.0",

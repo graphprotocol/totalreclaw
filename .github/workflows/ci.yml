@@ -471,8 +471,10 @@ jobs:
         run: |
           cd subgraph
           node scripts/gen-vector-tests.mjs
+          set -o pipefail
           script -qec "npx graph test -d" /dev/null | tee /tmp/matchstick.log
           grep -q "tests passed" /tmp/matchstick.log
+          ! grep -qiE "\b[1-9][0-9]* (tests? )?failed" /tmp/matchstick.log
 
   cross-language-parity:
     name: Cross-Language Parity Tests
