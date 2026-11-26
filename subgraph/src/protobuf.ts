@@ -24,6 +24,13 @@
  *  11:  (removed — encrypted in blob v3)
  *  12:  int64 sequence_id            (wire type 0) — monotonic per-user (varint)
  *  13:  string encrypted_embedding   (wire type 2) — XChaCha20-Poly1305 encrypted embedding (hex)
+ *  14:  uint32 index_scheme          (wire type 0) — 1 = keyed blind indices (HMAC v1);
+ *                                    absent = legacy. Written by the core encoder on facts
+ *                                    AND tombstones. A field 14 with any other wire type is
+ *                                    ignored (indexScheme stays 0).
+ *
+ * Shared test vectors: tests/parity/fixtures/protobuf-index-scheme-vectors.json
+ * (generated from the core encoder; the relay decoder loads the same file).
  */
 
 import { Bytes, BigDecimal, BigInt } from "@graphprotocol/graph-ts";
@@ -40,6 +47,8 @@ export class DecodedFact {
   contentFp: string;
   sequenceId: i64;
   encryptedEmbedding: string;
+  /** Decoded varint of field 14. 0 when absent, wrong wire type, or truncated. */
+  indexScheme: i64;
 
   constructor() {
     this.id = "";
@@ -53,12 +62,32 @@ export class DecodedFact {
     this.contentFp = "";
     this.sequenceId = 0;
     this.encryptedEmbedding = "";
+    this.indexScheme = 0;
   }
+}
+
+/** Only index_scheme == 1 counts. The mapping rule is total (design v2.1, section 6). */
+export const INDEX_SCHEME_KEYED_V1: i64 = 1;
+
+/** True when the payload carries field 14 = 1. */
+export function isKeyedScheme(decoded: DecodedFact): boolean {
+  return decoded.indexScheme == INDEX_SCHEME_KEYED_V1;
+}
+
+/**
+ * A tombstone is what the core encoder writes for a forget: empty encrypted
+ * blob and decay_score == 0.
+ */
+export function isTombstone(decoded: DecodedFact): boolean {
+  return decoded.encryptedBlob.length == 0 && decoded.decayScore.equals(BigDecimal.zero());
 }
 
 /**
  * Decode a varint from the byte array starting at offset.
- * Returns [value, newOffset].
+ * Returns [value, newOffset]. newOffset is -1 when the varint is truncated
+ * (continuation bit set on the last available byte) or longer than 10 bytes;
+ * callers must stop decoding. A truncated varint must never yield a value
+ * (0x81 cut short would otherwise read as 1).
  */
 function decodeVarint(data: Bytes, offset: i32): i64[] {
   let result: i64 = 0;
@@ -66,14 +95,15 @@ function decodeVarint(data: Bytes, offset: i32): i64[] {
   let pos = offset;
 
   while (pos < data.length) {
+    if (shift >= 64) return [0, -1];
     let byte = data[pos] as i64;
     result |= (byte & 0x7f) << shift;
     pos++;
-    if ((byte & 0x80) == 0) break;
+    if ((byte & 0x80) == 0) return [result, pos as i64];
     shift += 7;
   }
 
-  return [result, pos as i64];
+  return [0, -1];
 }
 
 /**
@@ -90,15 +120,19 @@ export function decodeFact(data: Bytes): DecodedFact {
   while (offset < data.length) {
     // Read field key
     let keyResult = decodeVarint(data, offset);
-    let key = keyResult[0] as i32;
+    if (keyResult[1] < 0) break;
+    let key = keyResult[0];
     offset = keyResult[1] as i32;
 
-    let fieldNumber = key >> 3;
-    let wireType = key & 0x07;
+    // i64 end to end: narrowing the key to i32 would let an oversized key
+    // alias a real field number (e.g. 2^32 + 0x70 reading as field 14).
+    let fieldNumber: i64 = key >> 3;
+    let wireType = (key & 0x07) as i32;
 
     if (wireType == 0) {
       // Varint
       let valResult = decodeVarint(data, offset);
+      if (valResult[1] < 0) break;
       let value = valResult[0];
       offset = valResult[1] as i32;
 
@@ -110,6 +144,8 @@ export function decodeFact(data: Bytes): DecodedFact {
         // sequence_id: decoded for completeness, but the mapping assigns
         // its own monotonic sequence IDs from GlobalState
         fact.sequenceId = value;
+      } else if (fieldNumber == 14) {
+        fact.indexScheme = value;
       }
     } else if (wireType == 1) {
       // 64-bit (double)
@@ -134,10 +170,13 @@ export function decodeFact(data: Bytes): DecodedFact {
     } else if (wireType == 2) {
       // Length-delimited
       let lenResult = decodeVarint(data, offset);
-      let len = lenResult[0] as i32;
+      if (lenResult[1] < 0) break;
+      let len64 = lenResult[0];
       offset = lenResult[1] as i32;
 
-      if (offset + len > data.length) break;
+      // Compare in i64 so a huge or negative length can never pass.
+      if (len64 < 0 || len64 > (data.length - offset) as i64) break;
+      let len = len64 as i32;
 
       let slice = data.subarray(offset, offset + len);
       // Convert Uint8Array to Bytes so toString() does UTF-8 decoding
