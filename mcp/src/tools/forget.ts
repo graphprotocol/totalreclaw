@@ -189,7 +189,7 @@ export function forgetLookupFailedResponse(): {
  * Decrypts the blob the existence lookup already returned (no extra network
  * call). Answers `false` when the blob is missing or cannot be decrypted:
  * the key is then omitted from the result, like Hermes when it has no
- * snapshot. Forget itself is never blocked by a pin.
+ * snapshot. (Forgetting a pinned memory is gated separately, see `pinnedForgetResponse`.)
  */
 export function factWasPinned(
   fact: { encryptedBlob?: string | null } | null | undefined,
@@ -215,7 +215,28 @@ export function pinnedForgetResponse(
   factId: string,
   confirm: PinConfirmInput,
 ): { content: Array<{ type: string; text: string }> } | null {
-  if (!factWasPinned(fact, decryptBlob)) return null;
+  const blob = fact?.encryptedBlob;
+  let pinned = false;
+  if (blob) {
+    try {
+      pinned = blobIsPinned(decryptBlob(blob.startsWith('0x') ? blob.slice(2) : blob));
+    } catch {
+      // Unreadable pin state: fail closed, like Hermes (nothing is forgotten).
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            deleted_count: 0,
+            fact_ids: [],
+            fact_id: factId,
+            error: 'Could not check whether this memory is pinned. Nothing was deleted.',
+            mode: 'subgraph',
+          }),
+        }],
+      };
+    }
+  }
+  if (!pinned) return null;
   const ask = pinConfirmation('forget', factId, confirm);
   if (!ask) return null;
   return {

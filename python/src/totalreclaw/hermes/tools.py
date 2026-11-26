@@ -350,13 +350,15 @@ async def remember(
             probe = await check_store(client, text, embedding, mode="explicit", exclude_ids=gate_exclude_ids)
             if probe.action == "confirm" and probe.match is not None and probe.match.pinned:
                 pin_hit = probe.match
+        # ``_skip_confirm``: internal bookkeeping writes with no agent to ask
+        # (the import-memory persist note passes it).
         if pin_hit is not None and not kwargs.get("_skip_confirm"):
             from totalreclaw.pin_confirm import confirm_or_notice
 
             pin_notice = confirm_or_notice(
                 "remember",
                 pin_hit.fact_id,
-                text,
+                f"{pin_hit.fact_id}|{text}",
                 _confirm_token if isinstance(_confirm_token, str) else None,
                 kwargs.get("session_id") if isinstance(kwargs.get("session_id"), str) else None,
             )

@@ -15,9 +15,13 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from .pii import confirmations
+from .pii import ConfirmationStore, register_turn_store
 
 logger = logging.getLogger(__name__)
+
+#: Own token store (same turn counting), so a burst of pinned-fact asks cannot
+#: evict a pending sensitive-data confirmation: each store keeps its own cap.
+confirmations = register_turn_store(ConfirmationStore())
 
 #: action -> (tool name, key that reports "not done", message for the user)
 _ACTIONS: dict[str, tuple[str, str, str]] = {

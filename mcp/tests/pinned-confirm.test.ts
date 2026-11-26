@@ -173,6 +173,25 @@ describe('forget on a pinned memory', () => {
     expect(pinnedForgetResponse(fact(true), decrypt, 'pin-1', { token: first.confirm_token })).not.toBeNull();
   });
 
+  test('unreadable pin state fails closed: nothing is forgotten, no token', () => {
+    const boom = () => {
+      throw new Error('cannot decrypt');
+    };
+    const out = parse(pinnedForgetResponse(fact(true), boom, 'pin-1', {}) as Resp);
+    expect(out.deleted_count).toBe(0);
+    expect(out.error).toMatch(/Could not check/);
+    expect(out.confirm_token).toBeUndefined();
+    // a (even valid-looking) token does not bypass it
+    expect(pinnedForgetResponse(fact(true), boom, 'pin-1', { token: 'deadbeefdeadbeef' })).not.toBeNull();
+  });
+
+  test('pin tokens do not use the sensitive-data store', () => {
+    const first = parse(pinnedForgetResponse(fact(true), decrypt, 'pin-1', {}) as Resp);
+    const { confirmations } = jest.requireActual('../src/pii');
+    advance(CONFIRM_TOKEN_MIN_AGE_MS);
+    expect(confirmations.redeem(first.confirm_token, 'pinned_forget', 'pin-1')).toBe('unknown_token');
+  });
+
   test('an unpinned memory is forgotten without a prompt', () => {
     expect(pinnedForgetResponse(fact(false), decrypt, 'x', {})).toBeNull();
     expect(pinnedForgetResponse(null, decrypt, 'x', {})).toBeNull();

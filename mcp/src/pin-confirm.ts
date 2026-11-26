@@ -7,14 +7,20 @@
  * only when the agent calls again with the same arguments and the token, after
  * asking the user.
  *
- * Same token store as the sensitive-data override (`pii.ts`), so the same
- * limits apply: MCP has no notion of conversation turns, so a token only has
+ * Same token class as the sensitive-data override (`pii.ts`, separate store), so
+ * the same limits apply: MCP has no notion of conversation turns, so a token only has
  * to be CONFIRM_TOKEN_MIN_AGE_MS (5 s) old. An agent could still confirm
  * without asking the user (documented as a Known Gap in CLAUDE.md). Hermes
  * waits for a real user turn instead.
  */
 
-import { confirmations, type ConfirmationStore } from './pii.js';
+import { ConfirmationStore } from './pii.js';
+
+/**
+ * Own token store, so a burst of pinned-memory asks cannot evict a pending
+ * sensitive-data confirmation (each store keeps its own 32-token cap).
+ */
+export const pinConfirmations = new ConfirmationStore();
 
 export type PinAction = 'forget' | 'unpin' | 'retype' | 'set_scope';
 
@@ -55,7 +61,7 @@ export function pinConfirmation(
   subject: string,
   input: PinConfirmInput | undefined,
 ): PinConfirmationFields | null {
-  const store = input?.store ?? confirmations;
+  const store = input?.store ?? pinConfirmations;
   const category = pinCategory(action);
   const { tool, message } = ACTIONS[action];
   if (typeof input?.token === 'string' && input.token !== '') {

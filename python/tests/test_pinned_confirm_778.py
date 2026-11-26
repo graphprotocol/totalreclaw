@@ -98,13 +98,13 @@ async def test_correct_token_after_a_turn_works_once(op):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("op", sorted(OPS))
 async def test_expired_token_refused(op, monkeypatch):
-    from totalreclaw import pii
+    from totalreclaw import pii, pin_confirm
 
     fn, client, mutator, state, args, done_key = _setup(op)
     first = json.loads(await fn(args, state))
     note_turn_completed()
-    real = pii.confirmations._clock
-    monkeypatch.setattr(pii.confirmations, "_clock", lambda: real() + pii.CONFIRM_TOKEN_TTL_SECONDS + 1)
+    real = pin_confirm.confirmations._clock
+    monkeypatch.setattr(pin_confirm.confirmations, "_clock", lambda: real() + pii.CONFIRM_TOKEN_TTL_SECONDS + 1)
     out = json.loads(await fn({**args, "confirm_token": first["confirm_token"]}, state))
     assert out["confirmation_required"] == f"pinned_{op}"
     mutator.assert_not_awaited()
@@ -250,3 +250,41 @@ async def test_remember_exact_duplicate_of_pinned_fact_just_skips():
 
     out = await _remember(state, fake_check, {"text": TEXT})
     assert out["already_stored"] is True and "confirmation_required" not in out
+
+
+@pytest.mark.asyncio
+async def test_pinned_asks_do_not_evict_a_pending_sensitive_token():
+    from totalreclaw import pii
+
+    sensitive = pii.confirmations.issue("api_key", "sk-secret-value")
+    fn, client, mutator, state, args, _ = _setup("forget")
+    for i in range(pii.CONFIRM_TOKEN_MAX_LIVE + 5):
+        await fn({"fact_id": f"pinned-{i}"}, state)
+    note_turn_completed()
+    assert pii.confirmations.redeem(sensitive, "api_key", "sk-secret-value") is None
+
+
+@pytest.mark.asyncio
+async def test_remember_token_is_bound_to_the_matched_pinned_fact():
+    client, state, fake_check = _remember_env(True)
+    first = await _remember(state, fake_check, {"text": TEXT})
+    note_turn_completed()
+    # the same text now matches a different pinned fact: the token does not carry over
+    match_b = GateMatch("pin-2", "Other", "near_duplicate", 0.9, True)
+
+    async def check_b(client_, text, emb, mode="explicit", exclude_ids=(), **kw):
+        return GateDecision(action="confirm", match=match_b)
+
+    out = await _remember(state, check_b, {"text": TEXT, "confirm_token": first["confirm_token"]})
+    assert out["confirmation_required"] == "pinned_remember" and out["fact_id"] == "pin-2"
+    client.remember.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_remember_skip_confirm_does_not_prompt():
+    client, state, fake_check = _remember_env(True)
+    with patch("totalreclaw.write_gate.check_store", new=fake_check), \
+         patch("totalreclaw.hermes.tools._embed_for_remember", return_value=[0.1] * 8), \
+         patch("totalreclaw.write_gate.record_write"):
+        out = json.loads(await tools.remember({"text": TEXT, "force": True}, state, _skip_confirm=True))
+    assert out["stored"] is True
