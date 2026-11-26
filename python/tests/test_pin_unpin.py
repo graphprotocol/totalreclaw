@@ -644,6 +644,7 @@ class TestHermesUnpinTool:
 
         state = PluginState()
         fake_client = AsyncMock()
+        fake_client.get_fact_pin_status = AsyncMock(return_value=False)
         fake_client.unpin_fact = AsyncMock(
             return_value={
                 "success": True,

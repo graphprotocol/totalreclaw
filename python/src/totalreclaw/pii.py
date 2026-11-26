@@ -237,9 +237,22 @@ class ConfirmationStore:
 confirmations = ConfirmationStore()
 
 
+#: Other confirmation stores that count the same turns (see ``pin_confirm``).
+_extra_stores: "list[ConfirmationStore]" = []
+
+
+def register_turn_store(store: ConfirmationStore) -> ConfirmationStore:
+    """Have ``note_turn_completed`` also advance ``store``'s turn counters."""
+    if store not in _extra_stores:
+        _extra_stores.append(store)
+    return store
+
+
 def note_turn_completed(conversation_id: Optional[str] = None) -> None:
     """Record a completed conversation turn (called from the per-turn sync)."""
     confirmations.note_turn_completed(conversation_id)
+    for store in _extra_stores:
+        store.note_turn_completed(conversation_id)
 
 
 def block_notice(result: PiiResult, confirm_token: Optional[str] = None) -> dict:

@@ -43,6 +43,7 @@ async def test_recall_omits_pinned_key_when_not_pinned() -> None:
 
 def _forget_client(result):
     client = MagicMock()
+    client.get_fact_pin_status = AsyncMock(return_value=False)
     client.forget = AsyncMock(return_value=result)
     return client
 

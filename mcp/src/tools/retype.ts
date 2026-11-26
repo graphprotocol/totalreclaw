@@ -26,6 +26,8 @@ import {
 import { buildV1ClaimBlob, type PinStatus } from '../claims-helper.js';
 import type { MemoryEntityV1 } from '../v1-types.js';
 import { rethrowIfQuota, shortErrorMessage, logWriteError } from './write-errors.js';
+import { pinConfirmation, pinConfirmTokenSchema, type PinConfirmInput, type PinConfirmationFields } from '../pin-confirm.js';
+import { blobIsPinned } from '../claims-helper.js';
 
 // ── Tool definition ──────────────────────────────────────────────────────────
 
@@ -61,6 +63,7 @@ export const retypeToolDefinition = {
         description:
           'New Memory Taxonomy v1 type. One of: claim, preference, directive, commitment, episode, summary.',
       },
+      confirm_token: pinConfirmTokenSchema,
     },
     // `memory_id` accepts a `fact_id` alias, so only `new_type` is strictly
     // required here; the handler validates the id presence.
@@ -151,7 +154,7 @@ export interface MetadataOpDeps {
   recordWrites?: (records: RecentWriteInput[]) => void;
 }
 
-export interface MetadataOpResult {
+export interface MetadataOpResult extends Partial<PinConfirmationFields> {
   success: boolean;
   memory_id: string;
   new_memory_id?: string;
@@ -339,6 +342,7 @@ export async function executeMetadataOp<T>(
   ) => Parameters<typeof buildV1ClaimBlob>[0],
   nextValue: T,
   opName: string,
+  confirm?: PinConfirmInput,
 ): Promise<MetadataOpResult> {
   // 1. Fetch the original fact
   const existing = await deps.fetchFactById(memoryId);
@@ -377,6 +381,17 @@ export async function executeMetadataOp<T>(
       new_value: String(nextValue),
       idempotent: true,
     };
+  }
+
+  // internal#778: changing a pinned memory needs the user's yes. Stop unless
+  // the agent brings a confirm_token from an earlier ask (bound to this value).
+  if (blobIsPinned(plaintext)) {
+    const ask = pinConfirmation(
+      opName === 'retype' ? 'retype' : 'set_scope',
+      `${memoryId}|${String(nextValue)}`,
+      confirm,
+    );
+    if (ask) return { success: false, memory_id: memoryId, ...ask };
   }
 
   // 4. Build new v1 blob with the override
@@ -518,6 +533,7 @@ export async function executeRetype(
   memoryId: string,
   newType: MemoryTypeV1,
   deps: MetadataOpDeps,
+  confirm?: PinConfirmInput,
 ): Promise<MetadataOpResult> {
   return executeMetadataOp<MemoryTypeV1>(
     memoryId,
@@ -539,6 +555,7 @@ export async function executeRetype(
     }),
     newType,
     'retype',
+    confirm,
   );
 }
 
@@ -564,7 +581,9 @@ export async function handleRetypeWithDeps(
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const validation = validateRetypeArgs(args);
   if (!validation.ok) return errorResponse(validation.error);
-  const result = await executeRetype(validation.memoryId, validation.newType, deps);
+  const result = await executeRetype(validation.memoryId, validation.newType, deps, {
+    token: (args as Record<string, unknown>).confirm_token,
+  });
   return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 }
 

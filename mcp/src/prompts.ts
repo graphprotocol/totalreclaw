@@ -77,6 +77,8 @@ Do NOT store temporary context (today's weather, a one-time task), generic knowl
 
 **Sensitive values (card numbers, IBANs, API keys, passwords, IDs).** \`totalreclaw_remember\` refuses them and returns \`blocked: "sensitive"\` with a message and a \`confirm_token\`. Relay the message to the user and wait. Only if they confirm in a later message, call it again with \`allow_sensitive=true\` and that \`confirm_token\`; without a token from an earlier turn the override is ignored.
 
+**Pinned memories.** \`totalreclaw_forget\`, \`totalreclaw_unpin\`, \`totalreclaw_retype\` and \`totalreclaw_set_scope\` on a pinned memory return \`confirmation_required\` with a message and a \`confirm_token\`, and change nothing. Relay the message and wait. Only if the user says yes in a later message, call the same tool again with the same arguments and that \`confirm_token\`. Never unpin, overwrite or forget a pinned memory on your own to make a new fact fit.
+
 Hygiene:
 - Check recalled memories before storing to avoid duplicates; store-time dedup also runs.
 - For a correction, store the new fact. The system handles supersession.
@@ -138,7 +140,7 @@ INVOKE WHEN USER SAYS:
 - "I don't want you remembering X"
 WHEN NOT TO USE:
 - CORRECTING → totalreclaw_remember (dedup auto)
-- never forget proactively
+- never forget proactively; pinned → ask user first
 DOES: memory_id → tombstone. query → recall ≤50, tombstone all (self-hosted only; managed service needs an id).
 PARAMS: memory_id = the fact_id from a recall result (fact_id also accepted), query, scope.`;
 

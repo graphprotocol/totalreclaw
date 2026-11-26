@@ -1,5 +1,6 @@
 /** Pin/unpin tool tests for MCP server (Slice 2e-mcp, Phase 2). */
 
+import { ConfirmationStore, CONFIRM_TOKEN_MIN_AGE_MS } from '../src/pii';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,6 +32,15 @@ afterAll(() => {
 });
 
 // ─── Tool definitions ─────────────────────────────────────────────────────────
+
+/** A confirm input the user already answered (internal#778): a token issued 5 s ago. */
+function confirmedUnpin(factId: string) {
+  let now = 0;
+  const store = new ConfirmationStore(() => now);
+  const token = store.issue('pinned_unpin', factId);
+  now += CONFIRM_TOKEN_MIN_AGE_MS;
+  return { token, store };
+}
 
 describe('pinToolDefinition', () => {
   test('has correct name', () => {
@@ -294,7 +304,7 @@ describe('executePinOperation — unpin', () => {
       },
     });
 
-    const result = await executePinOperation('pinned-id', 'active', deps);
+    const result = await executePinOperation('pinned-id', 'active', deps, undefined, confirmedUnpin('pinned-id'));
 
     expect(result.success).toBe(true);
     expect(result.previous_status).toBe('pinned');
@@ -640,7 +650,7 @@ describe('Slice 2f: executePinOperation writes feedback on override', () => {
     const deps = makeDeps({
       async fetchFactById(id) { return makeFact(id, pinned); },
     });
-    const result = await executePinOperation('was-winner', 'active', deps);
+    const result = await executePinOperation('was-winner', 'active', deps, undefined, confirmedUnpin('was-winner'));
     expect(result.success).toBe(true);
     const content = fs.readFileSync(feedbackLogPath(), 'utf-8');
     const fb = JSON.parse(content.split('\n').filter((l) => l.length > 0)[0]) as FeedbackEntry;
@@ -708,7 +718,7 @@ describe('executePinOperation — v1.1 pin_status', () => {
         return Buffer.from(plaintext, 'utf-8').toString('hex');
       },
     });
-    const result = await executePinOperation('v1-pinned', 'active', deps);
+    const result = await executePinOperation('v1-pinned', 'active', deps, undefined, confirmedUnpin('v1-pinned'));
     expect(result.success).toBe(true);
     expect(result.previous_status).toBe('pinned');
     expect(result.new_status).toBe('active');

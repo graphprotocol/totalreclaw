@@ -6,6 +6,7 @@ import { executePinOperation, type PinOpDeps } from '../src/tools/pin';
 import { executeRetype, type MetadataOpDeps } from '../src/tools/retype';
 import { executeSetScope } from '../src/tools/set-scope';
 import { buildV1ClaimBlob, blobIsPinned } from '../src/claims-helper';
+import { confirmed } from './helpers/confirmed';
 import { RecentWrites, recordSubmittedPayloads } from '../src/subgraph/recent-writes';
 import { createRewriteLookup } from '../src/subgraph/fact-lookup';
 
@@ -67,11 +68,11 @@ describe('pin right after remember (#701)', () => {
     const id = crypto.randomUUID();
     rememberHere(h.cache, id);
     const pin = await executePinOperation(id, 'pinned', h.deps);
-    const scope = await executeSetScope(pin.new_fact_id!, 'personal', h.deps);
+    const scope = await executeSetScope(pin.new_fact_id!, 'personal', h.deps, confirmed('set_scope', `${pin.new_fact_id}|personal`));
     expect(scope.success).toBe(true);
     expect(scope.previous_value).toBe('work');
     expect(scope.new_value).toBe('personal');
-    const retype = await executeRetype(scope.new_memory_id!, 'preference', h.deps);
+    const retype = await executeRetype(scope.new_memory_id!, 'preference', h.deps, confirmed('retype', `${scope.new_memory_id}|preference`));
     expect(retype.success).toBe(true);
     expect(retype.previous_value).toBe('claim');
   });
@@ -81,7 +82,7 @@ describe('pin right after remember (#701)', () => {
     const id = crypto.randomUUID();
     rememberHere(h.cache, id);
     const pin = await executePinOperation(id, 'pinned', h.deps);
-    const unpin = await executePinOperation(pin.new_fact_id!, 'active', h.deps);
+    const unpin = await executePinOperation(pin.new_fact_id!, 'active', h.deps, undefined, confirmed('unpin', pin.new_fact_id!));
     expect(unpin.success).toBe(true);
     expect(unpin.previous_status).toBe('pinned');
   });
@@ -111,7 +112,7 @@ describe('retype / set_scope keep the pin (#779)', () => {
     const h = harness();
     const id = crypto.randomUUID();
     rememberHere(h.cache, id, { pinStatus: 'pinned' });
-    const r = await executeSetScope(id, 'personal', h.deps);
+    const r = await executeSetScope(id, 'personal', h.deps, confirmed('set_scope', `${id}|personal`));
     expect(r.success).toBe(true);
     const successor = h.cache.get(OWNER, r.new_memory_id!);
     expect(successor).not.toBeNull();
@@ -124,7 +125,7 @@ describe('retype / set_scope keep the pin (#779)', () => {
     const h = harness();
     const id = crypto.randomUUID();
     rememberHere(h.cache, id, { pinStatus: 'pinned' });
-    const r = await executeRetype(id, 'preference', h.deps);
+    const r = await executeRetype(id, 'preference', h.deps, confirmed('retype', `${id}|preference`));
     expect(r.success).toBe(true);
     const plain = UNHEX(h.cache.get(OWNER, r.new_memory_id!)!.encryptedBlob);
     expect(blobIsPinned(plain)).toBe(true);
@@ -167,7 +168,7 @@ describe('retype / set_scope keep the pin (#779)', () => {
     expect(pinned.expires_at).toBe('2030-01-01T00:00:00Z');
     expect(pinned.metadata).toEqual({ session_id: 's-1' });
     expect(pinned.agent_name).toBe('John (Hermes)');
-    const unpin = await executePinOperation(pin.new_fact_id!, 'active', h.deps);
+    const unpin = await executePinOperation(pin.new_fact_id!, 'active', h.deps, undefined, confirmed('unpin', pin.new_fact_id!));
     const back = JSON.parse(UNHEX(h.cache.get(OWNER, unpin.new_fact_id!)!.encryptedBlob));
     expect(back.expires_at).toBe('2030-01-01T00:00:00Z');
     expect(back.metadata).toEqual({ session_id: 's-1' });

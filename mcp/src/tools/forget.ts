@@ -4,6 +4,7 @@ import { pickMemoryId } from './helpers.js';
 import { FORGET_TOOL_DESCRIPTION } from '../prompts.js';
 import { VALID_MEMORY_SCOPES } from '../v1-types.js';
 import { blobIsPinned } from '../claims-helper.js';
+import { pinConfirmation, pinConfirmTokenSchema, type PinConfirmInput } from '../pin-confirm.js';
 
 export interface ForgetIntput {
   /** Canonical memory identifier. `fact_id` accepted as a back-compat alias. */
@@ -51,6 +52,7 @@ export const forgetToolDefinition = {
         description:
           'Optional v1 scope hint for query-based forgets. Not yet enforced server-side, but supplying it lets future versions restrict deletion to one life-domain (e.g. `scope="health"` to forget only diet-related memories). No effect when `fact_id` is given.',
       },
+      confirm_token: pinConfirmTokenSchema,
     },
   },
   annotations: {
@@ -187,7 +189,7 @@ export function forgetLookupFailedResponse(): {
  * Decrypts the blob the existence lookup already returned (no extra network
  * call). Answers `false` when the blob is missing or cannot be decrypted:
  * the key is then omitted from the result, like Hermes when it has no
- * snapshot. Forget itself is never blocked by a pin.
+ * snapshot. (Forgetting a pinned memory is gated separately, see `pinnedForgetResponse`.)
  */
 export function factWasPinned(
   fact: { encryptedBlob?: string | null } | null | undefined,
@@ -200,4 +202,47 @@ export function factWasPinned(
   } catch {
     return false;
   }
+}
+
+/**
+ * internal#778: forgetting a pinned memory needs the user's yes. `null` when
+ * the forget may proceed (not pinned, or a valid confirm_token from an earlier
+ * ask), else the confirmation-required result: nothing is forgotten.
+ */
+export function pinnedForgetResponse(
+  fact: { encryptedBlob?: string | null } | null | undefined,
+  decryptBlob: (hexEncryptedBlob: string) => string,
+  factId: string,
+  confirm: PinConfirmInput,
+): { content: Array<{ type: string; text: string }> } | null {
+  const blob = fact?.encryptedBlob;
+  let pinned = false;
+  if (blob) {
+    try {
+      pinned = blobIsPinned(decryptBlob(blob.startsWith('0x') ? blob.slice(2) : blob));
+    } catch {
+      // Unreadable pin state: fail closed, like Hermes (nothing is forgotten).
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            deleted_count: 0,
+            fact_ids: [],
+            fact_id: factId,
+            error: 'Could not check whether this memory is pinned. Nothing was deleted.',
+            mode: 'subgraph',
+          }),
+        }],
+      };
+    }
+  }
+  if (!pinned) return null;
+  const ask = pinConfirmation('forget', factId, confirm);
+  if (!ask) return null;
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({ deleted_count: 0, fact_ids: [], fact_id: factId, ...ask, mode: 'subgraph' }),
+    }],
+  };
 }

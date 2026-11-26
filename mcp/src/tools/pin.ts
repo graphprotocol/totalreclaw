@@ -31,6 +31,7 @@ import { encodeFactProtobuf } from '../subgraph/store.js';
 import { liveDecayScore } from '../subgraph/decay.js';
 import { carriedFields, extractV1Fields } from './retype.js';
 import { rethrowIfQuota, shortErrorMessage, logWriteError } from './write-errors.js';
+import { pinConfirmation, pinConfirmTokenSchema, type PinConfirmInput, type PinConfirmationFields } from '../pin-confirm.js';
 
 // Lazy-load WASM core (same pattern as claims-helper.ts)
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -279,6 +280,7 @@ export const unpinToolDefinition = {
         type: 'string',
         description: 'Back-compat alias for `memory_id`. Prefer `memory_id`.',
       },
+      confirm_token: pinConfirmTokenSchema,
     },
     // No `required`: handler accepts `memory_id` or its `fact_id` alias.
   },
@@ -575,7 +577,7 @@ export interface PinOpDeps {
   recordWrites?: (records: RecentWriteInput[]) => void;
 }
 
-export interface PinOpResult {
+export interface PinOpResult extends Partial<PinConfirmationFields> {
   success: boolean;
   fact_id: string;
   new_fact_id?: string;
@@ -609,6 +611,7 @@ export async function executePinOperation(
   targetStatus: 'pinned' | 'active',
   deps: PinOpDeps,
   reason?: string,
+  confirm?: PinConfirmInput,
 ): Promise<PinOpResult> {
   // 1. Fetch the existing fact
   const existing = await deps.fetchFactById(factId);
@@ -689,6 +692,15 @@ export async function executePinOperation(
       idempotent: true,
       reason,
     };
+  }
+
+  // internal#778: unpinning is the user's call. Stop on a pinned fact unless
+  // the agent brings a confirm_token from an earlier ask.
+  if (targetStatus === 'active' && parsed.currentStatus === 'pinned') {
+    const ask = pinConfirmation('unpin', factId, confirm);
+    if (ask) {
+      return { success: false, fact_id: factId, previous_status: parsed.currentStatus, ...ask };
+    }
   }
 
   // 4. Build the new canonical v1.1 claim with pin_status + superseded_by link.
@@ -931,7 +943,9 @@ export async function handleUnpinSubgraphWithDeps(
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   const validation = validatePinArgs(args);
   if (!validation.ok) return errorResponse(validation.error);
-  const result = await executePinOperation(validation.factId, 'active', deps, validation.reason);
+  const result = await executePinOperation(validation.factId, 'active', deps, validation.reason, {
+    token: (args as Record<string, unknown>).confirm_token,
+  });
   return { content: [{ type: 'text', text: JSON.stringify(result) }] };
 }
 

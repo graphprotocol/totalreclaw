@@ -845,6 +845,7 @@ class TestHermesRetypeTool:
 
         state = PluginState()
         fake_client = AsyncMock()
+        fake_client.get_fact_pin_status = AsyncMock(return_value=False)
         fake_client.retype = AsyncMock(
             return_value={
                 "success": True,
@@ -879,6 +880,7 @@ class TestHermesRetypeTool:
 
         state = PluginState()
         fake_client = AsyncMock()
+        fake_client.get_fact_pin_status = AsyncMock(return_value=False)
         fake_client.retype = AsyncMock(
             return_value={
                 "success": True,
@@ -906,6 +908,7 @@ class TestHermesSetScopeTool:
 
         state = PluginState()
         fake_client = AsyncMock()
+        fake_client.get_fact_pin_status = AsyncMock(return_value=False)
         fake_client.set_scope = AsyncMock(
             return_value={
                 "success": True,

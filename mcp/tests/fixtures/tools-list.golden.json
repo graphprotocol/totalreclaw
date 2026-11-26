@@ -190,7 +190,7 @@
   },
   {
     "name": "totalreclaw_forget",
-    "description": "Permanently remove memory.\nINVOKE WHEN USER SAYS:\n- \"forget what I said about X\" / \"delete that fact\"\n- \"that's wrong/outdated — remove it\"\n- \"I don't want you remembering X\"\nWHEN NOT TO USE:\n- CORRECTING → totalreclaw_remember (dedup auto)\n- never forget proactively\nDOES: memory_id → tombstone. query → recall ≤50, tombstone all (self-hosted only; managed service needs an id).\nPARAMS: memory_id = the fact_id from a recall result (fact_id also accepted), query, scope.",
+    "description": "Permanently remove memory.\nINVOKE WHEN USER SAYS:\n- \"forget what I said about X\" / \"delete that fact\"\n- \"that's wrong/outdated — remove it\"\n- \"I don't want you remembering X\"\nWHEN NOT TO USE:\n- CORRECTING → totalreclaw_remember (dedup auto)\n- never forget proactively; pinned → ask user first\nDOES: memory_id → tombstone. query → recall ≤50, tombstone all (self-hosted only; managed service needs an id).\nPARAMS: memory_id = the fact_id from a recall result (fact_id also accepted), query, scope.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -219,6 +219,10 @@
             "unspecified"
           ],
           "description": "Optional v1 scope hint for query-based forgets. Not yet enforced server-side, but supplying it lets future versions restrict deletion to one life-domain (e.g. `scope=\"health\"` to forget only diet-related memories). No effect when `fact_id` is given."
+        },
+        "confirm_token": {
+          "type": "string",
+          "description": "Only for a pinned memory. The first call returns confirmation_required with a message and a confirm_token and changes nothing. Ask the user; only after they said yes, call again with the same arguments and this token."
         }
       }
     },
@@ -618,6 +622,10 @@
         "fact_id": {
           "type": "string",
           "description": "Back-compat alias for `memory_id`. Prefer `memory_id`."
+        },
+        "confirm_token": {
+          "type": "string",
+          "description": "Only for a pinned memory. The first call returns confirmation_required with a message and a confirm_token and changes nothing. Ask the user; only after they said yes, call again with the same arguments and this token."
         }
       }
     },
@@ -652,6 +660,10 @@
             "summary"
           ],
           "description": "New Memory Taxonomy v1 type. One of: claim, preference, directive, commitment, episode, summary."
+        },
+        "confirm_token": {
+          "type": "string",
+          "description": "Only for a pinned memory. The first call returns confirmation_required with a message and a confirm_token and changes nothing. Ask the user; only after they said yes, call again with the same arguments and this token."
         }
       },
       "required": [
@@ -691,6 +703,10 @@
             "unspecified"
           ],
           "description": "New scope value. One of: work, personal, health, family, creative, finance, misc, unspecified."
+        },
+        "confirm_token": {
+          "type": "string",
+          "description": "Only for a pinned memory. The first call returns confirmation_required with a message and a confirm_token and changes nothing. Ask the user; only after they said yes, call again with the same arguments and this token."
         }
       },
       "required": [
