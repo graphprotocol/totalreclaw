@@ -144,6 +144,19 @@ def _extract_returning(texts):
     return patch("totalreclaw.agent.lifecycle.extract_facts_llm", new=fake)
 
 
+def _remember_confirmed(state, args, **kw):
+    """Explicit remember of a restated forgotten fact: the first call asks for
+    confirmation; after a completed user turn the same text plus the token
+    stores it. Returns the second call's result."""
+    from totalreclaw.hermes import tools
+    from totalreclaw.pii import note_turn_completed
+
+    first = json.loads(run_sync(tools.remember(dict(args), state, **kw)))
+    assert first["confirmation_required"] == "restates_forgotten"
+    note_turn_completed()
+    return json.loads(run_sync(tools.remember({**args, "confirm_token": first["confirm_token"]}, state, **kw)))
+
+
 def _forget(state, fact_id):
     from totalreclaw.hermes import tools
 
@@ -232,7 +245,7 @@ def test_explicit_remember_brings_a_forgotten_fact_back(env):
     state, client, vault = env
     _forget(state, "f2")
     assert len(client.forget_ledger) == 1
-    out = json.loads(run_sync(tools.remember({"text": VEG}, state)))
+    out = _remember_confirmed(state, {"text": VEG})
     assert out["stored"] is True
     assert len(client.forget_ledger) == 0
     state.add_message("user", "Yes, I'm vegetarian again.")
@@ -386,6 +399,13 @@ def test_715_explicit_remember_of_paraphrase_keeps_ledger_entry(env, caplog):
     with caplog.at_level(logging.INFO), \
          patch("totalreclaw.embedding.get_embedding", new=_embed_from({text: _at(0.83, 100)})):
         out = json.loads(run_sync(tools.remember({"text": text}, state)))
+        if out.get("confirmation_required"):
+            # A core with the paraphrase rule matches this text, so the user
+            # is asked first (internal#715); an older core stores directly.
+            from totalreclaw.pii import note_turn_completed
+
+            note_turn_completed()
+            out = json.loads(run_sync(tools.remember({"text": text, "confirm_token": out["confirm_token"]}, state)))
     assert out["stored"] is True
     assert _remember_logs(caplog) == ["forget ledger: explicit remember released 0 of 1 entries"]
     assert len(client.forget_ledger) == 1
@@ -423,7 +443,7 @@ def test_remember_releases_padded_text(env, caplog):
 
     state, client, vault = _two_entry_ledger(env)
     with caplog.at_level(logging.INFO):
-        out = json.loads(run_sync(tools.remember({"text": H13_REMEMBER}, state)))
+        out = _remember_confirmed(state, {"text": H13_REMEMBER})
     assert out["stored"] is True
     assert _remember_logs(caplog) == ["forget ledger: explicit remember released 1 of 2 entries"]
     assert [e["id"] for e in client.forget_ledger.entries()] == ["f1"]
@@ -436,7 +456,7 @@ def test_remember_stopped_by_write_gate_still_releases(env):
     state, client, vault = _two_entry_ledger(env)
     decision = GateDecision(action="skip", match=GateMatch("d5916f82", H13_STORED, "near_duplicate", 0.93, False))
     with patch("totalreclaw.write_gate.check_store", new=AsyncMock(return_value=decision)):
-        out = json.loads(run_sync(tools.remember({"text": H13_REMEMBER}, state)))
+        out = _remember_confirmed(state, {"text": H13_REMEMBER})
     assert out["already_stored"] is True
     assert [e["id"] for e in client.forget_ledger.entries()] == ["f1"]
 
@@ -446,7 +466,7 @@ def test_remember_suppressed_by_f7_still_releases(env):
 
     state, client, vault = _two_entry_ledger(env)
     with patch.object(state, "manual_remember_is_dup_of_pending", return_value=True):
-        out = json.loads(run_sync(tools.remember({"text": H13_REMEMBER}, state)))
+        out = _remember_confirmed(state, {"text": H13_REMEMBER})
     assert out["suppressed"] == "duplicate_of_pending_auto_extract"
     assert [e["id"] for e in client.forget_ledger.entries()] == ["f1"]
 
@@ -473,3 +493,144 @@ def test_mirror_path_never_releases_or_logs(env, caplog):
     assert out == {"stored": False, "skipped": "forgotten"}
     assert len(client.forget_ledger) == 2
     assert _remember_logs(caplog) == []
+
+
+# --- internal#715, D15: an explicit remember of a forgotten fact needs the user's confirmation
+
+
+def test_715_restating_remember_asks_for_confirmation_and_stores_nothing(env):
+    from totalreclaw.hermes import tools
+
+    state, client, vault = env
+    _forget(state, "f2")
+    before = vault.active_texts()
+    out = json.loads(run_sync(tools.remember({"text": VEG}, state)))
+    assert out["stored"] is False
+    assert out["confirmation_required"] == "restates_forgotten"
+    assert out["fact_id"] == "f2"
+    assert out["confirm_token"] and "next_step" in out
+    assert vault.active_texts() == before
+    assert len(client.forget_ledger) == 1
+
+
+def test_715_confirm_token_same_turn_is_refused(env):
+    from totalreclaw.hermes import tools
+
+    state, client, vault = env
+    _forget(state, "f2")
+    first = json.loads(run_sync(tools.remember({"text": VEG}, state)))
+    again = json.loads(run_sync(tools.remember({"text": VEG, "confirm_token": first["confirm_token"]}, state)))
+    assert again["stored"] is False and again["confirmation_required"] == "restates_forgotten"
+    assert again["confirm_token"] != first["confirm_token"]
+    assert len(client.forget_ledger) == 1
+
+
+def test_715_wrong_unknown_and_reused_tokens_are_refused(env):
+    from totalreclaw.hermes import tools
+    from totalreclaw.pii import note_turn_completed
+
+    state, client, vault = env
+    _forget(state, "f2")
+    first = json.loads(run_sync(tools.remember({"text": VEG}, state)))
+    note_turn_completed()
+    for token in ("deadbeefdeadbeef", "", None):
+        args = {"text": VEG} if token is None else {"text": VEG, "confirm_token": token}
+        out = json.loads(run_sync(tools.remember(args, state)))
+        assert out["stored"] is False and "confirmation_required" in out
+    # a token is bound to the text it was issued for
+    other = json.loads(run_sync(tools.remember({"text": "User is vegetarian, no fish", "confirm_token": first["confirm_token"]}, state)))
+    assert other["stored"] is False
+    # the right token works once, then is spent
+    ok = json.loads(run_sync(tools.remember({"text": VEG, "confirm_token": first["confirm_token"]}, state)))
+    assert ok["stored"] is True
+    assert len(client.forget_ledger) == 0
+    _forget(state, "new-1")
+    reuse = json.loads(run_sync(tools.remember({"text": VEG, "confirm_token": first["confirm_token"]}, state)))
+    assert reuse["stored"] is False and "confirmation_required" in reuse
+
+
+def test_715_token_expires(env, monkeypatch):
+    from totalreclaw import pii
+    from totalreclaw.hermes import tools
+
+    state, client, vault = env
+    _forget(state, "f2")
+    first = json.loads(run_sync(tools.remember({"text": VEG}, state)))
+    pii.note_turn_completed()
+    real = pii.confirmations._clock
+    monkeypatch.setattr(pii.confirmations, "_clock", lambda: real() + pii.CONFIRM_TOKEN_TTL_SECONDS + 1)
+    out = json.loads(run_sync(tools.remember({"text": VEG, "confirm_token": first["confirm_token"]}, state)))
+    assert out["stored"] is False and "confirmation_required" in out
+
+
+def test_715_token_from_another_confirmation_kind_does_not_work(env):
+    from totalreclaw.hermes import tools
+    from totalreclaw.pii import confirmations, note_turn_completed
+
+    state, client, vault = env
+    _forget(state, "f2")
+    wrong = confirmations.issue("api_key", VEG)
+    note_turn_completed()
+    out = json.loads(run_sync(tools.remember({"text": VEG, "confirm_token": wrong}, state)))
+    assert out["stored"] is False and "confirmation_required" in out
+
+
+def test_715_non_forgotten_remember_is_unchanged(env):
+    from totalreclaw.hermes import tools
+
+    state, client, vault = env
+    _forget(state, "f2")
+    out = json.loads(run_sync(tools.remember({"text": "User listens to jazz on Fridays"}, state)))
+    assert out["stored"] is True and "confirmation_required" not in out
+    assert len(client.forget_ledger) == 1
+
+
+def test_715_no_forget_ledger_entries_means_no_prompt(env):
+    from totalreclaw.hermes import tools
+
+    state, client, vault = env
+    out = json.loads(run_sync(tools.remember({"text": VEG}, state)))
+    assert out["stored"] is True and "confirmation_required" not in out
+
+
+def test_715_mirror_and_internal_writes_do_not_prompt(env):
+    from totalreclaw.hermes import tools
+
+    state, client, vault = env
+    _forget(state, "f2")
+    mirror = json.loads(run_sync(tools.remember({"text": VEG}, state, _from_mirror=True)))
+    assert mirror == {"stored": False, "skipped": "forgotten"}
+    internal = json.loads(run_sync(tools.remember({"text": VEG}, state, _skip_confirm=True)))
+    assert internal["stored"] is True
+
+
+def test_715_confirmation_store_error_refuses_cleanly(env):
+    from totalreclaw.hermes import tools
+    from totalreclaw.pii import confirmations
+
+    state, client, vault = env
+    _forget(state, "f2")
+    before = vault.active_texts()
+    with patch.object(confirmations, "issue", side_effect=RuntimeError("boom")):
+        out = json.loads(run_sync(tools.remember({"text": VEG}, state)))
+    assert out["stored"] is False and out["confirmation_required"] == "restates_forgotten"
+    assert "confirm_token" not in out
+    with patch.object(confirmations, "redeem", side_effect=RuntimeError("boom")):
+        out = json.loads(run_sync(tools.remember({"text": VEG, "confirm_token": "abc123"}, state)))
+    assert out["stored"] is False and "confirm_token" not in out
+    assert vault.active_texts() == before
+    assert len(client.forget_ledger) == 1
+
+
+def test_715_token_is_bound_to_the_conversation(env):
+    from totalreclaw.hermes import tools
+    from totalreclaw.pii import note_turn_completed
+
+    state, client, vault = env
+    _forget(state, "f2")
+    first = json.loads(run_sync(tools.remember({"text": VEG}, state, session_id="a")))
+    note_turn_completed("a")
+    other = json.loads(run_sync(tools.remember({"text": VEG, "confirm_token": first["confirm_token"]}, state, session_id="b")))
+    assert other["stored"] is False and other["confirmation_required"] == "restates_forgotten"
+    ok = json.loads(run_sync(tools.remember({"text": VEG, "confirm_token": first["confirm_token"]}, state, session_id="a")))
+    assert ok["stored"] is True
