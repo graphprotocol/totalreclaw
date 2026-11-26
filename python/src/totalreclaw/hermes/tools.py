@@ -422,6 +422,22 @@ async def remember(
             if kwargs.get("_from_mirror")
             else {"confirm": REMEMBER_TOOL_CONFIRM, "profile": "interactive"}
         )
+        collect = kwargs.get("_collect")
+        if collect is not None:
+            # Batched mirror (see ``remember_many``): everything above ran for
+            # this entry; hand back the write instead of sending it alone.
+            collect.append({
+                "text": text,
+                "embedding": embedding,
+                "importance": importance_val,
+                "fact_type": fact_type,
+                "entities": derived_entities,
+                "provenance": "user",
+                "scope": scope,
+                "reasoning": reasoning,
+                "confidence": 1.0,
+            })
+            return json.dumps({"stored": False, "queued_for_batch": True})
         fact_id = await client.remember(
             text,
             embedding=embedding,
@@ -481,6 +497,85 @@ async def remember(
             })
         logger.error("totalreclaw_remember failed: %s", e)
         return json.dumps({"error": str(e)})
+
+
+async def remember_many(
+    texts: list,
+    state: "PluginState",
+    *,
+    gate_mode: str = "exact_only",
+) -> list:
+    """Mirror several built-in memory entries with ONE batched write (#646).
+
+    Every entry goes through the same steps as :func:`remember` with
+    ``_from_mirror=True`` (PII screen, forget guard, settle-before-gate, the
+    store-time gate in ``gate_mode``, entity derivation); the entries that
+    still need a write are then stored together with ``client.remember_batch``
+    (one UserOp per group instead of one per entry). Returns one bool per
+    entry: True when it is stored, ``"skipped"`` when it needs no write (stopped by the
+    gate, PII-blocked, forgotten), False when it should be retried later
+    (error, quota refusal, not sent, or sent and not yet confirmed).
+    """
+    from totalreclaw.client import batch_outcome_flags, per_fact_results
+    from totalreclaw.relay import RelayWriteQuotaExceeded
+    from totalreclaw.write_gate import record_write
+
+    ok: list = [None] * len(texts)
+    plans: list = []          # (position in texts, plan)
+    for i, text in enumerate(texts):
+        collected: list = []
+        out = json.loads(await remember(
+            {"text": text}, state, gate_mode=gate_mode, _from_mirror=True, _collect=collected,
+        ))
+        if out.get("error"):
+            logger.warning("memory mirror: remember failed: %s", out["error"])
+            ok[i] = False
+        elif collected:
+            plans.append((i, collected[0]))
+        elif out.get("stored") is True:
+            ok[i] = True
+        else:
+            # stopped by the gate (already stored), PII-blocked, or forgotten-skipped:
+            # nothing to write and nothing to retry, but not "added" either
+            ok[i] = "skipped"
+    if not plans:
+        return ok
+
+    client = state.get_client()
+    facts = [p for _, p in plans]
+    unsent: set = set()
+    maybe: dict = {}
+    try:
+        outcome = await client.remember_batch(facts, source="hermes-mirror")
+        results = per_fact_results(outcome, len(facts))
+    except RelayWriteQuotaExceeded as e:
+        results = per_fact_results(e, len(facts))
+        await lookup_write_quota_details(e, client)
+        try:
+            state.invalidate_billing_cache()
+        except Exception:
+            pass
+        state.announce_write_quota(format_write_quota_notice(e))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("memory mirror: batched remember failed: %s", e)
+        results = per_fact_results(e, len(facts))
+        un, maybe_ops = batch_outcome_flags(e)
+        unsent = set(un)
+        for m in maybe_ops:
+            for pos, fid in zip(m.get("indices") or [], m.get("fact_ids") or []):
+                maybe[pos] = fid
+    for pos, (i, plan) in enumerate(plans):
+        fid = results[pos] if pos < len(results) else None
+        if fid:
+            record_write(client, fid, plan["text"], plan.get("embedding"))
+            ok[i] = True
+        else:
+            if pos in maybe:
+                # Sent, outcome unknown: the ledger makes the next pass's gate
+                # skip it instead of writing it twice.
+                record_write(client, maybe[pos], plan["text"], plan.get("embedding"))
+            ok[i] = False
+    return ok
 
 
 async def _settle_pending(client) -> None:

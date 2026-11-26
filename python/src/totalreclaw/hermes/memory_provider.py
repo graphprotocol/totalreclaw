@@ -309,6 +309,21 @@ def _mirror_remember(
     return True
 
 
+def _mirror_remember_many(state: "PluginState", texts: List[str]) -> List[Any]:
+    """Store mirrored entries with one batched write (``tools.remember_many``).
+    One result per entry: ``True`` (stored), ``"skipped"`` (the gate, the PII
+    filter or the forget guard stopped it: nothing to write, nothing to retry) or
+    ``False`` (retry later). Never raises."""
+    from .tools import remember_many as _remember_many
+    from totalreclaw.agent.loop_runner import run_sync
+
+    try:
+        return [x if x == "skipped" else bool(x) for x in run_sync(_remember_many(texts, state, gate_mode="exact_only"))]
+    except Exception as exc:
+        logger.warning("memory mirror: batched remember failed: %s", exc)
+        return [False] * len(texts)
+
+
 def _mirror_forget(state: "PluginState", fact_ids: List[str]) -> int:
     """Forget *fact_ids* through ``tools.forget``, one at a time. Returns
     how many were forgotten."""
