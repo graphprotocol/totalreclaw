@@ -101,7 +101,7 @@ def test_random_payloads_equal_core():
         )
         core_in = {
             "id": p.id, "timestamp": p.timestamp, "owner": p.owner,
-            "encrypted_blob_hex": blob.lower() if False else blob, "blind_indices": tags,
+            "encrypted_blob_hex": blob, "blind_indices": tags,
             "decay_score": p.decay_score, "source": "", "content_fp": p.content_fp,
             "agent_id": "", "encrypted_embedding": p.encrypted_embedding, "version": p.version,
         }

@@ -2083,10 +2083,9 @@ async def _change_claim_status(
     # at index 1 — identical on-chain shape to the pre-2.2.3 two-UserOp
     # flow from the subgraph's point of view.
     #
-    # The outer protobuf versioning from the pre-2.2.3 flow is preserved
-    # verbatim: tombstone at v=3 (legacy; matches ``skill/plugin/pin.ts``
-    # byte-for-byte), new fact at v=4 (v1 taxonomy — Bug #8 fix from
-    # 2.2.2 still required).
+    # Both payloads use the keyed encoders (internal#573): the tombstone is
+    # v=4 with an empty blob, decay 0, is_active 0 and field 14 = 1; the new
+    # fact is v=4 (v1 taxonomy) with field 14 = 1.
     tombstone_bytes = encode_tombstone_protobuf_keyed(fact_id, owner)
     new_protobuf = encode_fact_protobuf_keyed(payload)
 

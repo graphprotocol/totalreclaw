@@ -523,7 +523,7 @@ async def _rewrite_with_mutation(
         version=PROTOBUF_VERSION_V4,
     )
 
-    # 6. Submit tombstone (v=3) + new fact (v=4) as ONE batched UserOp.
+    # 6. Submit the keyed tombstone + new fact (both v=4, field 14 = 1) as ONE batched UserOp.
     # Same atomic-batch pattern as ``_change_claim_status`` — one nonce,
     # one Pimlico round-trip, atomic on-chain.
     tombstone_bytes = encode_tombstone_protobuf_keyed(fact_id, owner)
