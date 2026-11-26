@@ -336,3 +336,69 @@ async def test_settle_resends_a_write_proven_replaced(stack):
     mine = [p for p in w.executed_payloads if not p.startswith(b"foreign")]
     assert len(mine) == 1 and len(w.executed_payloads) == 2
     w.assert_invariants()
+
+
+@pytest.mark.asyncio
+async def test_drain_does_not_restore_on_a_bare_not_found(stack):
+    """The bundler's status index says not_found for an op that is alive. The drain
+    must not read that as 'gone': the fact would be written a second time."""
+    w, client, state = stack
+    w.mine_delay = 400
+    text = "alive op behind a lagging status index"
+    with pytest.raises(BatchStoreError) as ei:
+        await client.remember_batch([_fact(text)], deadline_s=8)
+    lifecycle._queue_unconfirmed_chunk(client, _chunk(text), [None], ei.value)
+    w.status_lies = {"*": 10**6}                       # not_found forever, while the op lives
+
+    def drain():
+        return lifecycle.drain_pending_stores(state, client)
+
+    loop = asyncio.get_running_loop()
+    for _ in range(3):
+        assert await loop.run_in_executor(None, drain) == 0
+        w.advance(30)
+    assert w.send_count == 1, "never re-sent on a bare not_found"
+    (entry,) = client.pending_store._load()
+    assert entry["attempts"] == 0 and entry.get("maybe_op")
+    w.advance(600)
+    w.status_lies.clear()
+    await loop.run_in_executor(None, drain)
+    assert client.pending_store.count() == 0
+    assert len(w.executed_payloads) == 1 and w.send_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seed", range(40))
+async def test_randomized_drain_schedule_never_writes_a_fact_twice(stack, seed):
+    """Seeded mix of slow mining, lagging status indexes and drops, with the real
+    queue and drain: no payload executes twice."""
+    import random
+
+    rng = random.Random(seed)
+    w, client, state = stack
+    w.mine_delay = rng.choice([20, 60, 400])
+    w.bundle_delay = rng.choice([0.5, 3])
+    if rng.random() < 0.5:
+        w.status_lies = {"*": rng.choice([2, 6, 10**6])}
+    if rng.random() < 0.3:
+        w.drop_next = 1
+    texts = [f"randomized fact {seed}-{i}" for i in range(rng.randint(1, 3))]
+    for t in texts:
+        try:
+            await client.remember_batch([_fact(t)], deadline_s=rng.choice([6, 10]))
+        except BatchStoreError as e:
+            lifecycle._queue_unconfirmed_chunk(client, _chunk(t), [None], e)
+        except Exception:
+            pass
+    loop = asyncio.get_running_loop()
+    for _ in range(5):
+        await loop.run_in_executor(None, lambda: lifecycle.drain_pending_stores(state, client))
+        w.advance(rng.choice([5, 40, 200]))
+    w.status_lies.clear()
+    w.advance(1500)
+    for _ in range(2):
+        await loop.run_in_executor(None, lambda: lifecycle.drain_pending_stores(state, client))
+        w.advance(100)
+    # a re-store builds a NEW payload (new fact id), so count facts, not bytes:
+    # each fact is on-chain at most once
+    assert len(w.executed_payloads) <= len(texts), "a fact was written twice"

@@ -1249,7 +1249,10 @@ class TotalReclaw:
         :class:`BatchStoreError`, or the fields of a :class:`UserOpAmbiguousError`).
 
         Returns ``"stored"`` (executed, success), ``"reverted"``, ``"dead"``
-        (the nonce went to another op), ``"gone"`` (dropped, nonce unused),
+        (the nonce went to another op), ``"gone"`` (the bundler says
+        ``rejected`` / ``failed`` twice and the nonce is unused: proof the op
+        cannot land), ``"gone_unproven"`` (only ``not_found``, which a lagging
+        status index also says for a live op: NOT proof, treat as pending),
         ``"pending"`` or ``"unknown"``. Read-only."""
         await self._ensure_address()
         chain_id = await self._ensure_chain_id()
@@ -1267,6 +1270,8 @@ class TotalReclaw:
         )
         if fate.kind == "executed":
             return "stored" if fate.success else "reverted"
+        if fate.kind == "gone" and not fate.terminal:
+            return "gone_unproven"
         return fate.kind
 
     async def remember(
