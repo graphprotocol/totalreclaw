@@ -17,11 +17,14 @@ Fixes exercised here (all in ``totalreclaw.userop``):
   "validateUserOp or factory" error marks the sender deployed and retries the
   build WITHOUT the factory.
 * Receipt confirmation (internal#431) for the BATCH path: the hash is only
-  returned once ``eth_getUserOperationReceipt`` reports ``success=true``; a
-  false receipt or a timeout raises so the import engine counts the batch as
-  FAILED, not stored.
+  returned once the op's own fate is ``executed`` with success; a reverted op
+  raises ``UserOpRevertedError`` and an op still unconfirmed at the deadline
+  raises ``UserOpAmbiguousError`` ("maybe stored"; #646/#650 replaced the old
+  receipt-timeout "dropped" verdict, which could write a batch twice).
+* #650: the deploy latch is set only from chain evidence, never at accept.
 
-No network: ``get_nonce`` / ``_eth_get_code`` / ``_relay_rpc`` are patched.
+No network: ``get_nonce`` / ``_eth_get_code`` / ``_eth_block_number`` /
+``_relay_rpc`` are patched.
 """
 from __future__ import annotations
 
@@ -109,13 +112,25 @@ def _make_relay_mock(sponsor_seq, receipt=_RECEIPT_OK):
             return {"result": "0xhash"}
         if method == "eth_getUserOperationReceipt":
             return receipt
+        if method == "pimlico_getUserOperationStatus":
+            return {"result": {"status": "submitted"}}
         raise AssertionError(f"unexpected relay method {method}")
 
     return _mock, record
 
 
 @pytest.fixture(autouse=True)
-def _reset_caches():
+def _reset_caches(monkeypatch):
+    monkeypatch.setattr(userop, "_eth_block_number", AsyncMock(return_value=1000))
+    # A mini virtual clock: sleeping advances it, so deadlines are exact and
+    # never depend on how fast the machine is.
+    clock = {"t": 1000.0}
+
+    async def _vsleep(s):
+        clock["t"] += max(s, 0.001)
+
+    monkeypatch.setattr(userop, "_now", lambda: clock["t"])
+    monkeypatch.setattr(userop, "_sleep", _vsleep)
     userop._reset_deployed_cache_for_tests()
     userop._reset_nonce_cache_for_tests()
     userop._reset_sender_locks_for_tests()
@@ -141,7 +156,8 @@ async def test_nonce_positive_skips_getcode_and_never_attaches_factory(monkeypat
         protobuf_payloads=[b"f1", b"f2"], relay_url="https://mock",
         auth_key_hex="dead", wallet_address=_SA, chain_id=100,
     )
-    assert result == "0xhash"
+    # The client tracks the LOCALLY computed v0.7 hash, not the bundler's string.
+    assert result.startswith("0x") and len(result) == 66
     sent = record["send_userops"][0]
     assert "factory" not in sent
     assert "factoryData" not in sent
@@ -225,7 +241,7 @@ async def test_sponsor_32500_marks_deployed_and_retries_without_factory(monkeypa
         protobuf_payloads=[b"f1", b"f2", b"f3"], relay_url="https://mock",
         auth_key_hex="dead", wallet_address=_SA, chain_id=100,
     )
-    assert result == "0xhash"
+    assert result.startswith("0x") and len(result) == 66
     # First sponsor attempt carried the factory; the retry did NOT.
     assert "factory" in record["sponsor_userops"][0]
     assert "factory" not in record["sponsor_userops"][1]
@@ -245,7 +261,6 @@ async def test_fresh_account_non_redeploy_32500_keeps_factory_not_latched(monkey
 
     monkeypatch.setattr(userop, "_eth_get_code", _getcode)
     # Don't actually sleep on the transient-retry backoff.
-    monkeypatch.setattr(userop.asyncio, "sleep", AsyncMock())
     # Every sponsor attempt returns AA13 → exhausts retries and raises.
     mock, record = _make_relay_mock([_SPONSOR_AA13, _SPONSOR_AA13, _SPONSOR_AA13])
     monkeypatch.setattr(userop, "_relay_rpc", mock)
@@ -269,49 +284,45 @@ async def test_fresh_account_non_redeploy_32500_keeps_factory_not_latched(monkey
 
 @pytest.mark.asyncio
 async def test_batch_receipt_success_returns(monkeypatch):
-    monkeypatch.setattr(
-        userop, "_relay_rpc",
-        AsyncMock(return_value={"result": {"success": True}}),
+    monkeypatch.setattr(userop, "get_nonce", AsyncMock(return_value=5))
+    mock, _ = _make_relay_mock([_VALID_SPONSOR])
+    monkeypatch.setattr(userop, "_relay_rpc", mock)
+    result = await userop.build_and_send_userop_batch(
+        sender=_SA, eoa_address=_EOA, eoa_private_key=_KEY,
+        protobuf_payloads=[b"f1"], relay_url="https://mock",
+        auth_key_hex="dead", wallet_address=_SA, chain_id=100,
     )
-    # Should not raise.
-    await userop._await_batch_receipt(None, "https://mock", {}, "0xhash")
+    assert result.startswith("0x")
 
 
 @pytest.mark.asyncio
 async def test_batch_receipt_failure_raises(monkeypatch):
-    monkeypatch.setattr(
-        userop, "_relay_rpc",
-        AsyncMock(return_value={"result": {"success": False}}),
-    )
-    with pytest.raises(RuntimeError):
-        await userop._await_batch_receipt(None, "https://mock", {}, "0xhash")
-
-
-@pytest.mark.asyncio
-async def test_batch_receipt_timeout_raises(monkeypatch):
-    monkeypatch.setattr(userop, "_BATCH_RECEIPT_TIMEOUT_S", 0.05)
-    monkeypatch.setattr(userop, "_BATCH_RECEIPT_POLL_S", 0.01)
-    monkeypatch.setattr(
-        userop, "_relay_rpc",
-        AsyncMock(return_value={"result": None}),  # never confirmed
-    )
-    with pytest.raises(RuntimeError):
-        await userop._await_batch_receipt(None, "https://mock", {}, "0xhash")
-
-
-@pytest.mark.asyncio
-async def test_batch_send_awaits_receipt_before_returning(monkeypatch):
-    """A batch whose receipt never confirms must RAISE, not return the hash —
-    so the import engine counts it FAILED (stored must mean on-chain)."""
     monkeypatch.setattr(userop, "get_nonce", AsyncMock(return_value=5))
-    monkeypatch.setattr(userop, "_BATCH_RECEIPT_TIMEOUT_S", 0.05)
-    monkeypatch.setattr(userop, "_BATCH_RECEIPT_POLL_S", 0.01)
-    mock, record = _make_relay_mock([_VALID_SPONSOR], receipt={"result": None})
+    mock, _ = _make_relay_mock([_VALID_SPONSOR], receipt={"result": {"success": False}})
     monkeypatch.setattr(userop, "_relay_rpc", mock)
-
-    with pytest.raises(RuntimeError):
+    with pytest.raises(userop.UserOpRevertedError):
         await userop.build_and_send_userop_batch(
             sender=_SA, eoa_address=_EOA, eoa_private_key=_KEY,
             protobuf_payloads=[b"f1"], relay_url="https://mock",
             auth_key_hex="dead", wallet_address=_SA, chain_id=100,
         )
+
+
+@pytest.mark.asyncio
+async def test_batch_send_awaits_receipt_before_returning(monkeypatch):
+    """A batch whose receipt never confirms must RAISE, not return the hash —
+    so the import engine counts it FAILED (stored must mean on-chain). It
+    raises the "maybe stored" error, not "dropped": the op may still land."""
+    monkeypatch.setattr(userop, "get_nonce", AsyncMock(return_value=5))
+    monkeypatch.setattr(userop, "GATE_POLL_S", 0.01)
+    mock, record = _make_relay_mock([_VALID_SPONSOR], receipt={"result": None})
+    monkeypatch.setattr(userop, "_relay_rpc", mock)
+
+    with pytest.raises(userop.UserOpAmbiguousError):
+        await userop.build_and_send_userop_batch(
+            sender=_SA, eoa_address=_EOA, eoa_private_key=_KEY,
+            protobuf_payloads=[b"f1"], relay_url="https://mock",
+            auth_key_hex="dead", wallet_address=_SA, chain_id=100,
+            deadline_s=0.05,
+        )
+    assert len(record["send_userops"]) == 1, "never re-sent while its fate is open"

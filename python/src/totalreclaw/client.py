@@ -20,7 +20,7 @@ import asyncio
 import logging
 import os
 import re
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import httpx as _httpx
 
@@ -1186,6 +1186,10 @@ class TotalReclaw:
         volatility: Optional[str] = None,
         extra_metadata: Optional[dict] = None,
         agent_name: Optional[str] = None,
+        confirm: str = "accept",
+        profile: str = "background",
+        deadline_s: Optional[float] = None,
+        on_lost: Optional[Callable[[list[str]], Any]] = None,
     ) -> str:
         """Store a fact. Returns the fact ID.
 
@@ -1230,6 +1234,17 @@ class TotalReclaw:
             (Hermes)". ``None`` (default) → resolved from
             ``TOTALRECLAW_AGENT_NAME``; unset there too → key omitted
             (behaves exactly as before).
+        confirm : {"accept", "receipt"}
+            ``"accept"`` (default) returns when the bundler accepts the op;
+            the next write resolves it by hash first. ``"receipt"`` waits for
+            this write's own fate (interactive tools, #646/#650).
+        profile : {"interactive", "background"}
+            Deadline profile (see ``userop.PROFILES``).
+        deadline_s : float, optional
+            Total budget of this call, lock wait included.
+        on_lost : callable, optional
+            ``on_lost(fact_ids)``: called when an accepted write is later
+            proven replaced, dropped or reverted.
         """
         await self._ensure_address()
         await self._ensure_registered()
@@ -1253,12 +1268,20 @@ class TotalReclaw:
             extra_metadata=extra_metadata,
             agent_name=agent_name,
             data_edge_address=self._data_edge_address,
+            confirm=confirm,
+            profile=profile,
+            deadline_s=deadline_s,
+            on_lost=on_lost,
         )
 
     async def remember_batch(
         self,
         facts: list[dict],
         source: str = "python-client",
+        *,
+        profile: str = "background",
+        deadline_s: Optional[float] = None,
+        on_lost: Optional[Callable[[list[str]], Any]] = None,
     ) -> "BatchIds":
         """Store N facts via byte-capped, adaptive batched UserOperations.
 
@@ -1376,6 +1399,9 @@ class TotalReclaw:
                     lsh_hasher=lsh,
                     data_edge_address=self._data_edge_address,
                     source=source,
+                    profile=profile,
+                    deadline_s=deadline_s,
+                    on_lost=on_lost,
                 )
             except RelayWriteQuotaExceeded as e:
                 quota_refusals.append(e)
@@ -1460,7 +1486,12 @@ class TotalReclaw:
         return queue
 
     async def forget(
-        self, fact_id: str, *, suppress_reextraction: bool = False
+        self,
+        fact_id: str,
+        *,
+        suppress_reextraction: bool = False,
+        profile: str = "background",
+        deadline_s: Optional[float] = None,
     ) -> ForgetResult:
         """Soft-delete a fact by writing a tombstone.
 
@@ -1495,6 +1526,8 @@ class TotalReclaw:
             sender=self._wallet_address,
             chain_id=chain_id,
             data_edge_address=self._data_edge_address,
+            profile=profile,
+            deadline_s=deadline_s,
         )
         if success:
             # Store-time write gate: the subgraph keeps listing this fact until
@@ -1515,7 +1548,9 @@ class TotalReclaw:
             result["pinned"] = bool(snapshot["pinned"])
         return result
 
-    async def pin_fact(self, fact_id: str) -> dict:
+    async def pin_fact(
+        self, fact_id: str, *, profile: str = "background", deadline_s: Optional[float] = None
+    ) -> dict:
         """Pin a claim so auto-resolution cannot supersede it.
 
         Delegates to :func:`totalreclaw.operations.pin_fact` with this
@@ -1542,11 +1577,15 @@ class TotalReclaw:
             sender=self._wallet_address,
             chain_id=chain_id,
             data_edge_address=self._data_edge_address,
+            profile=profile,
+            deadline_s=deadline_s,
         )
         _ledger_rename(self, fact_id, result, pinned=True)
         return result
 
-    async def unpin_fact(self, fact_id: str) -> dict:
+    async def unpin_fact(
+        self, fact_id: str, *, profile: str = "background", deadline_s: Optional[float] = None
+    ) -> dict:
         """Move a pinned claim back to ``active`` status.
 
         Delegates to :func:`totalreclaw.operations.unpin_fact`. Idempotent
@@ -1565,6 +1604,8 @@ class TotalReclaw:
             sender=self._wallet_address,
             chain_id=chain_id,
             data_edge_address=self._data_edge_address,
+            profile=profile,
+            deadline_s=deadline_s,
         )
         _ledger_rename(self, fact_id, result, pinned=False)
         return result
@@ -1584,7 +1625,9 @@ class TotalReclaw:
             relay=self._relay,
         )
 
-    async def retype(self, fact_id: str, new_type: str) -> dict:
+    async def retype(
+        self, fact_id: str, new_type: str, *, profile: str = "background", deadline_s: Optional[float] = None
+    ) -> dict:
         """Re-type an existing memory (claim → preference, etc.).
 
         Delegates to :func:`totalreclaw.retype_setscope.execute_retype`.
@@ -1612,11 +1655,15 @@ class TotalReclaw:
             sender=self._wallet_address,
             chain_id=chain_id,
             data_edge_address=self._data_edge_address,
+            profile=profile,
+            deadline_s=deadline_s,
         )
         _ledger_rename(self, fact_id, result, pinned=None)
         return result
 
-    async def set_scope(self, fact_id: str, new_scope: str) -> dict:
+    async def set_scope(
+        self, fact_id: str, new_scope: str, *, profile: str = "background", deadline_s: Optional[float] = None
+    ) -> dict:
         """Re-scope an existing memory (work → health, etc.).
 
         Delegates to :func:`totalreclaw.retype_setscope.execute_set_scope`.
@@ -1637,6 +1684,8 @@ class TotalReclaw:
             sender=self._wallet_address,
             chain_id=chain_id,
             data_edge_address=self._data_edge_address,
+            profile=profile,
+            deadline_s=deadline_s,
         )
         _ledger_rename(self, fact_id, result, pinned=None)
         return result

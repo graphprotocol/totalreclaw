@@ -1,28 +1,24 @@
-"""F3 (internal #423) — local monotonic nonce cache + receipt-aware retry.
+"""F3 (internal #423), restated for #646 / #650: the nonce FLOOR.
 
-rc12 QA: 44 import facts chunked 15+15+14 stored only the FIRST 15. Root
-cause: the client never waits for UserOp inclusion, and the EntryPoint
-nonce only advances at execution — so batches 2 and 3 re-fetched batch 1's
-nonce, collided (AA25), and exhausted the ~7s blind retry window while
-Gnosis blocks take ~5s.
-
-The fix: a per-sender local nonce cache lets sequential submissions use
-nonce+1 pipelining (bundlers accept queued sequential-nonce ops), and the
-AA25 retry waits for the chain nonce to actually advance instead of
-sleeping blind.
+#423 added a pipelined next-nonce cache recorded at bundler-ACCEPT time.
+Pimlico's paymaster simulation rejects the pipelined nonce once the
+predecessor is bundled but not mined (#646: AA25, then a wait for nonce + 2
+that never comes), so the cache is gone. What remains is a floor that only
+ever records EXECUTED ops (``nonce + 1``): a stale replica read can never lower
+the nonce below it. Writes are ordered by the predecessor gate instead of by
+pipelining.
 """
 from __future__ import annotations
-
-import asyncio
 
 import pytest
 
 import totalreclaw.userop as userop
 from totalreclaw.userop import (
-    _resolve_submission_nonce,
-    _record_submitted_nonce,
-    _reset_nonce_cache_for_tests,
     _await_nonce_advance,
+    _floor_of,
+    _raise_floor,
+    _reset_floor_to,
+    _reset_nonce_cache_for_tests,
 )
 
 
@@ -33,45 +29,34 @@ def _clear_cache():
     _reset_nonce_cache_for_tests()
 
 
-class TestNonceCache:
-    def test_no_cache_uses_chain_nonce(self):
-        assert _resolve_submission_nonce("0xAbC", 5) == 5
+class TestNonceFloor:
+    def test_no_floor_means_zero(self):
+        assert _floor_of("0xAbC") == 0
 
-    def test_cache_wins_when_chain_is_stale(self):
-        """The QA scenario: batch 1 sent with nonce 5 but unmined — chain
-        still reports 5; batch 2 must use 6."""
-        _record_submitted_nonce("0xabc", 5)
-        assert _resolve_submission_nonce("0xABC", 5) == 6
-
-    def test_chain_wins_when_ahead_of_cache(self):
-        """Cache is self-healing: external activity (another device) can
-        advance the chain past our cache."""
-        _record_submitted_nonce("0xabc", 5)
-        assert _resolve_submission_nonce("0xabc", 9) == 9
-
-    def test_sequential_pipeline(self):
-        """Three back-to-back batches with the chain stuck at 5 → 5, 6, 7."""
-        chain = 5
-        n1 = _resolve_submission_nonce("0xabc", chain)
-        _record_submitted_nonce("0xabc", n1)
-        n2 = _resolve_submission_nonce("0xabc", chain)
-        _record_submitted_nonce("0xabc", n2)
-        n3 = _resolve_submission_nonce("0xabc", chain)
-        assert (n1, n2, n3) == (5, 6, 7)
-
-    def test_record_never_decreases(self):
-        _record_submitted_nonce("0xabc", 9)
-        _record_submitted_nonce("0xabc", 3)  # late/out-of-order record
-        assert _resolve_submission_nonce("0xabc", 0) == 10
-
-    def test_reset_on_aa25_falls_back_to_chain(self):
-        _record_submitted_nonce("0xabc", 42)
-        userop._reset_sender_nonce("0xABC")
-        assert _resolve_submission_nonce("0xabc", 5) == 5
+    def test_floor_never_decreases(self):
+        _raise_floor("0xabc", 9)
+        _raise_floor("0xabc", 3)  # late/out-of-order record
+        assert _floor_of("0xabc") == 9
 
     def test_keys_are_case_insensitive(self):
-        _record_submitted_nonce("0xAbCd", 7)
-        assert _resolve_submission_nonce("0xabcd", 0) == 8
+        _raise_floor("0xAbCd", 7)
+        assert _floor_of("0xabcd") == 7
+
+    def test_reorg_reset_is_the_only_way_down(self):
+        _raise_floor("0xabc", 42)
+        _reset_floor_to("0xABC", 5)
+        assert _floor_of("0xabc") == 5
+
+    def test_nonce_is_max_of_chain_and_floor(self):
+        """The rule the writers apply: ``max(chain_nonce, floor)``."""
+        _raise_floor("0xabc", 6)
+        assert max(5, _floor_of("0xabc")) == 6      # replica lag: floor wins
+        assert max(9, _floor_of("0xabc")) == 9      # external activity: chain wins
+
+    def test_accept_no_longer_records_a_nonce(self):
+        """The accept-time pipelined record (#423) is gone."""
+        assert not hasattr(userop, "_record_submitted_nonce")
+        assert not hasattr(userop, "_resolve_submission_nonce")
 
 
 class TestAwaitNonceAdvance:

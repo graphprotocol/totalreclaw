@@ -868,7 +868,7 @@ class TestHermesRetypeTool:
         assert result["fact_id"] == "old-id"
         assert result["new_type"] == "preference"
         assert result["tx_hash"] == "0xabc"
-        fake_client.retype.assert_awaited_once_with("old-id", "preference")
+        fake_client.retype.assert_awaited_once_with("old-id", "preference", profile="interactive")
 
     @pytest.mark.asyncio
     async def test_retype_tool_surfaces_partial(self):
@@ -928,7 +928,7 @@ class TestHermesSetScopeTool:
         )
         assert result["scope_set"] is True
         assert result["new_scope"] == "health"
-        fake_client.set_scope.assert_awaited_once_with("old-id", "health")
+        fake_client.set_scope.assert_awaited_once_with("old-id", "health", profile="interactive")
 
     @pytest.mark.asyncio
     async def test_set_scope_tool_invalid_scope(self):

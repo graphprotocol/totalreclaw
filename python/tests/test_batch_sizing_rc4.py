@@ -345,7 +345,77 @@ def test_estimate_bounds_real_for_crystal_metadata():
     assert est >= real, f"estimate {est} under-counts real {real} for a Crystal fact"
 
 
-# ── (e) receipt-wait constant ─────────────────────────────────────────────
+# ── (e) receipt-wait budget ────────────────────────────────────────────────
 def test_receipt_wait_constants_lifted():
-    assert userop._BATCH_RECEIPT_TIMEOUT_S == 240.0
-    assert userop._BATCH_RECEIPT_POLL_S == 5.0
+    # #646/#650: the 240 s receipt wait now lives inside one overall batch cap.
+    assert userop.PROFILES["background"]["batch_total"] == 390.0
+    assert userop.PROFILES["background"]["total"] + 240.0 == 390.0
+    assert userop.GATE_SLOW_POLL_S == 5.0
+
+
+# ── (f) #646/#650 task 8: the splitter must not split on state or fate errors
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "msg",
+    [
+        "Batch paymaster sponsorship failed: {'code': -32500, 'message': 'UserOperation reverted during simulation with reason: AA20 account not deployed'}",
+        "Batch paymaster sponsorship failed: {'code': -32500, 'message': 'UserOperation reverted during simulation with reason: AA25 invalid account nonce'}",
+        "Batch paymaster sponsorship failed: {'code': -32500, 'message': 'UserOperation reverted during simulation with reason: AA10 sender already constructed'}",
+        "Batch UserOp submission failed: {'code': -32500, 'message': 'Already known'}",
+    ],
+)
+async def test_splitter_never_splits_on_account_state_errors(msg):
+    from totalreclaw.operations import _store_group_adaptive
+
+    calls = []
+
+    async def store(group):
+        calls.append(len(group))
+        raise RuntimeError(msg)
+
+    ids, errs = await _store_group_adaptive(store, [1, 2, 3, 4])
+    assert calls == [4], "one attempt for the whole group, no halving"
+    assert ids == [] and len(errs) == 1
+
+
+@pytest.mark.asyncio
+async def test_splitter_never_splits_on_typed_fate_errors():
+    from totalreclaw.operations import _store_group_adaptive
+    from totalreclaw.userop import (
+        AccountBusyError,
+        PredecessorPendingError,
+        UserOpAmbiguousError,
+    )
+
+    for exc in (
+        PredecessorPendingError("x -32500 reverted during simulation"),
+        AccountBusyError("x"),
+        UserOpAmbiguousError("-32500 reverted during simulation"),
+    ):
+        calls = []
+
+        async def store(group, exc=exc):
+            calls.append(len(group))
+            raise exc
+
+        await _store_group_adaptive(store, [1, 2, 3, 4])
+        assert calls == [4]
+
+
+@pytest.mark.asyncio
+async def test_splitter_still_splits_a_real_size_revert():
+    from totalreclaw.operations import _store_group_adaptive
+
+    calls = []
+
+    async def store(group):
+        calls.append(len(group))
+        if len(group) > 1:
+            raise RuntimeError(
+                "Batch paymaster sponsorship failed: {'code': -32500, 'message': "
+                "'UserOperation reverted during simulation with reason: AA13 initCode failed or OOG'}"
+            )
+        return ["id"]
+
+    ids, errs = await _store_group_adaptive(store, [1, 2])
+    assert calls == [2, 1, 1] and ids == ["id", "id"] and errs == []

@@ -618,7 +618,7 @@ class TestHermesPinTool:
         assert result["fact_id"] == "old-id"
         assert result["new_fact_id"] == "new-id"
         assert result["new_status"] == "pinned"
-        fake_client.pin_fact.assert_awaited_once_with("old-id")
+        fake_client.pin_fact.assert_awaited_once_with("old-id", profile="interactive")
 
     @pytest.mark.asyncio
     async def test_pin_tool_client_raises(self):
@@ -661,7 +661,7 @@ class TestHermesUnpinTool:
         assert result["unpinned"] is True
         assert result["fact_id"] == "old-id"
         assert result["new_fact_id"] == "new-id"
-        fake_client.unpin_fact.assert_awaited_once_with("old-id")
+        fake_client.unpin_fact.assert_awaited_once_with("old-id", profile="interactive")
 
     @pytest.mark.asyncio
     async def test_unpin_tool_missing_fact_id(self):

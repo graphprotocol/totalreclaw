@@ -319,6 +319,8 @@ async def _rewrite_with_mutation(
     lsh_hasher: Optional[LSHHasher],
     source_tag: str,
     data_edge_address: Optional[str] = None,
+    profile: str = "background",
+    deadline_s: Optional[float] = None,
 ) -> dict:
     """Shared write path for retype + set_scope.
 
@@ -525,6 +527,8 @@ async def _rewrite_with_mutation(
             client_id=relay._client_id,
             session_id=getattr(relay, "_session_id", None),
             data_edge_address=data_edge_address,
+            profile=profile,
+            deadline_s=deadline_s,
         )
     except Exception as exc:
         return {
@@ -575,6 +579,8 @@ async def execute_retype(
     chain_id: int = 84532,
     lsh_hasher: Optional[LSHHasher] = None,
     data_edge_address: Optional[str] = None,
+    profile: str = "background",
+    deadline_s: Optional[float] = None,
 ) -> dict:
     """Re-type an existing memory.
 
@@ -608,6 +614,8 @@ async def execute_retype(
         chain_id=chain_id,
         lsh_hasher=lsh_hasher,
         data_edge_address=data_edge_address,
+        profile=profile,
+        deadline_s=deadline_s,
         source_tag="python_retype",
     )
 
@@ -624,6 +632,8 @@ async def execute_set_scope(
     chain_id: int = 84532,
     lsh_hasher: Optional[LSHHasher] = None,
     data_edge_address: Optional[str] = None,
+    profile: str = "background",
+    deadline_s: Optional[float] = None,
 ) -> dict:
     """Re-scope an existing memory.
 
@@ -654,6 +664,8 @@ async def execute_set_scope(
         chain_id=chain_id,
         lsh_hasher=lsh_hasher,
         data_edge_address=data_edge_address,
+        profile=profile,
+        deadline_s=deadline_s,
         source_tag="python_set_scope",
     )
 
