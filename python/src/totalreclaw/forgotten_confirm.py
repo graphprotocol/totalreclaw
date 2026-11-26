@@ -51,19 +51,26 @@ def forgotten_notice(
         return None
     if not match:
         return None
-    if confirm_token:
-        reason = confirmations.redeem(confirm_token, CATEGORY, text, conversation_id)
-        if reason is None:
-            logger.info("remember storing a forgotten fact's restatement after user confirmation")
-            return None
-        logger.info("remember: restates a forgotten fact; confirm_token refused (reason=%s)", reason)
-    else:
-        logger.info("remember: restates a forgotten fact; confirmation required")
-    return {
+    try:
+        if confirm_token:
+            reason = confirmations.redeem(confirm_token, CATEGORY, text, conversation_id)
+            if reason is None:
+                logger.info("remember storing a forgotten fact's restatement after user confirmation")
+                return None
+            logger.info("remember: restates a forgotten fact; confirm_token refused (reason=%s)", reason)
+        else:
+            logger.info("remember: restates a forgotten fact; confirmation required")
+        token: Optional[str] = confirmations.issue(CATEGORY, text, conversation_id)
+    except Exception as exc:  # noqa: BLE001 - fail closed: never store, never raise
+        logger.warning("forgotten confirm: confirmation store error (%s)", type(exc).__name__)
+        token = None
+    notice = {
         "stored": False,
         "confirmation_required": CATEGORY,
         "fact_id": match.get("id"),
         "message": MESSAGE,
-        "confirm_token": confirmations.issue(CATEGORY, text, conversation_id),
-        "next_step": NEXT_STEP,
     }
+    if token is not None:
+        notice["confirm_token"] = token
+        notice["next_step"] = NEXT_STEP
+    return notice

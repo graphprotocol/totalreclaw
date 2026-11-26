@@ -602,3 +602,35 @@ def test_715_mirror_and_internal_writes_do_not_prompt(env):
     assert mirror == {"stored": False, "skipped": "forgotten"}
     internal = json.loads(run_sync(tools.remember({"text": VEG}, state, _skip_confirm=True)))
     assert internal["stored"] is True
+
+
+def test_715_confirmation_store_error_refuses_cleanly(env):
+    from totalreclaw.hermes import tools
+    from totalreclaw.pii import confirmations
+
+    state, client, vault = env
+    _forget(state, "f2")
+    before = vault.active_texts()
+    with patch.object(confirmations, "issue", side_effect=RuntimeError("boom")):
+        out = json.loads(run_sync(tools.remember({"text": VEG}, state)))
+    assert out["stored"] is False and out["confirmation_required"] == "restates_forgotten"
+    assert "confirm_token" not in out
+    with patch.object(confirmations, "redeem", side_effect=RuntimeError("boom")):
+        out = json.loads(run_sync(tools.remember({"text": VEG, "confirm_token": "abc123"}, state)))
+    assert out["stored"] is False and "confirm_token" not in out
+    assert vault.active_texts() == before
+    assert len(client.forget_ledger) == 1
+
+
+def test_715_token_is_bound_to_the_conversation(env):
+    from totalreclaw.hermes import tools
+    from totalreclaw.pii import note_turn_completed
+
+    state, client, vault = env
+    _forget(state, "f2")
+    first = json.loads(run_sync(tools.remember({"text": VEG}, state, session_id="a")))
+    note_turn_completed("a")
+    other = json.loads(run_sync(tools.remember({"text": VEG, "confirm_token": first["confirm_token"]}, state, session_id="b")))
+    assert other["stored"] is False and other["confirmation_required"] == "restates_forgotten"
+    ok = json.loads(run_sync(tools.remember({"text": VEG, "confirm_token": first["confirm_token"]}, state, session_id="a")))
+    assert ok["stored"] is True
