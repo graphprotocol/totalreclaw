@@ -138,7 +138,9 @@ class World:
         block_time: float = 5.0,
         ledger_mode: str = "today",     # today | pr87 | pr87_drops
         chain_id: int = 100,
+        strict: bool = True,
     ) -> None:
+        self.strict = strict
         self._clock = clock
         self._t = 0.0
         self.mine_delay = mine_delay
@@ -370,7 +372,9 @@ class World:
                 "reorged": "not_found",
             }[op.status if op else None]
             return {"result": {"status": st}}
-        raise AssertionError(f"unexpected relay method {method}")
+        if self.strict:
+            raise AssertionError(f"unexpected relay method {method}")
+        return {"error": {"code": -32601, "message": "Method not found"}}
 
     def _n_facts(self, op_dict: dict) -> int:
         return len(decode_payloads(op_dict["callData"]))
@@ -547,7 +551,9 @@ class World:
                 out.append({"topics": [topics[0], e["hash"]], "data": "0x" + data,
                             "blockNumber": hex(e["block"])})
             return {"result": out}
-        raise AssertionError(f"unexpected public method {method}")
+        if self.strict:
+            raise AssertionError(f"unexpected public method {method}")
+        return {"error": {"code": -32601, "message": "Method not found"}}
 
     # ---- derived facts for assertions ----
     def op_count_executed(self, sender: str) -> int:
