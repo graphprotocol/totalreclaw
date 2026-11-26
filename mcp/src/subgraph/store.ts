@@ -15,7 +15,7 @@
  */
 
 import { createPublicClient, createWalletClient, http, type Hex, type Address, type Chain, type LocalAccount } from 'viem';
-import { getClientId } from '../client-id.js';
+import { buildBundlerHeaders } from './headers.js';
 import { entryPoint07Address } from 'viem/account-abstraction';
 import { mnemonicToAccount, privateKeyToAccount } from 'viem/accounts';
 import { gnosis, baseSepolia, foundry } from 'viem/chains';
@@ -103,7 +103,8 @@ export function resolveOwnerAccount(config: SubgraphStoreConfig): LocalAccount {
 // './subgraph/store.js' keeps working. PRD-04 F8 / DEP-6: that encoder no
 // longer writes outer fields 9 (source) / 11 (agent_id).
 export {
-  encodeFactProtobuf,
+  encodeFactProtobufKeyed,
+  encodeTombstoneProtobufKeyed,
   encodeVarint,
   PROTOBUF_VERSION_V4,
   type FactPayload,
@@ -167,11 +168,10 @@ export async function submitFactOnChain(
   const entryPointAddr = (config.entryPointAddress || entryPoint07Address) as Address;
 
   // Build authenticated transport for relay server proxy
-  const headers: Record<string, string> = {
-    'X-TotalReclaw-Client': getClientId(),
-  };
-  if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
-  if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
+  const headers = buildBundlerHeaders({
+    walletAddress: config.walletAddress,
+    authKeyHex: config.authKeyHex,
+  });
 
   const authTransport = Object.keys(headers).length > 0
     ? http(bundlerRpcUrl, { fetchOptions: { headers } })
@@ -286,11 +286,10 @@ export async function submitFactBatchOnChain(
   const dataEdgeAddress = config.dataEdgeAddress as Address;
   const entryPointAddr = (config.entryPointAddress || entryPoint07Address) as Address;
 
-  const headers: Record<string, string> = {
-    'X-TotalReclaw-Client': getClientId(),
-  };
-  if (config.authKeyHex) headers['Authorization'] = `Bearer ${config.authKeyHex}`;
-  if (config.walletAddress) headers['X-Wallet-Address'] = config.walletAddress;
+  const headers = buildBundlerHeaders({
+    walletAddress: config.walletAddress,
+    authKeyHex: config.authKeyHex,
+  });
 
   const authTransport = Object.keys(headers).length > 0
     ? http(bundlerRpcUrl, { fetchOptions: { headers } })

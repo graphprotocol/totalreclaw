@@ -6,8 +6,8 @@
  * need to change.
  *
  * The WASM module handles BIP-39 key derivation, XChaCha20-Poly1305 encrypt/
- * decrypt, SHA-256 blind indices, HMAC-SHA256 content fingerprints,
- * and LSH seed derivation.
+ * decrypt and LSH seed derivation. Blind indices and content fingerprints
+ * live in `keyed-tags.ts`.
  *
  * The legacy Argon2id path (arbitrary password, not a BIP-39 mnemonic)
  * is kept in TypeScript because the WASM module only supports BIP-39.
@@ -183,31 +183,4 @@ export function encrypt(plaintext: string, encryptionKey: Buffer): string {
  */
 export function decrypt(encryptedBase64: string, encryptionKey: Buffer): string {
   return wasm.decrypt(encryptedBase64, encryptionKey.toString('hex'));
-}
-
-// ---------------------------------------------------------------------------
-// Blind Indices
-// ---------------------------------------------------------------------------
-
-/**
- * Generate blind indices (SHA-256 hashes of tokens) for a text string.
- *
- * Delegates to the WASM module which performs tokenization, stemming,
- * and SHA-256 hashing.
- */
-export function generateBlindIndices(text: string): string[] {
-  return wasm.generateBlindIndices(text);
-}
-
-// ---------------------------------------------------------------------------
-// Content Fingerprint (Dedup)
-// ---------------------------------------------------------------------------
-
-/**
- * Compute an HMAC-SHA256 content fingerprint for exact-duplicate detection.
- *
- * @returns 64-character hex string.
- */
-export function generateContentFingerprint(plaintext: string, dedupKey: Buffer): string {
-  return wasm.generateContentFingerprint(plaintext, dedupKey.toString('hex'));
 }

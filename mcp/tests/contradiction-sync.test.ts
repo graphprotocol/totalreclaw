@@ -14,6 +14,7 @@
  *   npx jest tests/contradiction-sync.test.ts --no-cache
  */
 
+import { makeFixtureTagger } from './helpers/keyed-fixture';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,8 +31,9 @@ const {
   isPinnedClaim,
 } = require('../src/contradiction-sync') as typeof import('../src/contradiction-sync');
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { computeEntityTrapdoor } = require('../src/claims-helper') as typeof import('../src/claims-helper');
+// internal#573: entity tags are keyed; the tagger comes from the frozen-vector keys.
+const fixtureTagger = makeFixtureTagger();
+const entityTag = (name: string): string => fixtureTagger.entityTag(name);
 
 import type {
   CandidateClaim,
@@ -347,7 +349,7 @@ describe('detectAndResolveContradictions (E2E)', () => {
       encryptionKey: Buffer.alloc(32),
       deps: {
         searchSubgraph: search,
-        decryptFromHex: fakeDecrypt,
+        decryptFromHex: fakeDecrypt, entityTag,
         nowUnixSeconds: 1_777_000_000,
       },
       logger: silentLogger,
@@ -367,7 +369,7 @@ describe('detectAndResolveContradictions (E2E)', () => {
       sa: 'auto-extraction',
     });
     const existingEmb = embed([Math.cos(Math.PI / 4), Math.sin(Math.PI / 4), 0, 0], 8);
-    const trapdoor = computeEntityTrapdoor('editor');
+    const trapdoor = entityTag('editor');
     const search = fakeSubgraph({
       [trapdoor]: [
         {
@@ -393,7 +395,7 @@ describe('detectAndResolveContradictions (E2E)', () => {
       encryptionKey: Buffer.alloc(32),
       deps: {
         searchSubgraph: search,
-        decryptFromHex: fakeDecrypt,
+        decryptFromHex: fakeDecrypt, entityTag,
         nowUnixSeconds: 1_777_000_000,
       },
       logger: silentLogger,
@@ -413,7 +415,7 @@ describe('detectAndResolveContradictions (E2E)', () => {
   it('pinned existing: skip_new with reason=existing_pinned (new never overrides pin)', async () => {
     const pinnedClaim = { ...makeClaim({ t: 'I use Vim' }), st: 'p' };
     const existingEmb = embed([Math.cos(Math.PI / 4), Math.sin(Math.PI / 4), 0, 0], 8);
-    const trapdoor = computeEntityTrapdoor('editor');
+    const trapdoor = entityTag('editor');
     const search = fakeSubgraph({
       [trapdoor]: [
         {
@@ -433,7 +435,7 @@ describe('detectAndResolveContradictions (E2E)', () => {
       encryptionKey: Buffer.alloc(32),
       deps: {
         searchSubgraph: search,
-        decryptFromHex: fakeDecrypt,
+        decryptFromHex: fakeDecrypt, entityTag,
         nowUnixSeconds: 1_777_000_000,
       },
       logger: silentLogger,
@@ -465,7 +467,7 @@ describe('detectAndResolveContradictions (E2E)', () => {
       subgraphOwner: '0xowner',
       authKeyHex: 'authKey',
       encryptionKey: Buffer.alloc(32),
-      deps: { searchSubgraph: search, decryptFromHex: fakeDecrypt, nowUnixSeconds: 1_777_000_000 },
+      deps: { searchSubgraph: search, decryptFromHex: fakeDecrypt, entityTag, nowUnixSeconds: 1_777_000_000 },
       logger: silentLogger,
     });
     expect(decisions).toEqual([]);
@@ -487,7 +489,7 @@ describe('detectAndResolveContradictions (E2E)', () => {
       subgraphOwner: '0xowner',
       authKeyHex: 'authKey',
       encryptionKey: Buffer.alloc(32),
-      deps: { searchSubgraph: search, decryptFromHex: fakeDecrypt, nowUnixSeconds: 1_777_000_000 },
+      deps: { searchSubgraph: search, decryptFromHex: fakeDecrypt, entityTag, nowUnixSeconds: 1_777_000_000 },
       logger: silentLogger,
     });
     expect(decisions).toEqual([]);
@@ -505,7 +507,7 @@ describe('detectAndResolveContradictions (E2E)', () => {
       subgraphOwner: '0xowner',
       authKeyHex: 'authKey',
       encryptionKey: Buffer.alloc(32),
-      deps: { searchSubgraph: search, decryptFromHex: fakeDecrypt, nowUnixSeconds: 1_777_000_000 },
+      deps: { searchSubgraph: search, decryptFromHex: fakeDecrypt, entityTag, nowUnixSeconds: 1_777_000_000 },
       logger: silentLogger,
     });
     expect(decisions).toEqual([]);
@@ -515,7 +517,7 @@ describe('detectAndResolveContradictions (E2E)', () => {
     // Candidate missing encryptedEmbedding should be decrypted + parsed but
     // dropped in resolveWithCore before reaching WASM. No crash.
     const existingClaim = makeClaim({ t: 'existing' });
-    const trapdoor = computeEntityTrapdoor('editor');
+    const trapdoor = entityTag('editor');
     const search = fakeSubgraph({
       [trapdoor]: [
         {
@@ -533,7 +535,7 @@ describe('detectAndResolveContradictions (E2E)', () => {
       subgraphOwner: '0xowner',
       authKeyHex: 'authKey',
       encryptionKey: Buffer.alloc(32),
-      deps: { searchSubgraph: search, decryptFromHex: fakeDecrypt, nowUnixSeconds: 1_777_000_000 },
+      deps: { searchSubgraph: search, decryptFromHex: fakeDecrypt, entityTag, nowUnixSeconds: 1_777_000_000 },
       logger: silentLogger,
     });
     // No embedding → dropped from WASM call → no candidates → no decisions.
@@ -543,7 +545,7 @@ describe('detectAndResolveContradictions (E2E)', () => {
   it('inactive candidate: excluded from detection', async () => {
     const existingClaim = makeClaim({ t: 'inactive existing' });
     const existingEmb = embed([Math.cos(Math.PI / 4), Math.sin(Math.PI / 4), 0, 0], 8);
-    const trapdoor = computeEntityTrapdoor('editor');
+    const trapdoor = entityTag('editor');
     const search = fakeSubgraph({
       [trapdoor]: [
         {
@@ -561,7 +563,7 @@ describe('detectAndResolveContradictions (E2E)', () => {
       subgraphOwner: '0xowner',
       authKeyHex: 'authKey',
       encryptionKey: Buffer.alloc(32),
-      deps: { searchSubgraph: search, decryptFromHex: fakeDecrypt, nowUnixSeconds: 1_777_000_000 },
+      deps: { searchSubgraph: search, decryptFromHex: fakeDecrypt, entityTag, nowUnixSeconds: 1_777_000_000 },
       logger: silentLogger,
     });
     expect(decisions).toEqual([]);

@@ -14,10 +14,7 @@ import crypto from 'node:crypto';
 import {
   buildCanonicalClaim,
   buildDigestClaim,
-  computeEntityTrapdoor,
-  computeEntityTrapdoors,
   DIGEST_CATEGORY,
-  DIGEST_TRAPDOOR,
   extractDigestFromClaim,
   isDigestBlob,
   mapTypeToCategory,
@@ -134,59 +131,6 @@ describe('buildCanonicalClaim', () => {
     });
     const parsed = JSON.parse(canonical);
     expect(parsed.c).toBe('fact');
-  });
-});
-
-describe('computeEntityTrapdoor', () => {
-  test('deterministic for same input', () => {
-    const a = computeEntityTrapdoor('PostgreSQL');
-    const b = computeEntityTrapdoor('PostgreSQL');
-    expect(a).toBe(b);
-    expect(/^[0-9a-f]{64}$/.test(a)).toBe(true);
-  });
-
-  test('case and whitespace normalized', () => {
-    const a = computeEntityTrapdoor('PostgreSQL');
-    const b = computeEntityTrapdoor('postgresql');
-    const c = computeEntityTrapdoor('  POSTGRESQL  ');
-    expect(a).toBe(b);
-    expect(a).toBe(c);
-  });
-
-  test('entity: namespace distinct from raw word hash', () => {
-    const entityTd = computeEntityTrapdoor('postgresql');
-    const wordHash = crypto.createHash('sha256').update('postgresql').digest('hex');
-    expect(entityTd).not.toBe(wordHash);
-  });
-
-  test('equals sha256("entity:" + normalized) (known-answer)', () => {
-    const entityTd = computeEntityTrapdoor('PostgreSQL');
-    const expected = crypto.createHash('sha256').update('entity:postgresql').digest('hex');
-    expect(entityTd).toBe(expected);
-  });
-});
-
-describe('computeEntityTrapdoors', () => {
-  test('dedups aliases by normalized name', () => {
-    const td = computeEntityTrapdoors([
-      { name: 'Pedro', type: 'person' },
-      { name: 'pedro', type: 'person' },
-      { name: '  PEDRO ', type: 'person' },
-    ]);
-    expect(td).toHaveLength(1);
-  });
-
-  test('returns empty array for undefined / empty input', () => {
-    expect(computeEntityTrapdoors(undefined)).toEqual([]);
-    expect(computeEntityTrapdoors([])).toEqual([]);
-  });
-
-  test('preserves distinct names', () => {
-    const td = computeEntityTrapdoors([
-      { name: 'Pedro', type: 'person' },
-      { name: 'PostgreSQL', type: 'tool' },
-    ]);
-    expect(td).toHaveLength(2);
   });
 });
 
@@ -327,11 +271,6 @@ describe('readClaimFromBlob', () => {
 });
 
 describe('digest helpers', () => {
-  test('DIGEST_TRAPDOOR == sha256("type:digest")', () => {
-    const expected = crypto.createHash('sha256').update('type:digest').digest('hex');
-    expect(DIGEST_TRAPDOOR).toBe(expected);
-  });
-
   test('buildDigestClaim round-trips through extractDigestFromClaim', () => {
     const digestJson = JSON.stringify({ prompt_text: 'Hello, user.' });
     const canonical = buildDigestClaim({

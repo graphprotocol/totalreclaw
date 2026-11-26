@@ -13,7 +13,8 @@ import type { ToolContext } from './types.js';
 import { resolveMemoryId } from './helpers.js';
 import type { SubgraphSearchFact } from '../subgraph/search.js';
 import { TOMBSTONE_BLOB_HEX, type RecentWriteInput } from '../subgraph/recent-writes.js';
-import { encodeFactProtobuf } from '../subgraph/store.js';
+import { encodeFactProtobufKeyed, encodeTombstoneProtobufKeyed } from '../subgraph/store.js';
+import { INDEX_SCHEME_UNCONFIRMED_MSG, INDEX_SCHEME_UNCONFIRMED_CODE } from '../subgraph/index-scheme-guard.js';
 import { liveDecayScore } from '../subgraph/decay.js';
 import {
   MEMORY_CLAIM_V1_SCHEMA_VERSION,
@@ -137,6 +138,13 @@ export interface MetadataOpDeps {
     encryptedEmbedding?: string;
   }>;
   /**
+   * internal#573 guard: the keyed-index scheme of the target fact (1 = keyed),
+   * or `null` when it cannot be confirmed. Facts this process wrote resolve to
+   * 1 without a query. A read block throws `RelayReadBlocked`. Required, so
+   * every harness has to choose a value.
+   */
+  fetchIndexScheme: (factId: string) => Promise<number | null>;
+  /**
    * Optional read-after-write hook. Called after submitBatch returns success;
    * polls the subgraph for the new fact id. Returning `false` causes the op
    * result to surface `partial: true`. When this dep is undefined the op
@@ -163,6 +171,7 @@ export interface MetadataOpResult extends Partial<PinConfirmationFields> {
   idempotent?: boolean;
   tx_hash?: string;
   error?: string;
+  error_code?: typeof INDEX_SCHEME_UNCONFIRMED_CODE;
   /**
    * Set when the chain write succeeded but the subgraph indexer didn't
    * confirm the new fact id within the timeout window. The mutation IS
@@ -383,6 +392,17 @@ export async function executeMetadataOp<T>(
     };
   }
 
+  // internal#573: refuse unless the fact is confirmed keyed (scheme 1). Before
+  // the confirmation ask, any tag derivation and any UserOp.
+  if ((await deps.fetchIndexScheme(memoryId)) !== 1) {
+    return {
+      success: false,
+      memory_id: memoryId,
+      error: INDEX_SCHEME_UNCONFIRMED_MSG,
+      error_code: INDEX_SCHEME_UNCONFIRMED_CODE,
+    };
+  }
+
   // internal#778: changing a pinned memory needs the user's yes. Stop unless
   // the agent brings a confirm_token from an earlier ask (bound to this value).
   if (blobIsPinned(plaintext)) {
@@ -455,7 +475,10 @@ export async function executeMetadataOp<T>(
     encryptedEmbedding: trapdoors.encryptedEmbedding,
   };
 
-  const payloads = [encodeFactProtobuf(tombstonePayload), encodeFactProtobuf(newPayload)];
+  const payloads = [
+    encodeTombstoneProtobufKeyed(tombstonePayload.id, tombstonePayload.owner, tombstonePayload.timestamp),
+    encodeFactProtobufKeyed(newPayload),
+  ];
 
   // 8. Submit
   try {

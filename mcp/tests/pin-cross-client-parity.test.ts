@@ -45,6 +45,7 @@ function makeDeps(overrides: Partial<PinOpDeps> & { _submitted?: Buffer[][] } = 
       _submitted.push(payloads);
       return { txHash: '0xparity', success: true };
     },
+    fetchIndexScheme: async () => 1, // internal#573: keyed fact (guard passes)
     async generateIndices() {
       return { blindIndices: [], encryptedEmbedding: undefined };
     },

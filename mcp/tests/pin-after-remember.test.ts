@@ -9,6 +9,7 @@ import { buildV1ClaimBlob, blobIsPinned } from '../src/claims-helper';
 import { confirmed } from './helpers/confirmed';
 import { RecentWrites, recordSubmittedPayloads } from '../src/subgraph/recent-writes';
 import { createRewriteLookup } from '../src/subgraph/fact-lookup';
+import { createIndexSchemeLookup } from '../src/subgraph/index-scheme-guard';
 
 const TEST_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-mcp-pin-after-remember-'));
 process.env.TOTALRECLAW_STATE_DIR = TEST_STATE_DIR;
@@ -33,6 +34,8 @@ function harness(withRecord = true) {
     owner: OWNER, sourceAgent: 'mcp-server', fetchFactById,
     decryptBlob: UNHEX, encryptBlob: hex,
     submitBatch: async (p) => { submitted.push(p); return { txHash: '0xabc', success: true }; },
+    // internal#573: the production rule: a fact in the process's own write record is keyed, no query.
+    fetchIndexScheme: createIndexSchemeLookup({ owner: OWNER, cache, lookupSubgraph: async () => null }),
     generateIndices: async () => ({ blindIndices: [] }),
     recordWrites: withRecord ? (r) => recordSubmittedPayloads(cache, OWNER, r, { success: true }) : undefined,
   };

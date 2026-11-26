@@ -10,7 +10,10 @@
  *   node test-local-roundtrip.mjs
  */
 
-import { submitFactLocal, encodeFactProtobuf, getSubgraphConfig } from './dist/subgraph/store.js';
+import { submitFactLocal, encodeFactProtobufKeyed, getSubgraphConfig } from './dist/subgraph/store.js';
+import { KeyedTagger } from './dist/subgraph/keyed-tags.js';
+import { LSHHasher } from './dist/subgraph/lsh.js';
+import { deriveKeys, deriveLshSeed } from './dist/subgraph/crypto.js';
 import { searchSubgraphBroadened } from './dist/subgraph/search.js';
 import { createPublicClient, http } from 'viem';
 import { foundry } from 'viem/chains';
@@ -33,6 +36,14 @@ console.log();
 // Simple encryption (for test only — real MCP uses HKDF + WASM)
 const encKey = crypto.createHash('sha256').update(mnemonic + '-enc').digest();
 
+// Keyed blind indices (internal#573): tags come from the vault keys via core, never hashed here.
+const vault = deriveKeys(mnemonic);
+const tagger = new KeyedTagger(
+  vault.encryptionKey,
+  vault.dedupKey,
+  new LSHHasher(deriveLshSeed(mnemonic, vault.salt), 640),
+);
+
 function encrypt(text) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', encKey, iv);
@@ -52,16 +63,15 @@ console.log('Storing 3 test facts...');
 for (const text of testFacts) {
   const id = crypto.randomUUID();
   const blob = encrypt(text);
-  const contentFp = crypto.createHmac('sha256', encKey).update(text).digest('hex');
-  const words = text.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(w => w.length >= 2);
-  const blindIndices = words.map(w => crypto.createHash('sha256').update(w).digest('hex'));
+  const contentFp = tagger.contentFp(text);
+  const blindIndices = tagger.factTags(text);
 
-  const protobuf = encodeFactProtobuf({
+  const protobuf = encodeFactProtobufKeyed({
     id,
     timestamp: new Date().toISOString(),
     owner: ownerAddress,
     encryptedBlob: blob.toString('hex'),
-    blindIndices: [...new Set(blindIndices)],
+    blindIndices,
     decayScore: 0.9,
     source: 'test-roundtrip',
     contentFp,
@@ -100,9 +110,9 @@ console.log(`  Found: ${results.length} facts`);
 
 // Also test blind index search
 console.log('\nSearching for "typescript"...');
-const tsHash = crypto.createHash('sha256').update('typescript').digest('hex');
+const tsTags = tagger.factTags('typescript');
 const { searchSubgraph } = await import('./dist/subgraph/search.js');
-const searchResults = await searchSubgraph(ownerAddress, [tsHash], 10);
+const searchResults = await searchSubgraph(ownerAddress, tsTags, 10);
 console.log(`  Blind index search found: ${searchResults.length} facts`);
 
 console.log('\n=== Test Complete ===');

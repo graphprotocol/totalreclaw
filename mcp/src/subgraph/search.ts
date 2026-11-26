@@ -603,6 +603,83 @@ export async function lookupFactById(
   return { state: 'active', fact };
 }
 
+/**
+ * The one query that selects `indexScheme` (internal#573). Used only by the
+ * pin / unpin / retype / set_scope guard. It must never be added to another
+ * query: the old subgraph has no such field, so a rollback would break every
+ * read that selected it.
+ */
+export const FACT_INDEX_SCHEME_QUERY = `
+    query FactIndexScheme($id: ID!) {
+      fact(id: $id) { id owner indexScheme }
+    }
+  `;
+
+/**
+ * Read the keyed-index scheme of one fact, for the pin/retype guard.
+ *
+ * Returns 1 (keyed) only for a fact that exists, belongs
+ * to `owner` and carries `indexScheme` 1. Returns `null` for everything
+ * else: missing fact, owner mismatch, a GraphQL error body (the old subgraph
+ * answers a validation error), a malformed body, any network failure or any
+ * relay error other than a read denial. A read denial (`RelayReadBlocked`)
+ * propagates so the "reads paused" response shows.
+ *
+ * Logs one line with a reason code only (never the fact, the id or the body).
+ */
+export async function lookupFactIndexScheme(
+  owner: string,
+  factId: string,
+  relayUrl?: string,
+  authKeyHex?: string,
+): Promise<number | null> {
+  const effectiveRelayUrl = relayUrl ?? getSubgraphConfig().relayUrl;
+  const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${effectiveRelayUrl}/v1/subgraph`;
+  const refuse = (reason: 'not_found' | 'owner_mismatch' | 'not_keyed' | 'query_error'): null => {
+    console.error(`[index-scheme-guard] refused: ${reason}`);
+    return null;
+  };
+
+  const paused = getReadBlock(owner);
+  if (paused) throw paused.error;
+
+  let json: { data?: { fact?: { owner?: unknown; indexScheme?: unknown } | null }; errors?: unknown[] };
+  try {
+    const response = await fetch(subgraphUrl, {
+      method: 'POST',
+      headers: buildSubgraphHeaders({ walletAddress: owner, authKeyHex }),
+      body: JSON.stringify({ query: FACT_INDEX_SCHEME_QUERY, variables: { id: factId } }),
+    });
+    if (!response.ok) {
+      const bodyText = await Promise.resolve(response.text?.()).catch(() => '') ?? '';
+      const err = classifySubgraphError(response.status, bodyText, response.headers?.get?.('retry-after') ?? null);
+      if (err instanceof RelayReadBlocked) {
+        setReadBlock(err, owner);
+        throw err;
+      }
+      return refuse('query_error');
+    }
+    clearReadBlock(owner);
+    json = (await response.json()) as typeof json;
+  } catch (err) {
+    if (err instanceof RelayReadBlocked) throw err;
+    return refuse('query_error');
+  }
+
+  if (!json || typeof json !== 'object') return refuse('query_error');
+  if (Array.isArray(json.errors) && json.errors.length > 0) return refuse('query_error');
+  if (!json.data || typeof json.data !== 'object' || !('fact' in json.data)) return refuse('query_error');
+  const fact = json.data.fact;
+  if (!fact) return refuse('not_found');
+  if (typeof fact.owner !== 'string' || fact.owner.toLowerCase() !== owner.toLowerCase()) {
+    return refuse('owner_mismatch');
+  }
+  // Anything but scheme 1 (missing, non-numeric, 0, a future 2) is refused here,
+  // so every refusal logs its reason code. The result is 1 or null.
+  if (fact.indexScheme !== 1) return refuse('not_keyed');
+  return 1;
+}
+
 /** Fetch a single fact by its ID (the client-generated UUID). Returns null if not found or inactive. */
 export async function fetchFactById(
   owner: string,

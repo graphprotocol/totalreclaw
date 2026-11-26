@@ -1,18 +1,18 @@
 /**
  * PRD-04 F8 / DEP-6 — the MCP outer protobuf carries no plaintext provenance.
  *
- * Until DEP-6, `encodeFactProtobuf` wrote outer field 9 (`source`, e.g.
+ * Until DEP-6, the MCP encoder wrote outer field 9 (`source`, e.g.
  * "mcp_remember") and field 11 (`agent_id`, "mcp-server") as plaintext
  * calldata. Core (`protobuf.rs`) and Python (`protobuf.py`) removed both in
- * v3. This suite pins the MCP encoder to the shared cross-language fixture
- * (`tests/parity/fixtures/outer-protobuf-v1.json`, Rust-generated), to the
- * installed `@totalreclaw/core` WASM encoder, and statically guards against
+ * v3. This suite pins the MCP keyed encoder (internal#573) to the shared
+ * fixture's inputs (`tests/parity/fixtures/outer-protobuf-v1.json`), to the
+ * installed `@totalreclaw/core` WASM keyed encoder, and statically guards against
  * a second encoder appearing anywhere in `mcp/src`.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import { encodeFactProtobuf, type FactPayload } from '../src/subgraph/store.js';
+import { encodeFactProtobufKeyed, type FactPayload } from '../src/subgraph/store.js';
 
 interface FixtureInput {
   id: string;
@@ -131,23 +131,19 @@ describe('MCP outer protobuf — fields 9/11 never written (PRD-04 F8 / DEP-6)',
     it(`${v.name}: omits fields 9 and 11 even though source/agentId are set`, () => {
       expect(v.input.source).not.toBe('');
       expect(v.input.agent_id).not.toBe('');
-      const fields = fieldNumbers(encodeFactProtobuf(toMcpPayload(v.input)));
+      const fields = fieldNumbers(encodeFactProtobufKeyed(toMcpPayload(v.input)));
       for (const f of FORBIDDEN) {
         expect(fields).not.toContain(f);
       }
-      expect(fields).toEqual(v.expected_field_numbers);
+      // Scheme 1 adds field 14 (index_scheme), written last.
+      expect(fields).toEqual([...v.expected_field_numbers, 14]);
     });
 
-    it(`${v.name}: byte-identical to the shared Rust-generated fixture`, () => {
-      const hex = encodeFactProtobuf(toMcpPayload(v.input)).toString('hex');
-      expect(hex).toBe(v.expected_protobuf_hex);
-    });
-
-    it(`${v.name}: byte-identical to the installed @totalreclaw/core WASM encoder`, () => {
+    it(`${v.name}: byte-identical to the installed @totalreclaw/core WASM keyed encoder`, () => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const core = require('@totalreclaw/core') as { encodeFactProtobuf: (json: string) => Uint8Array };
-      const wasmHex = Buffer.from(core.encodeFactProtobuf(JSON.stringify(v.input))).toString('hex');
-      const mcpHex = encodeFactProtobuf(toMcpPayload(v.input)).toString('hex');
+      const core = require('@totalreclaw/core') as { encodeFactProtobufKeyed: (json: string) => Uint8Array };
+      const wasmHex = Buffer.from(core.encodeFactProtobufKeyed(JSON.stringify(v.input))).toString('hex');
+      const mcpHex = encodeFactProtobufKeyed(toMcpPayload(v.input)).toString('hex');
       expect(mcpHex).toBe(wasmHex);
     });
   }
@@ -166,11 +162,11 @@ describe('MCP outer protobuf — fields 9/11 never written (PRD-04 F8 / DEP-6)',
     const files = listTsFiles(SRC_DIR);
     const toRel = (f: string) => relative(SRC_DIR, f).split(sep).join('/');
     const definers = files
-      .filter((f) => /export function encodeFactProtobuf\b/.test(readFileSync(f, 'utf8')))
+      .filter((f) => /export function encodeFactProtobufKeyed\b/.test(readFileSync(f, 'utf8')))
       .map(toRel);
     expect(definers).toEqual(['subgraph/protobuf.ts']);
     const writers = files
-      .filter((f) => /writeString\(\s*(9|11)\s*,|\(\s*(9|11)\s*<<\s*3\s*\)/.test(readFileSync(f, 'utf8')))
+      .filter((f) => /(?:writeString|\.string)\(\s*(9|11)\s*,|\(\s*(9|11)\s*<<\s*3\s*\)/.test(readFileSync(f, 'utf8')))
       .map(toRel);
     expect(writers).toEqual([]);
   });

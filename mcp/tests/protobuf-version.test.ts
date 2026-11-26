@@ -1,7 +1,7 @@
 /**
  * Regression test for QA-V1-VPS-20260418.md Bug #10.
  *
- * `encodeFactProtobuf` must stamp the outer protobuf wrapper field 8
+ * `encodeFactProtobufKeyed` must stamp the outer protobuf wrapper field 8
  * (`version`, wire type 0) as `4` (PROTOBUF_VERSION_V4). Shipping `2`
  * or `3` silently breaks the Memory Taxonomy v1 cross-client contract —
  * the subgraph and peer clients (plugin, python, rust) all expect the
@@ -9,7 +9,8 @@
  */
 
 import {
-  encodeFactProtobuf,
+  encodeFactProtobufKeyed,
+  encodeTombstoneProtobufKeyed,
   encodeVarint,
   PROTOBUF_VERSION_V4,
   type FactPayload,
@@ -73,7 +74,7 @@ function makeFact(overrides: Partial<FactPayload> = {}): FactPayload {
     timestamp: '2026-04-18T00:00:00Z',
     owner: '0x2c0CF74B2b76110708CA431796367779e3738250',
     encryptedBlob: '00ff11ee',
-    blindIndices: ['deadbeef', 'cafef00d'],
+    blindIndices: ['de'.repeat(32), 'ca'.repeat(32)],
     decayScore: 0.9,
     source: 'mcp_test',
     contentFp: 'abcd',
@@ -82,32 +83,25 @@ function makeFact(overrides: Partial<FactPayload> = {}): FactPayload {
   };
 }
 
-describe('encodeFactProtobuf — outer wrapper version', () => {
+describe('keyed encoders — outer wrapper version', () => {
   it('exposes PROTOBUF_VERSION_V4 === 4', () => {
     expect(PROTOBUF_VERSION_V4).toBe(4);
   });
 
   it('writes field 8 (version) as 4 for a standard fact payload', () => {
-    const buf = encodeFactProtobuf(makeFact());
+    const buf = encodeFactProtobufKeyed(makeFact());
     const version = readVarintField(buf, 8);
     expect(version).toBe(4);
   });
 
   it('writes field 8 (version) as 4 for a tombstone payload', () => {
-    const tombstone = makeFact({
-      encryptedBlob: Buffer.from('tombstone').toString('hex'),
-      blindIndices: [],
-      decayScore: 0,
-      source: 'mcp_dedup',
-      contentFp: '',
-    });
-    const buf = encodeFactProtobuf(tombstone);
+    const buf = encodeTombstoneProtobufKeyed('test-id-00000000', '0x2c0CF74B2b76110708CA431796367779e3738250');
     const version = readVarintField(buf, 8);
     expect(version).toBe(4);
   });
 
   it('writes field 8 (version) as 4 when encrypted_embedding is present', () => {
-    const buf = encodeFactProtobuf(
+    const buf = encodeFactProtobufKeyed(
       makeFact({ encryptedEmbedding: 'aa'.repeat(16) }),
     );
     const version = readVarintField(buf, 8);
@@ -115,7 +109,7 @@ describe('encodeFactProtobuf — outer wrapper version', () => {
   });
 
   it('also writes is_active (field 7) as 1', () => {
-    const buf = encodeFactProtobuf(makeFact());
+    const buf = encodeFactProtobufKeyed(makeFact());
     const isActive = readVarintField(buf, 7);
     expect(isActive).toBe(1);
   });

@@ -15,6 +15,7 @@ import { executeRetype } from '../src/tools/retype';
 import { buildV1ClaimBlob } from '../src/claims-helper';
 import { createCallToolHandler, type DispatchDeps } from '../src/dispatch';
 import type { ToolResponse } from '../src/tools/types';
+import { MOCK_KEYED_TAGS } from './helpers/keyed-fixture';
 
 const HEX = '0x' + 'ab'.repeat(300);
 
@@ -77,8 +78,9 @@ function opDeps(submitError: Error) {
     decryptBlob: (hex: string) => hex,
     encryptBlob: (pt: string) => Buffer.from(pt, 'utf-8').toString('hex'),
     async submitBatch(): Promise<{ txHash: string; success: boolean }> { throw submitError; },
+    fetchIndexScheme: async () => 1, // internal#573: keyed fact (guard passes)
     async generateIndices() {
-      return { blindIndices: ['t1', 't2'], encryptedEmbedding: 'enc' };
+      return { blindIndices: MOCK_KEYED_TAGS, encryptedEmbedding: 'enc' };
     },
   };
 }
@@ -397,7 +399,7 @@ describe('forget checks existence first (review finding 2)', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.ts'), 'utf8');
     const f = src.slice(src.indexOf('async function handleForgetSubgraph'));
     expect(f.indexOf('classifyForgetTarget')).toBeGreaterThan(0);
-    expect(f.indexOf('classifyForgetTarget')).toBeLessThan(f.indexOf('encodeFactProtobuf(tombstonePayload)'));
+    expect(f.indexOf('classifyForgetTarget')).toBeLessThan(f.indexOf('encodeTombstoneProtobufKeyed(tombstonePayload.id'));
   });
 });
 
@@ -478,6 +480,6 @@ describe('forget lookup tells exists / missing / inactive / failed apart (review
     const f = src.slice(src.indexOf('async function handleForgetSubgraph'));
     expect(f.slice(0, 2500)).toContain('fetchFactForForget(');
     expect(f.slice(0, 2500)).toContain('forgetLookupFailedResponse()');
-    expect(f.indexOf('forgetLookupFailedResponse()')).toBeLessThan(f.indexOf('encodeFactProtobuf(tombstonePayload)'));
+    expect(f.indexOf('forgetLookupFailedResponse()')).toBeLessThan(f.indexOf('encodeTombstoneProtobufKeyed(tombstonePayload.id'));
   });
 });
