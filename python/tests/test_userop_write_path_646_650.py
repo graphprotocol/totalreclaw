@@ -388,6 +388,10 @@ async def test_u23_own_resend_with_fee_bump_replaces_earlier_attempt(monkeypatch
 
 @pytest.mark.asyncio
 async def test_u24_foreign_replaces_our_accepted_single_write(monkeypatch, caplog):
+    """Another process replaces our accepted write by a fee bump. The bundler no
+    longer knows our op (not_found, not proof), so the gate gives it a grace
+    period; the foreign op mines, the verdict turns "dead" and our write is sent
+    again, once."""
     w = make(monkeypatch)
     deploy(w)
     lost: list[list[str]] = []
@@ -398,7 +402,7 @@ async def test_u24_foreign_replaces_our_accepted_single_write(monkeypatch, caplo
     assert lost == [["a"]]
     assert w.ops[h].status == "replaced"
     assert any(r.levelno == logging.ERROR for r in caplog.records)
-    assert b"u24-b" in w.executed_payloads and b"u24-a" not in w.executed_payloads
+    assert w.executed_payloads.count(b"u24-a") == 1 and w.executed_payloads.count(b"u24-b") == 1
     assert w.ops[h2].status == "included"
 
 

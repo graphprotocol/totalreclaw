@@ -98,6 +98,12 @@ _MAX_NONCE_RETRIES: int = 3
 #: Builds of one logical write, counting retries that never reached the
 #: bundler (sponsor-stage back-offs).
 _MAX_BUILD_ATTEMPTS: int = 6
+#: A write that returned at accept and whose op the bundler no longer knows
+#: (status ``not_found``, nonce still unused) may be one another process replaced
+#: by a fee bump: the replacement has not mined yet, so it is not provably dead.
+#: The gate gives it this long to turn "dead" (re-send) or terminal before it
+#: releases the facts without a re-send.
+GONE_GRACE_S: float = 20.0
 #: Bound for a wait on someone else's op (foreign nonce holder / deployment).
 FOREIGN_WAIT_S: float = 15.0
 
@@ -1103,6 +1109,7 @@ async def _settle_pending(
     key = ctx.sender.lower()
     for rec in list(_pending.get(key, [])):
         unknown_since: Optional[float] = None
+        gone_first = float("inf")
         while True:
             fate = await resolve_fate(http, ctx, rec.hashes, rec.nonce, rec.sent_block)
             if fate.kind == "executed":
@@ -1115,6 +1122,15 @@ async def _settle_pending(
                     await _call_on_lost(rec.on_lost, rec.fact_ids)
                 _drop_record(_pending, key, rec)
                 break
+            if (
+                fate.kind == "gone" and not fate.terminal and rec.resend_ok and rec.resends < 1
+                and _now() - gone_first < GONE_GRACE_S
+                and _now() < rec.accepted_at + deadline.gate_window
+            ):
+                if gone_first == float("inf"):
+                    gone_first = _now()
+                await _sleep(_poll_delay(0.0))
+                continue
             if fate.kind in ("dead", "gone"):
                 proven = fate.kind == "dead" or fate.terminal
                 if fate.kind == "dead":
