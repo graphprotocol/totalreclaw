@@ -1814,7 +1814,18 @@ async def _submit_userop_once(
                     gone_confirmed = False
                     continue
                 if fate.kind == "gone":
-                    gone_confirmed = True
+                    # "gone" is only proof when the status is terminal; a bare
+                    # not_found keeps the attempts tracked (parked on any exit)
+                    gone_confirmed = bool(fate.terminal)
+                    if sends >= _MAX_NONCE_RETRIES and not fate.terminal:
+                        # Only "not_found", which a lagging status index also says for a
+                        # live op: NOT proof that nothing was stored, so callers must not
+                        # write the facts again. Same proof rule as the gate.
+                        raise _ambiguous(
+                            f"The bundler no longer knows UserOp(s) {[a.hash for a in in_flight]} "
+                            f"after {sends} sends, but that is not proof they were dropped; "
+                            f"they may still be stored. Do not re-send before the outcome is known."
+                        )
                     if sends >= _MAX_NONCE_RETRIES:
                         logger.error("write dropped by the bundler after %d sends; nonce %d is unused", sends, pinned)
                         in_flight_hashes = [a.hash for a in in_flight]

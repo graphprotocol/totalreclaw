@@ -915,3 +915,15 @@ async def test_cancel_during_the_send_tracks_the_accepted_op(monkeypatch):
     assert w.executed_payloads.count(b"cut-a") == 1 and w.executed_payloads.count(b"cut-b") == 1
     assert w.ops and all(o.nonce in (5, 6) for o in w.ops.values())
     w.assert_invariants()
+
+
+@pytest.mark.asyncio
+async def test_batch_with_only_not_found_is_ambiguous_never_dropped(monkeypatch):
+    w = make(monkeypatch, mine_delay=100_000)
+    deploy(w)
+    w.status_lies = {"*": 10**6}                 # the op is alive, the index says not_found
+    with pytest.raises(UserOpAmbiguousError) as ei:
+        await many([b"nf-a", b"nf-b"], fact_ids=["a", "b"])
+    assert ei.value.fact_ids == ["a", "b"]
+    assert len(w.ops) == 1, "same op, same nonce: never rebuilt at another nonce"
+    assert len(userop.pending_records(S)) == 1, "still tracked"
