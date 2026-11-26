@@ -288,3 +288,18 @@ async def test_remember_skip_confirm_does_not_prompt():
          patch("totalreclaw.write_gate.record_write"):
         out = json.loads(await tools.remember({"text": TEXT, "force": True}, state, _skip_confirm=True))
     assert out["stored"] is True
+
+
+@pytest.mark.asyncio
+async def test_import_persist_note_never_prompts_on_a_pinned_fact():
+    """The import-memory note (``_persist_import_memory``) is bookkeeping with no
+    agent to ask, so it passes ``_skip_confirm`` and is stored even when its
+    text is close to a pinned memory."""
+    from totalreclaw.hermes import import_tools
+
+    client, state, fake_check = _remember_env(True)
+    with patch("totalreclaw.write_gate.check_store", new=fake_check), \
+         patch("totalreclaw.hermes.tools._embed_for_remember", return_value=[0.1] * 8), \
+         patch("totalreclaw.write_gate.record_write"):
+        await import_tools._persist_import_memory(state, "Import abc finished: 12 facts")
+    client.remember.assert_awaited_once()
