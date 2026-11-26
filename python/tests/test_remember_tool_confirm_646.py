@@ -59,7 +59,10 @@ async def test_mirror_path_is_a_background_write():
 
 
 @pytest.mark.asyncio
-async def test_pin_forget_use_the_interactive_profile():
+async def test_pin_forget_use_the_interactive_profile(monkeypatch):
+    import totalreclaw.pin_confirm as pc
+
+    monkeypatch.setattr(pc, "pinned_change_notice", AsyncMock(return_value=None))
     state, client = _state()
     client.forget = AsyncMock(return_value={"success": True, "fact_id": "f"})
     client.pin_fact = AsyncMock(return_value={"success": True, "fact_id": "f2"})
