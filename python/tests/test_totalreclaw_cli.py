@@ -130,6 +130,21 @@ class TestDoctor:
         assert "is your EOA address" in out and "Fix:" in out
         assert "Smart Account address cached" not in out
 
+    def test_v2_bundle_with_eoa_smart_account_is_a_failure(self, tmp_path: Path, capsys) -> None:
+        from totalreclaw.client import _get_eoa_address
+
+        eoa = _get_eoa_address(VALID_MNEMONIC)
+        creds = tmp_path / "credentials.json"
+        creds.write_text(json.dumps({
+            "version": 2,
+            "account": {"smart_account": eoa, "chain_id": 100},
+            "signing": {"kind": "owner-eoa", "address": eoa},
+        }))
+        rc = tr_cli.run_doctor(credentials_path=creds)
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "is your EOA address" in out and "Fix:" in out
+
     def test_rc_bug_report_status_surfaced(self, tmp_path: Path, capsys) -> None:
         """Doctor surfaces whether the RC bug-report tool is active."""
         creds = tmp_path / "credentials.json"

@@ -592,6 +592,8 @@ async def await_phrase_upload(
             )
 
         bundle_wallet = _clean_wallet(bundle.account.smart_account)
+        if bundle_wallet and bundle_wallet == _clean_wallet(bundle.signing.address):
+            bundle_wallet = None  # the EOA is never reported as the Smart Account
         try:
             result = await complete_pairing_bundle(bundle)
         except Exception as err:

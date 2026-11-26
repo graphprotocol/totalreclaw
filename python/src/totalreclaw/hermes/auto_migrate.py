@@ -534,6 +534,14 @@ def _do_migrate(creds_path: Path) -> bool:
         )
         return False
 
+    if bundle.account.smart_account.strip().lower() == bundle.signing.address.strip().lower():
+        # internal#679: core accepts smart_account == EOA; never persist it.
+        logger.warning(
+            "auto_migrate: bundle smart_account equals the EOA — leaving the "
+            "install untouched; will retry on the next boot."
+        )
+        return False
+
     # Step 5: wrap {vault, signing} via the keychain; plaintext fallback.
     secret_subtree = bundle_secret_subtree_json(bundle)
     wrapped_ok = credentials_wrap.wrap_bundle(bundle.account.smart_account, secret_subtree)

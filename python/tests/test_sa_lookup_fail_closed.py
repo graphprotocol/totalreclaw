@@ -157,7 +157,8 @@ async def test_configured_endpoint_goes_first_and_first_success_stops(monkeypatc
 
     seen = _record_queries(monkeypatch, _first_fails)
     assert await _derive_smart_account_address(PHRASE) == SA.lower()
-    assert seen == ["https://configured.invalid", GNOSIS]
+    # configured + gnosis queried together; only one answered, so the next is tried
+    assert seen[:2] == ["https://configured.invalid", GNOSIS]
 
 
 @pytest.mark.asyncio
@@ -208,3 +209,108 @@ def test_client_ignores_a_constructor_wallet_address_equal_to_the_eoa():
     assert c._wallet_address is None and c._address_resolved is False
     ok = TotalReclaw(mnemonic=PHRASE, relay_url="https://relay.invalid", wallet_address=SA)
     assert ok._wallet_address == SA.lower()
+
+
+@pytest.mark.asyncio
+async def test_endpoint_returning_the_eoa_is_skipped_for_a_real_answer(monkeypatch):
+    eoa = _get_eoa_address(PHRASE).lower()
+
+    async def _first_is_eoa(url):
+        return eoa if url == GNOSIS else SA.lower()
+
+    _record_queries(monkeypatch, _first_is_eoa)
+    assert await _derive_smart_account_address(PHRASE) == SA.lower()
+
+
+@pytest.mark.asyncio
+async def test_disagreeing_endpoints_raise(monkeypatch):
+    async def _differ(url):
+        return SA.lower() if url == GNOSIS else "0x" + "ab" * 20
+
+    _record_queries(monkeypatch, _differ)
+    with pytest.raises(SmartAccountLookupError, match="disagree"):
+        await _derive_smart_account_address(PHRASE)
+
+
+@pytest.mark.asyncio
+async def test_two_agreeing_endpoints_are_queried_together(monkeypatch):
+    async def _same(url):
+        return SA.lower()
+
+    seen = _record_queries(monkeypatch, _same)
+    assert await _derive_smart_account_address(PHRASE) == SA.lower()
+    assert seen == [GNOSIS, BASE_SEPOLIA]
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "0x" + "0" * 64,  # zero address
+        "0x" + "0" * 24 + "zz" * 20,  # non-hex tail
+        "0x" + "0" * 20 + SA[2:],  # too short
+        "0xnothex" + "0" * 58,
+        None,
+        12345,
+    ],
+)
+@pytest.mark.asyncio
+async def test_malformed_factory_results_are_rejected(monkeypatch, result):
+    _rpc_answers(monkeypatch, {"result": result})
+    with pytest.raises(SmartAccountLookupError):
+        await _derive_smart_account_address(PHRASE)
+
+
+@pytest.mark.asyncio
+async def test_endpoint_failures_are_logged_without_owner_or_phrase(monkeypatch, caplog):
+    import logging
+
+    async def _boom(url):
+        raise ConnectionError("down")
+
+    _record_queries(monkeypatch, _boom)
+    with caplog.at_level(logging.WARNING, logger="totalreclaw.client"):
+        with pytest.raises(SmartAccountLookupError) as ei:
+            await _derive_smart_account_address(PHRASE)
+    text = caplog.text
+    assert "rpc.gnosischain.com" in text and "ConnectionError" in text
+    assert _get_eoa_address(PHRASE).lower() not in text.lower()
+    assert "abandon" not in text
+    assert ei.value.__cause__ is not None
+
+
+def _eoa_bundle():
+    """A parsed bundle whose account.smart_account equals the owner EOA."""
+    from totalreclaw.bundle import derive_bundle_from_mnemonic
+
+    eoa = _get_eoa_address(PHRASE)
+    return derive_bundle_from_mnemonic(PHRASE, 100, "test", eoa)
+
+
+@pytest.mark.asyncio
+async def test_bundle_with_eoa_smart_account_is_re_resolved(monkeypatch):
+    bundle = _eoa_bundle()
+    assert bundle.account.smart_account.lower() == bundle.signing.address.lower()
+    c = TotalReclaw.from_bundle(bundle, server_url="https://relay.invalid")
+    assert c._wallet_address is None and c._address_resolved is False
+
+    _rpc_answers(monkeypatch, {"result": "0x" + "0" * 24 + SA[2:]})
+    assert await c.resolve_address() == SA.lower()
+
+
+@pytest.mark.asyncio
+async def test_bundle_with_eoa_smart_account_fails_closed_on_lookup_failure(monkeypatch):
+    c = TotalReclaw.from_bundle(_eoa_bundle(), server_url="https://relay.invalid")
+    relay = MagicMock(name="relay")
+    c._relay = relay
+    _rpc_answers(monkeypatch, ConnectionError("down"))
+    with pytest.raises(SmartAccountLookupError):
+        await c.remember("must not be written")
+    assert relay.mock_calls == []
+
+
+def test_bundle_with_real_smart_account_is_used_directly():
+    from totalreclaw.bundle import derive_bundle_from_mnemonic
+
+    b = derive_bundle_from_mnemonic(PHRASE, 100, "test", SA)
+    c = TotalReclaw.from_bundle(b, server_url="https://relay.invalid")
+    assert c._address_resolved is True and c._wallet_address == SA.lower()
