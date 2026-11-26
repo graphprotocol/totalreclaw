@@ -12,6 +12,7 @@ import {
   type MetadataOpDeps,
 } from '../src/tools/retype';
 import { buildV1ClaimBlob } from '../src/claims-helper';
+import { MOCK_KEYED_TAGS } from './helpers/keyed-fixture';
 
 // ── Tool definition ──────────────────────────────────────────────────────────
 
@@ -160,8 +161,9 @@ function makeDeps(overrides: Partial<MetadataOpDeps> = {}): MetadataOpDeps & { _
       submitted.push(payloads);
       return { txHash: '0xdeadbeef', success: true };
     },
+    fetchIndexScheme: async () => 1, // internal#573: keyed fact (guard passes)
     async generateIndices() {
-      return { blindIndices: ['mock-1', 'mock-2'], encryptedEmbedding: 'mock-emb' };
+      return { blindIndices: MOCK_KEYED_TAGS, encryptedEmbedding: 'mock-emb' };
     },
   };
   const merged = { ...base, ...overrides } as MetadataOpDeps & { _submitted: Buffer[][] };

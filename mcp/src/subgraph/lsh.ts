@@ -16,7 +16,7 @@ import { WasmLshHasher } from '@totalreclaw/core';
  * Random Hyperplane LSH hasher.
  *
  * All state is deterministic from the seed -- no randomness at hash time.
- * Construct once per session; call `hash()` for every store/search operation.
+ * Construct once per session; `KeyedTagger` calls `hashKeyed()` for every store/search operation.
  */
 export class LSHHasher {
   private inner: WasmLshHasher;
@@ -40,13 +40,23 @@ export class LSHHasher {
   }
 
   /**
-   * Hash an embedding vector to an array of blind-hashed bucket IDs.
+   * Keyed LSH tags for an embedding (one per table, in table order, NOT
+   * sorted). Keyed by the vault's LSH bucket key inside core, so a bucket id
+   * cannot be recomputed from the embedding without the vault key.
    *
    * @param embedding - The embedding vector (must have `dims` elements).
-   * @returns Array of `nTables` hex strings (one blind hash per table).
+   * @returns Array of `nTables` hex strings.
    */
-  hash(embedding: number[]): string[] {
-    return this.inner.hash(new Float64Array(embedding));
+  hashKeyed(embedding: number[]): string[] {
+    return this.inner.hashKeyed(new Float64Array(embedding));
+  }
+
+  /**
+   * The underlying WASM hasher, for `generateSearchTrapdoorsKeyed` in
+   * `keyed-tags.ts`. Internal: nothing else should reach for it.
+   */
+  get wasmHasher(): WasmLshHasher {
+    return this.inner;
   }
 
   /** Number of hash tables. */

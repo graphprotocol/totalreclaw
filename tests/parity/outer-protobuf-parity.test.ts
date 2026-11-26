@@ -5,9 +5,11 @@
  * the Rust core; see `fixtures/generate-outer-protobuf-fixture.py`) and
  * asserts, for the same inputs:
  *
- *   1. the MCP server encoder (`mcp/src/subgraph/protobuf.ts`) and the WASM
- *      core encoder (`encodeFactProtobuf`, used by the OpenClaw plugin and
- *      the SPA) are byte-identical to the fixture;
+ *   1. the MCP server keyed encoder (`mcp/src/subgraph/protobuf.ts`,
+ *      internal#573) is byte-identical to the WASM core keyed encoder
+ *      (`encodeFactProtobufKeyed`), and the WASM legacy encoder
+ *      (`encodeFactProtobuf`, kept for the parked OpenClaw plugin) is still
+ *      byte-identical to the fixture;
  *   2. SimpleAccount calldata built the way the MCP runtime builds it
  *      (viem `encodeFunctionData` with the SimpleAccount v0.7 ABI) and the
  *      way core builds it (WASM `encodeSingleCallTo` / `encodeBatchCallTo`)
@@ -45,6 +47,7 @@ const wasm = require(
   join(__dirname, '..', '..', 'rust', 'totalreclaw-core', 'pkg', 'totalreclaw_core.js'),
 ) as {
   encodeFactProtobuf: (json: string) => Uint8Array;
+  encodeFactProtobufKeyed: (json: string) => Uint8Array;
   encodeSingleCallTo: (payload: Uint8Array, dataEdgeAddress: string) => Uint8Array;
   encodeBatchCallTo: (payloadsHexJson: string, dataEdgeAddress: string) => Uint8Array;
 };
@@ -65,7 +68,7 @@ interface McpFactPayload {
 // The MCP server's own encoder, loaded from source (dependency-free module).
 const mcp = require(
   join(__dirname, '..', '..', 'mcp', 'src', 'subgraph', 'protobuf.ts'),
-) as { encodeFactProtobuf: (fact: McpFactPayload) => Buffer };
+) as { encodeFactProtobufKeyed: (fact: McpFactPayload) => Buffer };
 
 interface FixtureInput {
   id: string;
@@ -207,17 +210,19 @@ function runTests(): void {
   const mcpBytesByName = new Map<string, Buffer>();
 
   for (const v of fixture.vectors) {
-    // 1. Encoder parity (MCP + WASM) against the Rust-generated fixture.
-    const mcpBytes = mcp.encodeFactProtobuf(toMcpPayload(v.input));
+    // 1. Encoder parity: MCP keyed encoder == WASM keyed encoder; WASM legacy == fixture.
+    const mcpBytes = mcp.encodeFactProtobufKeyed(toMcpPayload(v.input));
     mcpBytesByName.set(v.name, mcpBytes);
-    assertEqHex(mcpBytes.toString('hex'), v.expected_protobuf_hex, `${v.name}: MCP encoder byte-identical to fixture`);
+    const wasmKeyed = Buffer.from(wasm.encodeFactProtobufKeyed(JSON.stringify(v.input)));
+    assertEqHex(mcpBytes.toString('hex'), wasmKeyed.toString('hex'), `${v.name}: MCP keyed encoder byte-identical to WASM keyed encoder`);
     const wasmBytes = Buffer.from(wasm.encodeFactProtobuf(JSON.stringify(v.input)));
-    assertEqHex(wasmBytes.toString('hex'), v.expected_protobuf_hex, `${v.name}: WASM core encoder byte-identical to fixture`);
+    assertEqHex(wasmBytes.toString('hex'), v.expected_protobuf_hex, `${v.name}: WASM legacy encoder byte-identical to fixture (parked plugin)`);
     const fields = fieldNumbers(mcpBytes);
     assert(!hasForbidden(fields), `${v.name}: MCP outer protobuf has no field 9/11 (got [${fields.join(',')}])`);
+    const expectedKeyedFields = [...v.expected_field_numbers, 14];
     assert(
-      fields.join(',') === v.expected_field_numbers.join(','),
-      `${v.name}: MCP field layout is [${v.expected_field_numbers.join(',')}]`,
+      fields.join(',') === expectedKeyedFields.join(','),
+      `${v.name}: MCP field layout is [${expectedKeyedFields.join(',')}] (field 14 present, written last)`,
     );
 
     // 2. execute() calldata parity + decode.
@@ -226,11 +231,10 @@ function runTests(): void {
       functionName: 'execute',
       args: [DATA_EDGE, 0n, `0x${mcpBytes.toString('hex')}`],
     });
-    assertEqHex(tsCalldata.slice(2), v.expected_execute_calldata_hex, `${v.name}: viem execute() calldata byte-identical to fixture`);
     const wasmCalldata = Buffer.from(wasm.encodeSingleCallTo(new Uint8Array(mcpBytes), DATA_EDGE)).toString('hex');
-    assertEqHex(wasmCalldata, v.expected_execute_calldata_hex, `${v.name}: WASM encodeSingleCallTo byte-identical to fixture`);
+    assertEqHex(tsCalldata.slice(2), wasmCalldata, `${v.name}: viem execute() calldata byte-identical to WASM encodeSingleCallTo`);
 
-    const decoded = decodeFunctionData({ abi: SIMPLE_ACCOUNT_ABI, data: `0x${v.expected_execute_calldata_hex}` });
+    const decoded = decodeFunctionData({ abi: SIMPLE_ACCOUNT_ABI, data: tsCalldata });
     assert(decoded.functionName === 'execute', `${v.name}: calldata decodes as execute()`);
     const [dest, value, func] = decoded.args as unknown as readonly [Hex, bigint, Hex];
     assert(dest.toLowerCase() === DATA_EDGE, `${v.name}: execute() targets the fixture DataEdge`);
@@ -255,13 +259,12 @@ function runTests(): void {
       batchPayloads.map((b) => `0x${b.toString('hex')}` as Hex),
     ],
   });
-  assertEqHex(tsBatch.slice(2), fixture.batch.expected_calldata_hex, 'batch: viem executeBatch() calldata byte-identical to fixture');
   const wasmBatch = Buffer.from(
     wasm.encodeBatchCallTo(JSON.stringify(batchPayloads.map((b) => b.toString('hex'))), DATA_EDGE),
   ).toString('hex');
-  assertEqHex(wasmBatch, fixture.batch.expected_calldata_hex, 'batch: WASM encodeBatchCallTo byte-identical to fixture');
+  assertEqHex(tsBatch.slice(2), wasmBatch, 'batch: viem executeBatch() calldata byte-identical to WASM encodeBatchCallTo');
 
-  const decodedBatch = decodeFunctionData({ abi: SIMPLE_ACCOUNT_ABI, data: `0x${fixture.batch.expected_calldata_hex}` });
+  const decodedBatch = decodeFunctionData({ abi: SIMPLE_ACCOUNT_ABI, data: tsBatch });
   assert(decodedBatch.functionName === 'executeBatch', 'batch: calldata decodes as executeBatch()');
   const [dests, values, funcs] = decodedBatch.args as unknown as readonly [readonly Hex[], readonly bigint[], readonly Hex[]];
   assert(funcs.length === batchPayloads.length, `batch: decodes to ${batchPayloads.length} calls`);

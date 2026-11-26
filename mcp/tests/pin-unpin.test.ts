@@ -21,6 +21,7 @@ import {
 } from '../src/tools/pin';
 
 import { buildCanonicalClaim } from '../src/claims-helper';
+import { MOCK_KEYED_TAGS } from './helpers/keyed-fixture';
 
 // Isolate the on-disk state dir so tests never touch ~/.totalreclaw/.
 const TEST_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-mcp-pin-test-'));
@@ -137,8 +138,9 @@ function makeDeps(overrides: Partial<PinOpDeps> = {}): PinOpDeps & { _submitted:
       submitted.push(payloads);
       return { txHash: '0xdeadbeef', success: true };
     },
+    fetchIndexScheme: async () => 1, // internal#573: keyed fact (guard passes)
     async generateIndices(_text: string, _entityNames: string[]) {
-      return { blindIndices: ['mock_trapdoor_1', 'mock_trapdoor_2'], encryptedEmbedding: 'mock_enc_embed' };
+      return { blindIndices: MOCK_KEYED_TAGS, encryptedEmbedding: 'mock_enc_embed' };
     },
   };
   const merged = { ...base, ...overrides } as PinOpDeps & { _submitted: Buffer[][] };

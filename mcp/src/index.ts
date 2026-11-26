@@ -57,10 +57,9 @@ import {
   computeAuthKeyHash,
   encrypt,
   decrypt,
-  generateBlindIndices,
-  generateContentFingerprint,
 } from './subgraph/crypto.js';
 import { LSHHasher } from './subgraph/lsh.js';
+import { KeyedTagger, buildFactPayload } from './subgraph/keyed-tags.js';
 import { generateEmbedding, getEmbeddingDims } from './subgraph/embedding.js';
 import {
   rerank,
@@ -71,7 +70,8 @@ import {
 import {
   submitFactOnChain,
   submitFactBatchOnChain,
-  encodeFactProtobuf,
+  encodeFactProtobufKeyed,
+  encodeTombstoneProtobufKeyed,
   getSubgraphConfig,
   isSubgraphMode,
   DEFAULT_DATA_EDGE_ADDRESS,
@@ -94,11 +94,12 @@ import {
 } from './subgraph/credentials.js';
 import type { UnusableCredentials } from './dispatch.js';
 import { bundleVaultToBuffers, redactedBundleSummary, type DerivedBundleV1 } from './subgraph/bundle.js';
-import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, lookupFactById, fetchFactForForget } from './subgraph/search.js';
+import { searchSubgraph, searchSubgraphBroadened, getOwnerFactCount, lookupFactById, lookupFactIndexScheme, fetchFactForForget } from './subgraph/search.js';
 import { RelayReadBlocked, readBlockToolResult, withReadPauseNotice } from './subgraph/read-block.js';
 import { liveDecayScore } from './subgraph/decay.js';
 import { RecentWrites, recordSubmittedPayloads, TOMBSTONE_BLOB_HEX } from './subgraph/recent-writes.js';
 import { createRewriteLookup, createForgetLookup } from './subgraph/fact-lookup.js';
+import { createIndexSchemeLookup } from './subgraph/index-scheme-guard.js';
 import { confirmIndexed } from './subgraph/confirm-indexed.js';
 import {
   decodeEmbeddingUniversal,
@@ -127,7 +128,6 @@ import {
 } from './tools/set-scope.js';
 import {
   buildV1ClaimBlob,
-  computeEntityTrapdoor,
   isDigestBlob,
   readBlobUnified,
   readClaimFromBlob,
@@ -403,6 +403,8 @@ interface SubgraphState {
    */
   salt: Buffer;
   lshHasher: LSHHasher;
+  /** The one producer of tags, trapdoors and fingerprints (internal#573). Holds key material: never log or serialise it. */
+  tagger: KeyedTagger;
   serverUrl: string;
   smartAccountAddress: string;
   /** Chain to write to — resolved verbatim from billing chain_id (#439). */
@@ -512,6 +514,7 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
   const lshSeed = deriveLshSeed(mnemonic, salt);
   const dims = getEmbeddingDims(); // 640 for Harrier-OSS-v1-270M
   const lshHasher = new LSHHasher(lshSeed, dims);
+  const tagger = new KeyedTagger(encryptionKey, dedupKey, lshHasher);
 
   // Derive Smart Account address via CREATE2 (deterministic, same on all chains).
   // First derive on Base Sepolia (free tier default), then query billing to detect
@@ -579,6 +582,7 @@ async function initSubgraphState(mnemonic: string): Promise<SubgraphState> {
     dedupKey,
     salt,
     lshHasher,
+    tagger,
     serverUrl: SERVER_URL,
     smartAccountAddress,
     chainId,
@@ -653,6 +657,7 @@ async function initSubgraphStateFromBundle(bundle: DerivedBundleV1): Promise<Sub
   const vault = bundleVaultToBuffers(bundle);
   const dims = getEmbeddingDims();
   const lshHasher = new LSHHasher(vault.lshSeed, dims);
+  const tagger = new KeyedTagger(vault.encryptionKey, vault.dedupKey, lshHasher);
 
   // account.smart_account is already resolved — no RPC round-trip, no
   // mnemonic-derived owner. See the docstring above, point 2.
@@ -707,6 +712,7 @@ async function initSubgraphStateFromBundle(bundle: DerivedBundleV1): Promise<Sub
     // Bundle mode carries no salt — see the SubgraphState.salt doc comment.
     salt: Buffer.alloc(0),
     lshHasher,
+    tagger,
     serverUrl: SERVER_URL,
     smartAccountAddress,
     chainId,
@@ -983,15 +989,12 @@ async function handleRememberSubgraph(
   for (const item of screenedItems) {
     let itemSuperseded = false; // Per-fact flag for action tracking
     try {
-      // 1. Generate blind indices (word-based)
-      const wordIndices = generateBlindIndices(item.text);
-
-      // 2. Generate embedding and LSH indices
+      // 1. Generate the embedding
       const embedding = await generateEmbedding(item.text);
-      const lshIndices = state.lshHasher.hash(embedding);
 
-      // 3. Combine word + LSH indices
-      const allIndices = [...wordIndices, ...lshIndices];
+      // 2. Keyed tags (stems + keyed LSH), sorted and deduplicated by core.
+      // The same list is the store-time dedup query and the written field 5.
+      const allIndices = state.tagger.factTags(item.text, embedding, []);
 
       // Store-time dedup: search for near-duplicates before storing
       let effectiveImportance = item.importance;
@@ -1075,7 +1078,7 @@ async function handleRememberSubgraph(
                 contentFp: '',
                 agentId: 'mcp-server',
               };
-              pendingPayloads.push(encodeFactProtobuf(tombstonePayload));
+              pendingPayloads.push(encodeTombstoneProtobufKeyed(tombstonePayload.id, tombstonePayload.owner, tombstonePayload.timestamp));
               pendingRecords.push(tombstonePayload);
               console.error(`Store-time dedup: queued supersede for ${dupMatch.existingFact.id} (sim=${dupMatch.similarity.toFixed(3)})`);
               dedupSuperseded++;
@@ -1162,6 +1165,7 @@ async function handleRememberSubgraph(
               const base64 = Buffer.from(clean, 'hex').toString('base64');
               return decrypt(base64, key);
             },
+            entityTag: (name) => state.tagger.entityTag(name),
           },
           logger: {
             info: (m) => console.error(m),
@@ -1182,7 +1186,7 @@ async function handleRememberSubgraph(
               contentFp: '',
               agentId: 'mcp-server',
             };
-            pendingPayloads.push(encodeFactProtobuf(tombstonePayload));
+            pendingPayloads.push(encodeTombstoneProtobufKeyed(tombstonePayload.id, tombstonePayload.owner, tombstonePayload.timestamp));
             pendingRecords.push(tombstonePayload);
             console.error(
               `Auto-resolve: queued supersede for ${decision.existingFactId.slice(0, 10)}… ` +
@@ -1217,28 +1221,23 @@ async function handleRememberSubgraph(
 
       const encryptedBlob = encrypt(blobPlaintext, state.encryptionKey);
 
-      // 5. Generate content fingerprint for dedup (over plaintext text, not blob)
-      const contentFp = generateContentFingerprint(item.text, state.dedupKey);
-
-      // 6. Encrypt the embedding for on-chain storage
+      // 5. Encrypt the embedding for on-chain storage
       const encryptedEmb = encryptEmbedding(embedding, state.encryptionKey);
 
-      // 7. Build fact payload
-      const factPayload: FactPayload = {
+      // 6. Build fact payload (tags + fingerprint v2 over the plaintext text, not the blob)
+      const factPayload = buildFactPayload({
+        tagger: state.tagger,
         id: factId,
-        timestamp: new Date().toISOString(),
         owner: state.smartAccountAddress,
-        encryptedBlob: Buffer.from(encryptedBlob, 'base64').toString('hex'),
-        blindIndices: allIndices,
-        decayScore: liveDecayScore(), // constant 1.0, no importance (#789)
         source: 'mcp_remember',
-        contentFp,
-        agentId: 'mcp-server',
+        text: item.text,
+        encryptedBlobBase64: encryptedBlob,
         encryptedEmbedding: encryptedEmb,
-      };
+        tags: allIndices,
+      });
 
-      // 8. Encode as protobuf and queue for batch submission
-      const protobuf = encodeFactProtobuf(factPayload);
+      // 7. Encode as protobuf and queue for batch submission
+      const protobuf = encodeFactProtobufKeyed(factPayload);
       pendingPayloads.push(protobuf);
       pendingRecords.push(factPayload);
       pendingFactMeta.push({ factId, action: itemSuperseded ? 'superseded' : 'created' });
@@ -1334,10 +1333,8 @@ async function handleDebriefSubgraph(
     if (typeof raw?.session_id === 'string' && raw.session_id) crystalMetadata.session_id = raw.session_id;
 
     try {
-      const wordIndices = generateBlindIndices(narrative);
       const embedding = await generateEmbedding(narrative);
-      const lshIndices = state.lshHasher.hash(embedding);
-      const allIndices = [...wordIndices, ...lshIndices];
+      const allIndices = state.tagger.factTags(narrative, embedding, []);
 
       const blobPlaintext = buildV1ClaimBlob({
         text: narrative,
@@ -1347,25 +1344,22 @@ async function handleDebriefSubgraph(
         metadata: crystalMetadata,
       });
       const encryptedBlob = encrypt(blobPlaintext, state.encryptionKey);
-      const contentFp = generateContentFingerprint(narrative, state.dedupKey);
       const encryptedEmb = encryptEmbedding(embedding, state.encryptionKey);
 
       const factId = crypto.randomUUID();
-      const factPayload: FactPayload = {
+      const factPayload = buildFactPayload({
+        tagger: state.tagger,
         id: factId,
-        timestamp: new Date().toISOString(),
         owner: state.smartAccountAddress,
-        encryptedBlob: Buffer.from(encryptedBlob, 'base64').toString('hex'),
-        blindIndices: allIndices,
-        decayScore: liveDecayScore(), // constant 1.0, no importance (#789)
         source: 'mcp_debrief',
-        contentFp,
-        agentId: 'mcp-server',
+        text: narrative,
+        encryptedBlobBase64: encryptedBlob,
         encryptedEmbedding: encryptedEmb,
-      };
+        tags: allIndices,
+      });
 
       const batchConfig = await writeConfigFor(state);
-      const batchResult = await submitFactBatchOnChain([encodeFactProtobuf(factPayload)], batchConfig);
+      const batchResult = await submitFactBatchOnChain([encodeFactProtobufKeyed(factPayload)], batchConfig);
       recordSubmittedPayloads(recentWrites, state.smartAccountAddress, [factPayload], batchResult);
       console.error(`Crystal debrief stored (tx=${batchResult.txHash.slice(0, 10)}...)`);
       return {
@@ -1403,10 +1397,8 @@ async function handleDebriefSubgraph(
 
   for (const item of validated) {
     try {
-      const wordIndices = generateBlindIndices(item.text);
       const embedding = await generateEmbedding(item.text);
-      const lshIndices = state.lshHasher.hash(embedding);
-      const allIndices = [...wordIndices, ...lshIndices];
+      const allIndices = state.tagger.factTags(item.text, embedding, []);
 
       const blobPlaintext = buildV1ClaimBlob({
         text: item.text,
@@ -1415,24 +1407,21 @@ async function handleDebriefSubgraph(
         importance: item.importance,
       });
       const encryptedBlob = encrypt(blobPlaintext, state.encryptionKey);
-      const contentFp = generateContentFingerprint(item.text, state.dedupKey);
       const encryptedEmb = encryptEmbedding(embedding, state.encryptionKey);
 
       const factId = crypto.randomUUID();
-      const factPayload: FactPayload = {
+      const factPayload = buildFactPayload({
+        tagger: state.tagger,
         id: factId,
-        timestamp: new Date().toISOString(),
         owner: state.smartAccountAddress,
-        encryptedBlob: Buffer.from(encryptedBlob, 'base64').toString('hex'),
-        blindIndices: allIndices,
-        decayScore: liveDecayScore(), // constant 1.0, no importance (#789)
         source: 'mcp_debrief',
-        contentFp,
-        agentId: 'mcp-server',
+        text: item.text,
+        encryptedBlobBase64: encryptedBlob,
         encryptedEmbedding: encryptedEmb,
-      };
+        tags: allIndices,
+      });
 
-      pendingPayloads.push(encodeFactProtobuf(factPayload));
+      pendingPayloads.push(encodeFactProtobufKeyed(factPayload));
       pendingRecords.push(factPayload);
       pendingFactMeta.push({ factId });
     } catch (error) {
@@ -1501,17 +1490,13 @@ async function handleRecallSubgraph(
   if (k > 50) k = 50;
 
   try {
-    // 1. Generate blind indices for the query (word + LSH trapdoors)
-    const wordTrapdoors = generateBlindIndices(query.trim());
-    timer.mark('trapdoors');
-
-    // 2. Generate query embedding for LSH trapdoors and cosine reranking
+    // 1. Generate the query embedding (LSH trapdoors and cosine reranking)
     const queryEmbedding = await generateEmbedding(query.trim(), { isQuery: true });
     timer.mark('embedding');
-    const lshTrapdoors = state.lshHasher.hash(queryEmbedding);
 
-    // 3. Combine trapdoors
-    const allTrapdoors = [...wordTrapdoors, ...lshTrapdoors];
+    // 2. Keyed trapdoors (stems + keyed LSH): final and sorted as returned by core.
+    const allTrapdoors = state.tagger.queryTrapdoors(query.trim(), queryEmbedding, []);
+    timer.mark('trapdoors');
 
     // 4. Search the subgraph
     const maxCandidates = getMaxCandidatePool(k);
@@ -1792,7 +1777,7 @@ async function handleForgetSubgraph(
       agentId: 'mcp-server',
     };
 
-    const protobuf = encodeFactProtobuf(tombstonePayload);
+    const protobuf = encodeTombstoneProtobufKeyed(tombstonePayload.id, tombstonePayload.owner, tombstonePayload.timestamp);
     const config = await writeConfigFor(state);
 
     const { txHash, success } = await submitFactOnChain(protobuf, config);
@@ -1884,22 +1869,32 @@ function buildPinDepsFromState(state: SubgraphState): PinOpDeps {
     },
     generateIndices: async (text: string, entityNames: string[]) => {
       if (!text) return { blindIndices: [] };
-      const wordIndices = generateBlindIndices(text);
-      let lshIndices: string[] = [];
+      let embedding: number[] | undefined;
       let encryptedEmbedding: string | undefined;
       try {
-        const embedding = await generateEmbedding(text);
-        lshIndices = state.lshHasher.hash(embedding);
+        embedding = await generateEmbedding(text);
         encryptedEmbedding = encryptEmbedding(embedding, state.encryptionKey);
       } catch {
-        // Best-effort: if embedding fails, word trapdoors alone still surface the claim.
+        // Best-effort: if embedding fails, stem tags alone still surface the claim.
+        embedding = undefined;
       }
-      const entityTrapdoors = entityNames.map((n) => computeEntityTrapdoor(n));
       return {
-        blindIndices: [...wordIndices, ...lshIndices, ...entityTrapdoors],
+        blindIndices: state.tagger.factTags(text, embedding, entityNames),
         encryptedEmbedding,
       };
     },
+    // internal#573: facts this process wrote skip the query (keyed by
+    // construction); everything else is checked on the subgraph.
+    fetchIndexScheme: createIndexSchemeLookup({
+      owner: state.smartAccountAddress,
+      cache: recentWrites,
+      lookupSubgraph: (factId: string) => lookupFactIndexScheme(
+        state.smartAccountAddress,
+        factId,
+        state.serverUrl,
+        Buffer.from(state.authKey).toString('hex'),
+      ),
+    }),
     confirmIndexed: async (factId: string, expect?: 'active' | 'inactive') => {
       const subgraphUrl = process.env.TOTALRECLAW_SUBGRAPH_URL || `${state.serverUrl}/v1/subgraph`;
       const confirmation = await confirmIndexed(factId, {
@@ -1927,6 +1922,7 @@ function buildMetadataOpDepsFromState(state: SubgraphState): MetadataOpDeps {
     encryptBlob: pinDeps.encryptBlob,
     submitBatch: pinDeps.submitBatch,
     generateIndices: pinDeps.generateIndices,
+    fetchIndexScheme: pinDeps.fetchIndexScheme,
     confirmIndexed: pinDeps.confirmIndexed,
     recordWrites: pinDeps.recordWrites,
   };

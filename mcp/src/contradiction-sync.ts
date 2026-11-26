@@ -28,7 +28,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { computeEntityTrapdoor, isDigestBlob } from './claims-helper.js';
+import { isDigestBlob } from './claims-helper.js';
 import { decodeEmbeddingUniversal } from './embedding-codec.js';
 
 // MCP uses require('@totalreclaw/core') directly (see consolidation.ts,
@@ -317,7 +317,7 @@ interface WasmExistingItem {
  * Collect active claim candidates for every entity on the new claim.
  *
  * For each entity:
- *   1. Compute its trapdoor (same primitive as the write path).
+ *   1. Compute its keyed entity tag (`deps.entityTag`, from the vault's `KeyedTagger`).
  *   2. Query the subgraph for facts matching that single-element trapdoor.
  *   3. Decrypt + parse each row, filtering infra claims and bad blobs.
  *   4. Recover the embedding (reusing the stored one when possible).
@@ -334,6 +334,8 @@ export async function collectCandidatesForEntities(
   deps: {
     searchSubgraph: SubgraphSearchFn;
     decryptFromHex: DecryptFn;
+    /** Keyed entity tag for a name (core normalises it). */
+    entityTag: (name: string) => string;
   },
   logger: ContradictionLogger,
 ): Promise<CandidateClaim[]> {
@@ -346,7 +348,7 @@ export async function collectCandidatesForEntities(
   for (const entity of entities) {
     const name = typeof entity?.n === 'string' ? entity.n : null;
     if (!name) continue;
-    const trapdoor = computeEntityTrapdoor(name);
+    const trapdoor = deps.entityTag(name);
     let rows: Awaited<ReturnType<SubgraphSearchFn>> = [];
     try {
       rows = await deps.searchSubgraph(
@@ -554,6 +556,8 @@ export function resolveWithCore(input: ResolveWithCoreInput): ResolutionDecision
 export interface DetectAndResolveDeps {
   searchSubgraph: SubgraphSearchFn;
   decryptFromHex: DecryptFn;
+  /** Keyed entity tag for a name (core normalises it). */
+  entityTag: (name: string) => string;
   /** Now in Unix seconds — overridable for deterministic tests. */
   nowUnixSeconds?: number;
 }

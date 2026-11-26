@@ -27,7 +27,8 @@ import type {
 import { LEGACY_TYPE_TO_V1 } from '../v1-types.js';
 import type { SubgraphSearchFact } from '../subgraph/search.js';
 import { TOMBSTONE_BLOB_HEX, type RecentWriteInput } from '../subgraph/recent-writes.js';
-import { encodeFactProtobuf } from '../subgraph/store.js';
+import { encodeFactProtobufKeyed, encodeTombstoneProtobufKeyed } from '../subgraph/store.js';
+import { INDEX_SCHEME_UNCONFIRMED_MSG, INDEX_SCHEME_UNCONFIRMED_CODE } from '../subgraph/index-scheme-guard.js';
 import { liveDecayScore } from '../subgraph/decay.js';
 import { carriedFields, extractV1Fields } from './retype.js';
 import { rethrowIfQuota, shortErrorMessage, logWriteError } from './write-errors.js';
@@ -561,6 +562,14 @@ export interface PinOpDeps {
     encryptedEmbedding?: string;
   }>;
   /**
+   * internal#573 guard: the keyed-index scheme of the target fact (1 = keyed),
+   * or `null` when it cannot be confirmed (missing fact, owner mismatch,
+   * GraphQL error, malformed body, relay error). Facts this process wrote
+   * resolve to 1 without a query. A read block throws `RelayReadBlocked`.
+   * Required, so every harness has to choose a value.
+   */
+  fetchIndexScheme: (factId: string) => Promise<number | null>;
+  /**
    * Optional read-after-write hook. Called after submitBatch returns success;
    * polls the subgraph for the new fact id. Returning `false` causes the
    * result to surface `partial: true`. When undefined, the op skips the wait.
@@ -587,6 +596,7 @@ export interface PinOpResult extends Partial<PinConfirmationFields> {
   tx_hash?: string;
   reason?: string;
   error?: string;
+  error_code?: typeof INDEX_SCHEME_UNCONFIRMED_CODE;
   /**
    * On-chain pin/unpin succeeded but the subgraph indexer hasn't confirmed
    * the new fact id within the timeout window. `tx_hash` is observable on
@@ -694,6 +704,18 @@ export async function executePinOperation(
     };
   }
 
+  // internal#573: refuse unless the fact is confirmed keyed (scheme 1). Before
+  // the confirmation ask, any tag derivation and any feedback write or UserOp.
+  if ((await deps.fetchIndexScheme(factId)) !== 1) {
+    return {
+      success: false,
+      fact_id: factId,
+      previous_status: parsed.currentStatus,
+      error: INDEX_SCHEME_UNCONFIRMED_MSG,
+      error_code: INDEX_SCHEME_UNCONFIRMED_CODE,
+    };
+  }
+
   // internal#778: unpinning is the user's call. Stop on a pinned fact unless
   // the agent brings a confirm_token from an earlier ask.
   if (targetStatus === 'active' && parsed.currentStatus === 'pinned') {
@@ -769,12 +791,10 @@ export async function executePinOperation(
 
   // 6. Build tombstone + new protobuf payloads.
   //
-  // Note: encodeFactProtobuf in `subgraph/store.ts` hardcodes the outer
-  // protobuf `version` field to PROTOBUF_VERSION_V4 (4) for all MCP writes,
-  // so the new v1 blob is already wrapped at v=4. The tombstone row also
-  // goes out at v=4 in MCP (unlike the plugin which writes tombstones at
-  // legacy v3). This is fine — readers ignore the version field on tombstone
-  // rows since they carry no decryptable inner blob.
+  // The keyed encoders in `subgraph/protobuf.ts` fix the outer `version` at 4
+  // and write field 14 = 1. The tombstone is the scheme-1 layout (empty blob,
+  // decay 0, is_active 0); the in-memory record keeps TOMBSTONE_BLOB_HEX so
+  // the recent-writes cache still recognises it.
   const tombstonePayload: FactPayloadMinimal = {
     id: factId,
     timestamp: new Date().toISOString(),
@@ -800,7 +820,10 @@ export async function executePinOperation(
     encryptedEmbedding: regenerated.encryptedEmbedding,
   };
 
-  const payloads = [encodeFactProtobuf(tombstonePayload), encodeFactProtobuf(newPayload)];
+  const payloads = [
+    encodeTombstoneProtobufKeyed(tombstonePayload.id, tombstonePayload.owner, tombstonePayload.timestamp),
+    encodeFactProtobufKeyed(newPayload),
+  ];
 
   // 6b. Slice 2f: if this pin/unpin overrides a prior auto-resolution, append
   // a counterexample to feedback.jsonl. MCP does NOT run the weight-tuning

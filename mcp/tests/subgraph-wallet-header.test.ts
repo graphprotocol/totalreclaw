@@ -17,7 +17,7 @@ import {
   fetchFactForForget,
 } from '../src/subgraph/search';
 import { confirmIndexed } from '../src/subgraph/confirm-indexed';
-import { buildSubgraphHeaders } from '../src/subgraph/headers';
+import { buildSubgraphHeaders, INDEX_SCHEME_HEADER, INDEX_SCHEME_VALUE } from '../src/subgraph/headers';
 
 const RELAY = 'https://relay.test';
 const SA = '0xAbC0000000000000000000000000000000000001';
@@ -57,6 +57,8 @@ function expectAllHaveWallet() {
   for (const s of seen) {
     expect(s.headers['X-Wallet-Address']).toBe(SA);
     expect(s.headers['Authorization']).toBe(`Bearer ${AUTH}`);
+    // internal#573: every subgraph request carries the keyed-scheme header.
+    expect(s.headers['X-TotalReclaw-Index-Scheme']).toBe('1');
     // Nothing but the address in the wallet header; no key material elsewhere.
     for (const [k, v] of Object.entries(s.headers)) {
       if (k !== 'Authorization') expect(v).not.toContain(AUTH);
@@ -119,6 +121,11 @@ describe('X-Wallet-Address on every subgraph read (#513)', () => {
       pollIntervalMs: 10,
     });
     expectAllHaveWallet();
+  });
+  it('the scheme header name and value are defined once', () => {
+    expect(INDEX_SCHEME_HEADER).toBe('X-TotalReclaw-Index-Scheme');
+    expect(INDEX_SCHEME_VALUE).toBe('1');
+    expect(buildSubgraphHeaders({})[INDEX_SCHEME_HEADER]).toBe('1');
   });
   it('buildSubgraphHeaders omits the header only when no address is given', () => {
     expect(buildSubgraphHeaders({ walletAddress: SA })['X-Wallet-Address']).toBe(SA);

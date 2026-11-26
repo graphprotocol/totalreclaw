@@ -132,17 +132,6 @@ export function buildCanonicalClaim(input: BuildClaimInput): string {
 // Digest helpers (read-only in MCP scope)
 // ---------------------------------------------------------------------------
 
-/**
- * Well-known blind index marker used to locate digest claims on the subgraph.
- * Computed as plain SHA-256("type:digest") — same primitive as word trapdoors
- * so it lives in the existing `blindIndices` array. The `type:` namespace
- * prefix keeps it distinct from any user word trapdoor.
- */
-export const DIGEST_TRAPDOOR: string = crypto
-  .createHash('sha256')
-  .update('type:digest')
-  .digest('hex');
-
 /** Compact category short key for digest claims (ClaimCategory::Digest). */
 export const DIGEST_CATEGORY = 'dig';
 
@@ -277,52 +266,6 @@ export function isDigestBlob(decrypted: string): boolean {
   } catch {
     return false;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Entity trapdoors
-// ---------------------------------------------------------------------------
-
-/**
- * Compute a single entity trapdoor: sha256("entity:" + normalized_name) as hex.
- *
- * Uses the same primitive (plain SHA-256, not HMAC) as word / stem trapdoors.
- * The `entity:` prefix namespaces the result so a user called "postgresql"
- * never collides with the word trapdoor for the token "postgresql". The
- * search path must construct queries with the same prefix.
- *
- * Rationale for plain SHA-256 vs HMAC: the existing word trapdoor
- * implementation in `rust/totalreclaw-core/src/blind.rs` uses plain SHA-256
- * of the normalized token. For entity trapdoors to appear in the same
- * blindIndices array and be findable by the current search pipeline, they
- * must use the same primitive. This matches the plugin's decision byte-for-byte.
- */
-export function computeEntityTrapdoor(name: string): string {
-  const normalized = getWasm().normalizeEntityName(name);
-  return crypto
-    .createHash('sha256')
-    .update('entity:' + normalized)
-    .digest('hex');
-}
-
-/**
- * Compute entity trapdoors for every entity on a fact, deduplicated.
- * Returns an empty array when the fact has no entities.
- */
-export function computeEntityTrapdoors(
-  entities: readonly ExtractedEntity[] | undefined,
-): string[] {
-  if (!entities || entities.length === 0) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const e of entities) {
-    const td = computeEntityTrapdoor(e.name);
-    if (!seen.has(td)) {
-      seen.add(td);
-      out.push(td);
-    }
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ import { pinnedForgetResponse } from '../src/tools/forget';
 import { handleUnpinSubgraphWithDeps, type PinOpDeps } from '../src/tools/pin';
 import { handleRetypeWithDeps, type MetadataOpDeps } from '../src/tools/retype';
 import { handleSetScopeWithDeps } from '../src/tools/set-scope';
+import { MOCK_KEYED_TAGS } from './helpers/keyed-fixture';
 
 type Resp = { content: Array<{ type: string; text: string }> };
 const parse = (r: Resp) => JSON.parse(r.content[0].text);
@@ -55,8 +56,9 @@ function makeDeps(pinned: boolean): PinOpDeps & MetadataOpDeps & { submitted: Bu
       submitted.push(payloads);
       return { txHash: '0xdeadbeef', success: true };
     },
+    fetchIndexScheme: async () => 1, // internal#573: keyed fact (guard passes)
     async generateIndices() {
-      return { blindIndices: ['a', 'b'], encryptedEmbedding: 'e' };
+      return { blindIndices: MOCK_KEYED_TAGS, encryptedEmbedding: 'e' };
     },
   } as unknown as PinOpDeps & MetadataOpDeps & { submitted: Buffer[][] };
 }

@@ -7,19 +7,20 @@
  * re-exports everything here, so imports from `./subgraph/store.js` are
  * unchanged.
  *
- * Wire layout is byte-identical to the canonical encoders for the same well-formed
- * input (hex fields are valid, even-length hex). On odd-length or non-hex input the
- * encoders differ: MCP writes an empty field 4, Rust skips the field and Python
- * throws. No real call site produces such input.
- *   - Rust:   rust/totalreclaw-core/src/protobuf.rs  encode_fact_protobuf
- *   - Python: python/src/totalreclaw/protobuf.py     encode_fact_protobuf
+ * Wire layout is byte-identical to the canonical keyed encoders for the same
+ * well-formed input (valid, even-length hex blob). On a blob that is not
+ * valid hex, core skips field 4; this encoder throws instead, so a payload
+ * with no blob never reaches the chain (the message never echoes the value).
+ *   - Rust:   rust/totalreclaw-core/src/protobuf.rs
+ *             encode_fact_protobuf_keyed / encode_tombstone_protobuf_keyed
+ *   - Python: python/src/totalreclaw/protobuf.py (same names)
  *
  * Field numbers (server/proto/totalreclaw.proto):
  *   1 id, 2 timestamp, 3 owner, 4 encrypted_blob (bytes),
  *   5 blind_indices (repeated), 6 decay_score (double), 7 is_active,
  *   8 version, 9 source (NOT WRITTEN), 10 content_fp,
  *   11 agent_id (NOT WRITTEN), 12 sequence_id (assigned by the subgraph),
- *   13 encrypted_embedding.
+ *   13 encrypted_embedding, 14 index_scheme (always 1, written last).
  *
  * Fields 9 and 11 left the wire in v3 (provenance lives inside the encrypted
  * blob, field 4). MCP kept writing them as plaintext calldata until PRD-04
@@ -45,7 +46,7 @@ export interface FactPayload {
   timestamp: string;
   owner: string;           // Smart Account address (hex)
   encryptedBlob: string;   // Hex-encoded XChaCha20-Poly1305 ciphertext
-  blindIndices: string[];  // SHA-256 hashes (word + LSH)
+  blindIndices: string[];  // keyed tags: 64 lowercase hex each (sorted + deduped on encode)
   decayScore: number;
   /**
    * Write-path label (e.g. `mcp_remember`). NOT encoded on-chain: outer
@@ -64,72 +65,96 @@ export interface FactPayload {
   encryptedEmbedding?: string;
 }
 
-/**
- * Encode a fact payload as a minimal Protobuf wire format.
- *
- * Field 8 (`version`) is always `PROTOBUF_VERSION_V4` (4) — every MCP write
- * carries a v1 inner blob. Fields 9 (`source`) and 11 (`agent_id`) are never
- * written, whatever the caller puts in `fact.source` / `fact.agentId`.
- */
-export function encodeFactProtobuf(fact: FactPayload): Buffer {
+/** Outer field 14 value: keyed blind-index scheme 1. */
+export const INDEX_SCHEME_KEYED_V1 = 1;
+
+const TAG_RE = /^[0-9a-f]{64}$/;
+const BLOB_HEX_RE = /^(?:[0-9a-fA-F]{2})*$/;
+
+/** Shared low-level writers. */
+function writer() {
   const parts: Buffer[] = [];
-
-  // Helper: encode a string field (skipped when empty, like core/Python)
-  const writeString = (fieldNumber: number, value: string) => {
-    if (!value) return;
-    const data = Buffer.from(value, 'utf-8');
-    const key = (fieldNumber << 3) | 2; // wire type 2 = length-delimited
-    parts.push(encodeVarint(key));
-    parts.push(encodeVarint(data.length));
-    parts.push(data);
+  return {
+    parts,
+    // string field (skipped when empty, like core)
+    string(fieldNumber: number, value: string) {
+      if (!value) return;
+      const data = Buffer.from(value, 'utf-8');
+      parts.push(encodeVarint((fieldNumber << 3) | 2), encodeVarint(data.length), data);
+    },
+    // bytes field (always written, even when empty)
+    bytes(fieldNumber: number, value: Buffer) {
+      parts.push(encodeVarint((fieldNumber << 3) | 2), encodeVarint(value.length), value);
+    },
+    double(fieldNumber: number, value: number) {
+      parts.push(encodeVarint((fieldNumber << 3) | 1));
+      const buf = Buffer.alloc(8);
+      buf.writeDoubleLE(value);
+      parts.push(buf);
+    },
+    varint(fieldNumber: number, value: number) {
+      parts.push(encodeVarint(fieldNumber << 3), encodeVarint(value));
+    },
   };
+}
 
-  // Helper: encode a bytes field (always written, even when empty)
-  const writeBytes = (fieldNumber: number, value: Buffer) => {
-    const key = (fieldNumber << 3) | 2;
-    parts.push(encodeVarint(key));
-    parts.push(encodeVarint(value.length));
-    parts.push(value);
-  };
-
-  // Helper: encode a double field (wire type 1 = 64-bit)
-  const writeDouble = (fieldNumber: number, value: number) => {
-    const key = (fieldNumber << 3) | 1;
-    parts.push(encodeVarint(key));
-    const buf = Buffer.alloc(8);
-    buf.writeDoubleLE(value);
-    parts.push(buf);
-  };
-
-  // Helper: encode a varint field (wire type 0)
-  const writeVarintField = (fieldNumber: number, value: number) => {
-    const key = (fieldNumber << 3) | 0;
-    parts.push(encodeVarint(key));
-    parts.push(encodeVarint(value));
-  };
-
-  writeString(1, fact.id);
-  writeString(2, fact.timestamp);
-  writeString(3, fact.owner);
-  writeBytes(4, Buffer.from(fact.encryptedBlob, 'hex'));
-
-  for (const index of fact.blindIndices) {
-    writeString(5, index);
+/**
+ * Encode a fact payload as a keyed-scheme-1 outer protobuf.
+ *
+ * Field 5 is `sorted(set(tags))`; every tag must be 64 lowercase hex chars
+ * (throws otherwise, without echoing the value). Field 8 (`version`) is always
+ * 4. Fields 9 and 11 are never written. Field 14 = 1 is written last.
+ * Throws on a blob that is not valid even-length hex.
+ */
+export function encodeFactProtobufKeyed(fact: FactPayload): Buffer {
+  if (!BLOB_HEX_RE.test(fact.encryptedBlob)) {
+    throw new Error('encryptedBlob is not valid hex');
   }
-
-  writeDouble(6, fact.decayScore);
-  writeVarintField(7, 1); // is_active = true
-  writeVarintField(8, PROTOBUF_VERSION_V4); // version = 4 (Memory Taxonomy v1)
-  // Field 9 (source) is NOT written — removed from the wire in v3; the
-  // provenance lives inside the encrypted blob (field 4). PRD-04 F8 / DEP-6.
-  writeString(10, fact.contentFp);
-  // Field 11 (agent_id) is NOT written — same reason as field 9.
-  // Field 12 (sequence_id) is assigned by the subgraph mapping, not the client.
+  for (const tag of fact.blindIndices) {
+    if (!TAG_RE.test(tag)) throw new Error('blind index is not 64 lowercase hex characters');
+  }
+  const w = writer();
+  w.string(1, fact.id);
+  w.string(2, fact.timestamp);
+  w.string(3, fact.owner);
+  w.bytes(4, Buffer.from(fact.encryptedBlob, 'hex'));
+  for (const tag of [...new Set(fact.blindIndices)].sort()) {
+    w.string(5, tag);
+  }
+  w.double(6, fact.decayScore);
+  w.varint(7, 1); // is_active = true
+  w.varint(8, PROTOBUF_VERSION_V4); // version = 4 (Memory Taxonomy v1)
+  // Field 9 (source) is NOT written: provenance lives inside the encrypted blob.
+  w.string(10, fact.contentFp);
+  // Field 11 (agent_id) is NOT written. Field 12 (sequence_id) is assigned by the subgraph.
   if (fact.encryptedEmbedding) {
-    writeString(13, fact.encryptedEmbedding);
+    w.string(13, fact.encryptedEmbedding);
   }
+  w.varint(14, INDEX_SCHEME_KEYED_V1);
+  return Buffer.concat(w.parts);
+}
 
-  return Buffer.concat(parts);
+/**
+ * Encode a keyed-scheme-1 tombstone: empty blob, `decay_score` 0,
+ * `is_active` 0, version 4, field 14 = 1. No fields 5, 10 or 13.
+ *
+ * `timestamp` defaults to now (`toISOString()`); tests pass a fixed one.
+ */
+export function encodeTombstoneProtobufKeyed(
+  factId: string,
+  owner: string,
+  timestamp?: string,
+): Buffer {
+  const w = writer();
+  w.string(1, factId);
+  w.string(2, timestamp ?? new Date().toISOString());
+  w.string(3, owner);
+  w.bytes(4, Buffer.alloc(0));
+  w.double(6, 0);
+  w.varint(7, 0); // is_active = false
+  w.varint(8, PROTOBUF_VERSION_V4);
+  w.varint(14, INDEX_SCHEME_KEYED_V1);
+  return Buffer.concat(w.parts);
 }
 
 /** Encode an integer as a Protobuf varint */

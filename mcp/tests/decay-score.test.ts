@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ACTIVE_DECAY_THRESHOLD, LIVE_DECAY_SCORE, liveDecayScore } from '../src/subgraph/decay.js';
-import { encodeFactProtobuf, type FactPayload } from '../src/subgraph/store.js';
+import { encodeFactProtobufKeyed, type FactPayload } from '../src/subgraph/store.js';
 
 const SRC = (f: string) => readFileSync(join(__dirname, '..', 'src', f), 'utf8');
 const INDEX_SRC = SRC('index.ts');
@@ -33,9 +33,11 @@ describe('liveDecayScore', () => {
 });
 
 describe('write sites', () => {
-  it('index.ts: remember, crystal, debrief items all use liveDecayScore()', () => {
-    const n = (INDEX_SRC.match(/decayScore: liveDecayScore\(\)/g) ?? []).length;
-    expect(n).toBeGreaterThanOrEqual(4); // 3 write sites + dedup candidate
+  it('remember, crystal, debrief items all use liveDecayScore() through buildFactPayload (internal#573)', () => {
+    // The three per-item assemblies now share one builder; index.ts keeps the dedup candidate.
+    expect((SRC('subgraph/keyed-tags.ts').match(/decayScore: liveDecayScore\(\)/g) ?? []).length).toBe(1);
+    expect((INDEX_SRC.match(/buildFactPayload\(/g) ?? []).length).toBe(3);
+    expect((INDEX_SRC.match(/decayScore: liveDecayScore\(\)/g) ?? []).length).toBeGreaterThanOrEqual(1);
     expect(INDEX_SRC).not.toMatch(/decayScore:\s*[^,\n]*(\/\s*10\b|\*\s*0\.1\b)/);
   });
   it.each(['index.ts', 'tools/pin.ts', 'tools/retype.ts'])('%s has no importance-derived decayScore', (f) => {
@@ -70,11 +72,11 @@ describe('payload encoding', () => {
     encryptedBlob: '00', blindIndices: [], decayScore: 1.0, source: 's', contentFp: '', agentId: 'a',
   };
   it('live payload encodes 1.0', () => {
-    const a = Buffer.from(encodeFactProtobuf({ ...base, decayScore: liveDecayScore() })).toString('hex');
-    expect(a).toBe(Buffer.from(encodeFactProtobuf(base)).toString('hex'));
+    const a = Buffer.from(encodeFactProtobufKeyed({ ...base, decayScore: liveDecayScore() })).toString('hex');
+    expect(a).toBe(Buffer.from(encodeFactProtobufKeyed(base)).toString('hex'));
   });
   it('a decayScore 0 payload (tombstone) is encoded with 0, not the live value', () => {
-    const hex = Buffer.from(encodeFactProtobuf({ ...base, decayScore: 0 })).toString('hex');
-    expect(hex).not.toBe(Buffer.from(encodeFactProtobuf(base)).toString('hex'));
+    const hex = Buffer.from(encodeFactProtobufKeyed({ ...base, decayScore: 0 })).toString('hex');
+    expect(hex).not.toBe(Buffer.from(encodeFactProtobufKeyed(base)).toString('hex'));
   });
 });

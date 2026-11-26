@@ -11,6 +11,7 @@ import {
 } from '../src/tools/set-scope';
 import type { MetadataOpDeps } from '../src/tools/retype';
 import { buildV1ClaimBlob } from '../src/claims-helper';
+import { MOCK_KEYED_TAGS } from './helpers/keyed-fixture';
 
 describe('setScopeToolDefinition', () => {
   test('name', () => {
@@ -81,8 +82,9 @@ function makeDeps(overrides: Partial<MetadataOpDeps> = {}): MetadataOpDeps & { _
       submitted.push(payloads);
       return { txHash: '0xabc123', success: true };
     },
+    fetchIndexScheme: async () => 1, // internal#573: keyed fact (guard passes)
     async generateIndices() {
-      return { blindIndices: ['m1'], encryptedEmbedding: 'e1' };
+      return { blindIndices: MOCK_KEYED_TAGS, encryptedEmbedding: 'e1' };
     },
   };
   const merged = { ...base, ...overrides } as MetadataOpDeps & { _submitted: Buffer[][] };
