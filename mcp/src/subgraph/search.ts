@@ -34,6 +34,21 @@
 
 import { getSubgraphConfig } from './store.js';
 import { buildSubgraphHeaders } from './headers.js';
+import {
+  RelayReadBlocked,
+  RelayReadError,
+  classifySubgraphError,
+  clearReadBlock,
+  getReadBlock,
+  setReadBlock,
+} from './read-block.js';
+
+export {
+  RelayReadBlocked,
+  RelayReadError,
+  RelayReadQuotaExceeded,
+  RelayRateLimited,
+} from './read-block.js';
 
 export interface SubgraphSearchFact {
   id: string;
@@ -54,7 +69,13 @@ const FACT_FETCH_BATCH_SIZE = 100;
 
 /**
  * Execute a single GraphQL query against the subgraph endpoint.
- * Returns null on any network or HTTP error (never throws).
+ *
+ * Returns null on a network error or a GraphQL-level failure (never throws
+ * for those). A non-2xx relay answer throws a `RelayReadError`; a read denial
+ * (429 `read_quota_exceeded` / `rate_limited`, legacy 403 `quota_exceeded`)
+ * throws a `RelayReadBlocked` and pauses reads for this wallet, so later
+ * calls throw without a network request until the pause ends (internal #662,
+ * same contract as the Python client). A denial is never an empty result.
  */
 async function gqlQuery<T>(
   endpoint: string,
@@ -63,6 +84,8 @@ async function gqlQuery<T>(
   walletAddress: string,
   authKeyHex?: string,
 ): Promise<T | null> {
+  const paused = getReadBlock(walletAddress);
+  if (paused) throw paused.error;
   try {
     const headers = buildSubgraphHeaders({ walletAddress, authKeyHex });
     const response = await fetch(endpoint, {
@@ -71,9 +94,13 @@ async function gqlQuery<T>(
       body: JSON.stringify({ query, variables }),
     });
     if (!response.ok) {
-      console.error(`[search] gqlQuery HTTP ${response.status}: ${await response.text().catch(() => 'no body')}`);
-      return null;
+      const bodyText = await Promise.resolve(response.text?.()).catch(() => '') ?? '';
+      const err = classifySubgraphError(response.status, bodyText, response.headers?.get?.('retry-after') ?? null);
+      if (err instanceof RelayReadBlocked) setReadBlock(err, walletAddress);
+      else console.error(`[search] gqlQuery HTTP ${response.status}: ${bodyText.slice(0, 200) || 'no body'}`);
+      throw err;
     }
+    clearReadBlock(walletAddress);
     const json = await response.json() as { data?: T; errors?: unknown[] };
     if (json.errors) {
       console.error(`[search] gqlQuery GraphQL errors:`, JSON.stringify(json.errors));
@@ -83,8 +110,39 @@ async function gqlQuery<T>(
     }
     return json.data ?? null;
   } catch (err) {
+    if (err instanceof RelayReadError) throw err;
     console.error(`[search] gqlQuery exception:`, err);
     return null;
+  }
+}
+
+/**
+ * For the callers that treat a relay failure as "no data" (id lookup, fact
+ * counts): swallow a plain non-2xx error as before, but let a read denial
+ * through so it is never mistaken for "not found" or a zero count.
+ */
+async function nullUnlessBlocked<T>(p: Promise<T | null>): Promise<T | null> {
+  try {
+    return await p;
+  } catch (err) {
+    if (err instanceof RelayReadBlocked) throw err;
+    return null;
+  }
+}
+
+/**
+ * Keep a plain (non-denial) relay failure for later and resolve null, so one
+ * failed query does not drop the others (as before). A read denial throws.
+ */
+async function keepFailure<T>(p: Promise<T | null>, failures: RelayReadError[]): Promise<T | null> {
+  try {
+    return await p;
+  } catch (err) {
+    if (err instanceof RelayReadError && !(err instanceof RelayReadBlocked)) {
+      failures.push(err);
+      return null;
+    }
+    throw err;
   }
 }
 
@@ -179,10 +237,16 @@ async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
+  let failed = false;
   const worker = async (): Promise<void> => {
-    while (next < items.length) {
+    while (!failed && next < items.length) {
       const i = next++;
-      results[i] = await fn(items[i]);
+      try {
+        results[i] = await fn(items[i]);
+      } catch (err) {
+        failed = true; // stop the other workers from starting more queries
+        throw err;
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
@@ -204,15 +268,21 @@ async function fetchFactPayloads(
   for (let i = 0; i < ids.length; i += FACT_FETCH_BATCH_SIZE) {
     batches.push(ids.slice(i, i + FACT_FETCH_BATCH_SIZE));
   }
+  const failures: RelayReadError[] = [];
   const pages = await mapWithConcurrency(batches, SEARCH_QUERY_CONCURRENCY, (batch) =>
-    gqlQuery<{ facts?: SubgraphSearchFact[] }>(
-      subgraphUrl,
-      FACTS_BY_IDS_QUERY,
-      { ids: batch, owner, first: batch.length },
-      owner,
-      authKeyHex,
+    keepFailure(
+      gqlQuery<{ facts?: SubgraphSearchFact[] }>(
+        subgraphUrl,
+        FACTS_BY_IDS_QUERY,
+        { ids: batch, owner, first: batch.length },
+        owner,
+        authKeyHex,
+      ),
+      failures,
     ),
   );
+  // Some batches failing keeps the rest; every batch failing is an error, not "no facts".
+  if (failures.length === batches.length) throw failures[0];
   const payloads = new Map<string, SubgraphSearchFact>();
   for (const page of pages) {
     for (const fact of page?.facts ?? []) {
@@ -267,20 +337,26 @@ export async function searchSubgraph(
   }
 
   // Phase 1: Parallel initial queries (one per chunk).
+  const chunkFailures: RelayReadError[] = [];
   const initialResults = await mapWithConcurrency(
     chunks,
     SEARCH_QUERY_CONCURRENCY,
     async (chunk) => {
-      const searchJson = await gqlQuery<SearchResponse>(
-        subgraphUrl,
-        SEARCH_QUERY,
-        { trapdoors: chunk, owner, first: pageSize },
-        owner,
-        authKeyHex,
+      const searchJson = await keepFailure(
+        gqlQuery<SearchResponse>(
+          subgraphUrl,
+          SEARCH_QUERY,
+          { trapdoors: chunk, owner, first: pageSize },
+          owner,
+          authKeyHex,
+        ),
+        chunkFailures,
       );
       return { chunk, entries: searchJson?.blindIndexes ?? [] };
     },
   );
+  // Every chunk failing (5xx etc.) is an error, not an empty vault.
+  if (chunks.length > 0 && chunkFailures.length === chunks.length) throw chunkFailures[0];
 
   // Collect initial hit ids and identify saturated batches.
   const saturatedChunks: string[][] = [];
@@ -301,13 +377,13 @@ export async function searchSubgraph(
     let lastId = '';
 
     while (hitIds.size < maxCandidates) {
-      const pageJson = await gqlQuery<SearchResponse>(
+      const pageJson = await nullUnlessBlocked(gqlQuery<SearchResponse>(
         subgraphUrl,
         PAGINATE_QUERY,
         { trapdoors: chunk, owner, first: pageSize, lastId },
         owner,
         authKeyHex,
-      );
+      ));
 
       const entries = pageJson?.blindIndexes ?? [];
       if (entries.length === 0) break;
@@ -400,13 +476,13 @@ export async function getSubgraphFactCount(
     }
   `;
 
-  const countJson = await gqlQuery<{ globalStates?: Array<{ totalFacts: string }> }>(
+  const countJson = await nullUnlessBlocked(gqlQuery<{ globalStates?: Array<{ totalFacts: string }> }>(
     subgraphUrl,
     query,
     {},
     owner,
     authKeyHex,
-  );
+  ));
 
   if (countJson?.globalStates && countJson.globalStates.length > 0) {
     const count = parseInt(countJson.globalStates[0].totalFacts, 10);
@@ -450,13 +526,13 @@ export async function getOwnerFactCount(
     const variables: Record<string, unknown> = { owner, first: pageSize };
     if (lastId) variables.lastId = lastId;
 
-    const factsPageJson = await gqlQuery<{ facts?: Array<{ id: string }> }>(
+    const factsPageJson = await nullUnlessBlocked(gqlQuery<{ facts?: Array<{ id: string }> }>(
       subgraphUrl,
       query,
       variables,
       owner,
       authKeyHex,
-    );
+    ));
 
     const facts = factsPageJson?.facts ?? [];
     total += facts.length;
@@ -479,8 +555,8 @@ export type FactLookup =
 
 /**
  * Look a fact up by its ID (the client-generated UUID). `absent` covers "not
- * indexed yet", another owner's fact and every relay error (`gqlQuery` never
- * throws); `inactive` means the owner's fact exists and was forgotten/replaced.
+ * indexed yet", another owner's fact and every relay error except a read
+ * denial (a `RelayReadBlocked` propagates); `inactive` means the owner's fact exists and was forgotten/replaced.
  */
 export async function lookupFactById(
   owner: string,
@@ -509,13 +585,13 @@ export async function lookupFactById(
     }
   `;
 
-  const factByIdJson = await gqlQuery<{ fact?: (SubgraphSearchFact & { owner: string }) | null }>(
+  const factByIdJson = await nullUnlessBlocked(gqlQuery<{ fact?: (SubgraphSearchFact & { owner: string }) | null }>(
     subgraphUrl,
     query,
     { id: factId },
     owner,
     authKeyHex,
-  );
+  ));
 
   const fact = factByIdJson?.fact;
   if (!fact) return { state: 'absent' };
@@ -562,6 +638,8 @@ export async function fetchFactForForget(
       fact(id: $id) { id owner isActive encryptedBlob }
     }
   `;
+  const paused = getReadBlock(owner);
+  if (paused) throw paused.error;
   const headers = buildSubgraphHeaders({ walletAddress: owner, authKeyHex });
   const response = await fetch(subgraphUrl, {
     method: 'POST',
