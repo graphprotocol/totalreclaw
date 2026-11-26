@@ -292,14 +292,19 @@ def _run_relay_pair_on_thread(
 
     def _configure_from_phrase(token_tag: str, phrase: str) -> dict:
         """Synchronous credential write — runs on the thread's executor."""
+        kept = None
         if replace:
             # Reached only after the user confirmed on the pairing page.
             # Outside the try so a failure nacks the relay untouched.
             from .auto_migrate import preserve_credentials_before_replace
 
-            preserve_credentials_before_replace()
+            kept = preserve_credentials_before_replace()
         try:
-            state.configure(phrase)
+            state.configure(phrase, require_save=True) if replace else state.configure(phrase)
+            if replace:
+                from .auto_migrate import finish_credentials_replace
+
+                finish_credentials_replace(kept)
             client = state.get_client()
             eoa = client.eoa_address if client else None
             logger.info(
@@ -309,6 +314,10 @@ def _run_relay_pair_on_thread(
             )
             return {"state": "active", "account_id": eoa}
         except Exception as err:
+            if replace:
+                from .auto_migrate import abort_credentials_replace
+
+                abort_credentials_replace(kept)
             logger.error(
                 "pair.relay_decrypt_failed token=%s… stage=configure err=%r",
                 token_tag,

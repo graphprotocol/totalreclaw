@@ -257,7 +257,7 @@ def fake_state(monkeypatch: pytest.MonkeyPatch):
 
     log: list = []
 
-    def fake_configure(self, mnemonic: str) -> None:
+    def fake_configure(self, mnemonic: str, **_kw) -> None:
         log.append("configure" if mnemonic == TEST_PHRASE else "configure-wrong")
         creds = Path(os.environ["HOME"]) / ".totalreclaw" / "credentials.json"
         creds.parent.mkdir(parents=True, exist_ok=True)

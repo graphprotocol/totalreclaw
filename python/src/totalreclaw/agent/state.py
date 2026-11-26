@@ -215,6 +215,10 @@ class AgentState:
         server_url: Optional[str] = None,
     ):
         self._client = None
+        # (#618) Fingerprint of credentials.json as last loaded/written by
+        # THIS process; a change made by someone else (a replace-mode pair
+        # completed by the sidecar) triggers an in-process reload.
+        self._creds_fingerprint: Optional[tuple] = None
         self._turn_count = 0
         self._messages: list[dict] = []
         self._last_processed_idx = 0
@@ -315,7 +319,7 @@ class AgentState:
         self._env_recall_top_k_override = recall_top_k_env is not None
         self._env_max_facts_override = max_facts_env is not None
 
-    def _try_auto_configure(self) -> None:
+    def _try_auto_configure(self, persist: bool = True) -> None:
         """Try to configure from env vars or config file.
 
         Four-state credential precedence (Option E Phase 2 / #581,
@@ -348,7 +352,7 @@ class AgentState:
                 "that can read this host's environment for as long as it "
                 "is set. See docs/guides/headless-deployment.md."
             )
-            self.configure(mnemonic)
+            self.configure(mnemonic, persist=persist)
             return
 
         # cred-3 stage 3 — route credential discovery through the
@@ -398,7 +402,7 @@ class AgentState:
             logger.warning("%s", str(err))
             return
         if mnemonic:
-            self.configure(mnemonic)
+            self.configure(mnemonic, persist=persist)
 
     def _configure_from_v2_credentials(self, creds: dict) -> None:
         """Build a ``DerivedBundle`` from a ``version: 2`` credentials dict
@@ -459,7 +463,9 @@ class AgentState:
         parsed_bundle = bundle_module.parse_bundle_v1(_json.dumps(full))
         self.configure_from_bundle(parsed_bundle)
 
-    def configure(self, mnemonic: str) -> None:
+    def configure(
+        self, mnemonic: str, *, persist: bool = True, require_save: bool = False
+    ) -> None:
         """Configure the TotalReclaw client with a mnemonic.
 
         Write policy (Bug #7 / Wave 2a):
@@ -471,6 +477,12 @@ class AgentState:
           * Otherwise (file missing, or already has ``mnemonic``), emit
             the canonical ``{"mnemonic": ...}`` shape. Matches what
             plugin 3.2.0 writes, giving cross-client portability.
+
+        ``persist=False`` skips every credentials write (used by the
+        read-only reload path). ``require_save=True`` (replace-mode
+        pairing) makes a failed ``credentials.json`` write raise
+        ``RuntimeError`` BEFORE the in-memory client is switched, so the
+        process never runs on a phrase the file does not hold.
         """
         from totalreclaw.client import TotalReclaw
         # 2.3.3-rc.1 — single-source-of-truth default URL resolution.
@@ -479,7 +491,7 @@ class AgentState:
         from totalreclaw.relay import _default_relay_url
 
         relay_url = self._server_url or _default_relay_url()
-        self._client = TotalReclaw(mnemonic=mnemonic, relay_url=relay_url)
+        new_client = TotalReclaw(mnemonic=mnemonic, relay_url=relay_url)
 
         # cred-3 stage 3 — route the credential write through the
         # credential-provider abstraction. In default ``file`` mode this is
@@ -506,7 +518,7 @@ class AgentState:
                 # untouched (Bug #7 / Wave 2a write policy).
                 should_preserve_legacy = True
 
-        if not should_preserve_legacy:
+        if not should_preserve_legacy and persist:
             if provider.mode == "file":
                 # cred-2 (internal#262): keychain-wrap the mnemonic at rest.
                 # ``wrap_credentials`` stores the phrase in the OS keychain and
@@ -518,12 +530,19 @@ class AgentState:
                 # wrapped on first boot (best-effort, silent on failure).
                 from totalreclaw.credentials_wrap import wrap_credentials
 
-                provider.save(wrap_credentials({"mnemonic": mnemonic}))
+                saved = provider.save(wrap_credentials({"mnemonic": mnemonic}))
+                if require_save and not saved:
+                    raise RuntimeError(
+                        "failed to write credentials.json; the previous "
+                        "account was kept"
+                    )
             else:
                 # ``external`` mode is a no-op (read-only provider) — the
                 # secret manager owns the mnemonic. Do NOT additionally wrap
                 # it into the local keychain (would split the source of truth).
                 provider.save({"mnemonic": mnemonic})
+
+        self._client = new_client
 
         # 2.3.2-rc.1 (#192): clear any stale eager-account-register
         # latch attached by ``totalreclaw.hermes.hooks._eager_account_
@@ -541,6 +560,7 @@ class AgentState:
         # `resolve_address()` has run, and `configure()` is synchronous. The
         # EOA is what we have at this point; the Smart Account address is
         # resolved lazily on the first remember/recall call.
+        self._record_credentials_fingerprint()
         logger.info("TotalReclaw configured: eoa=%s", self._client.eoa_address)
 
     def configure_from_bundle(self, bundle) -> None:
@@ -568,6 +588,8 @@ class AgentState:
             except AttributeError:
                 pass
 
+        self._record_credentials_fingerprint()
+
         # Unlike configure(), the Smart Account address IS already known
         # here (bundle mode resolves it at construction — see
         # TotalReclaw.from_bundle) — safe to log immediately.
@@ -581,8 +603,63 @@ class AgentState:
         return self._client is not None
 
     def get_client(self):
-        """Return the TotalReclaw client, or None if not configured."""
+        """Return the TotalReclaw client, or None if not configured.
+
+        If ``credentials.json`` was replaced on disk since this process last
+        loaded it (a confirmed replace-mode pairing finished by the
+        completion sidecar), the client is rebuilt from the new file first,
+        so the running gateway never keeps serving the previous account.
+        """
+        self._reload_if_credentials_replaced()
         return self._client
+
+    @staticmethod
+    def _credentials_fingerprint() -> Optional[tuple]:
+        """(inode, mtime_ns, size) of the file-mode credentials, or None
+        (external provider mode, env-phrase mode, or no file)."""
+        if os.environ.get("TOTALRECLAW_RECOVERY_PHRASE"):
+            return None
+        try:
+            from totalreclaw.credential_provider import (
+                _resolve_credentials_path,
+                get_credential_provider,
+            )
+
+            if get_credential_provider().mode != "file":
+                return None
+            st = os.stat(_resolve_credentials_path())
+        except Exception:  # noqa: BLE001 — never break a tool call on a stat
+            return None
+        return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+    def _record_credentials_fingerprint(self) -> None:
+        self._creds_fingerprint = self._credentials_fingerprint()
+
+    def _reload_if_credentials_replaced(self) -> None:
+        recorded = self._creds_fingerprint
+        if recorded is None or self._client is None:
+            return
+        current = self._credentials_fingerprint()
+        if current is None or current == recorded:
+            return
+        # Record first: a failed reload must not retry on every call.
+        self._creds_fingerprint = current
+        try:
+            old_client = self._client
+            self._try_auto_configure(persist=False)
+            if self._client is not old_client:
+                self._billing_cache = None
+                self._billing_cache_time = 0.0
+                logger.info(
+                    "TotalReclaw: credentials.json changed on disk; reloaded "
+                    "the in-process client."
+                )
+        except Exception:  # noqa: BLE001 — keep serving the previous client
+            logger.warning(
+                "TotalReclaw: credentials.json changed on disk but reloading "
+                "it failed; keeping the previous account until restart.",
+                exc_info=True,
+            )
 
     # Session id (memq-3)
     #

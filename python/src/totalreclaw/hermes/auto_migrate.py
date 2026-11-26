@@ -95,7 +95,9 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -294,46 +296,101 @@ def _resolve_smart_account(mnemonic: str, creds: dict) -> Optional[str]:
         return None
 
 
-def preserve_credentials_before_replace() -> None:
-    """Keep the outgoing account's credential files before a user-confirmed
-    replacement pairing overwrites them.
+@dataclass(frozen=True)
+class ReplacePreservation:
+    """What :func:`preserve_credentials_before_replace` kept, so the caller
+    can finish (after a successful write) or abort (after a failed one)."""
 
-    - ``credentials.json`` is copied to ``credentials.json.replaced-<UTC>``
-      (mode 0600 from the first byte; the original stays in place until
-      the new credentials are written over it).
-    - ``credentials.json.bak`` (this module's root backup from an earlier
-      migration), if present, is renamed to ``credentials.json.bak.replaced-<UTC>``
-      so migrating the NEW account cannot overwrite it.
+    copy_path: Optional[Path]
+    stamp: str
 
-    The copies are bytes-for-bytes: no parsing, nothing logged but paths.
-    A no-op outside ``file`` credential mode (an external secret manager
-    owns its own history). Raises ``OSError`` if a copy cannot be made, so
-    the caller fails the pairing rather than overwrite unpreserved files.
+
+def _unique_stamp() -> str:
+    now = time.time()
+    ms = int((now % 1) * 1000)
+    return (
+        time.strftime("%Y%m%dT%H%M%S", time.gmtime(now))
+        + f"{ms:03d}Z-{secrets.token_hex(3)}"
+    )
+
+
+def preserve_credentials_before_replace() -> Optional[ReplacePreservation]:
+    """Copy the outgoing account's ``credentials.json`` to
+    ``credentials.json.replaced-<UTC>`` before a user-confirmed replacement
+    pairing overwrites it.
+
+    Only COPIES. Nothing is moved or deleted here, so a failure later in
+    the pairing leaves every original file where it was. The caller then
+    writes the new credentials and calls :func:`finish_credentials_replace`
+    (rotates ``credentials.json.bak`` aside) or, on failure,
+    :func:`abort_credentials_replace`.
+
+    The copy is made with an exclusive open (mode 0600 from the first byte,
+    millisecond stamp + random suffix) so two replaces can never overwrite
+    each other's copy. Bytes-for-bytes: no parsing, nothing logged but
+    paths. Returns ``None`` outside ``file`` credential mode. Raises
+    ``OSError`` if the copy cannot be made, so the caller fails the pairing
+    rather than overwrite unpreserved files.
     """
     from totalreclaw.credential_provider import get_credential_provider
 
     if get_credential_provider().mode != "file":
-        return
+        return None
 
     creds_path = _credentials_path()
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    stamp = _unique_stamp()
+    dest: Optional[Path] = None
 
     if creds_path.exists():
         dest = creds_path.parent / f"{creds_path.name}.replaced-{stamp}"
         data = creds_path.read_bytes()
-        fd = os.open(str(dest), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        fd = os.open(str(dest), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, "wb") as f:
+            os.fchmod(f.fileno(), 0o600)  # os.open's mode is umask-masked
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
         del data
         logger.info("pair replace: kept the previous credentials at %s", dest)
+    return ReplacePreservation(copy_path=dest, stamp=stamp)
 
-    bak_path = creds_path.parent / f"{creds_path.name}.bak"
-    if bak_path.exists():
-        dest = creds_path.parent / f"{bak_path.name}.replaced-{stamp}"
-        os.replace(bak_path, dest)
-        logger.info("pair replace: kept the previous credentials backup at %s", dest)
+
+def finish_credentials_replace(kept: Optional[ReplacePreservation]) -> None:
+    """Call only AFTER the new credentials are durably written: move the
+    previous ``credentials.json.bak`` aside so migrating the NEW account
+    cannot overwrite it. Best-effort (never fails the pairing)."""
+    if kept is None:
+        return
+    try:
+        creds_path = _credentials_path()
+        bak_path = creds_path.parent / f"{creds_path.name}.bak"
+        if bak_path.exists():
+            dest = creds_path.parent / f"{bak_path.name}.replaced-{kept.stamp}"
+            if not dest.exists():
+                os.replace(bak_path, dest)
+                logger.info(
+                    "pair replace: kept the previous credentials backup at %s", dest
+                )
+    except OSError:
+        logger.warning("pair replace: could not rotate the old .bak", exc_info=True)
+
+
+def abort_credentials_replace(kept: Optional[ReplacePreservation]) -> None:
+    """Call when the write failed: remove the ``.replaced-*`` copy, but only
+    if ``credentials.json`` is still a regular file byte-identical to it
+    (otherwise the copy may be the only record of the old account)."""
+    if kept is None or kept.copy_path is None:
+        return
+    try:
+        creds_path = _credentials_path()
+        if (
+            creds_path.is_file()
+            and not creds_path.is_symlink()
+            and creds_path.read_bytes() == kept.copy_path.read_bytes()
+        ):
+            kept.copy_path.unlink()
+    except OSError:
+        logger.debug("pair replace: abort cleanup skipped", exc_info=True)
 
 
 def _register_vault(mnemonic: str) -> bool:
@@ -557,6 +614,7 @@ def _do_migrate(creds_path: Path) -> bool:
     try:
         fd = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:  # takes ownership of fd
+            os.fchmod(f.fileno(), 0o600)  # os.open's mode is umask-masked
             f.write(json.dumps(v2_creds, indent=2))
             f.flush()
             os.fsync(f.fileno())

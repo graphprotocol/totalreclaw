@@ -526,6 +526,7 @@ async def _drive_full_pair_session(
         # spawn-time path.
         from totalreclaw.agent.state import AgentState
 
+        kept = None
         if replace:
             # Only reached once the user confirmed the replacement on the
             # pairing page (await_phrase_upload checks first). Outside the
@@ -535,11 +536,17 @@ async def _drive_full_pair_session(
                 preserve_credentials_before_replace,
             )
 
-            preserve_credentials_before_replace()
+            kept = preserve_credentials_before_replace()
 
         state = AgentState()
         try:
-            state.configure(phrase)
+            state.configure(phrase, require_save=True) if replace else state.configure(phrase)
+            if replace:
+                from totalreclaw.hermes.auto_migrate import (
+                    finish_credentials_replace,
+                )
+
+                finish_credentials_replace(kept)
             client = state.get_client()
             eoa = client.eoa_address if client else None
             logger.info(
@@ -550,6 +557,12 @@ async def _drive_full_pair_session(
             paired_client = client
             return {"state": "active", "account_id": eoa}
         except Exception as err:
+            if replace:
+                from totalreclaw.hermes.auto_migrate import (
+                    abort_credentials_replace,
+                )
+
+                abort_credentials_replace(kept)
             logger.error(
                 "pair.sidecar: state.configure failed token=%s… err=%r",
                 token_tag,
@@ -572,14 +585,17 @@ async def _drive_full_pair_session(
         from totalreclaw.credential_provider import get_credential_provider
         from totalreclaw.hermes.auto_migrate import (
             bundle_secret_subtree_json,
+            abort_credentials_replace,
+            finish_credentials_replace,
             preserve_credentials_before_replace,
             v2_credentials_dict,
         )
 
+        kept = None
         if replace:
             # Same as the phrase path: keep the outgoing credentials first,
             # or fail the pairing without touching them.
-            preserve_credentials_before_replace()
+            kept = preserve_credentials_before_replace()
 
         try:
             # Defensive check beyond parse_bundle_v1's own validation
@@ -612,6 +628,8 @@ async def _drive_full_pair_session(
             # external mode: read-only by design (the secret manager owns
             # the source of truth) — same no-additional-write contract
             # AgentState.configure() already has for the legacy path.
+            if replace:
+                finish_credentials_replace(kept)
 
             state = AgentState()
             state.configure_from_bundle(bundle)
@@ -626,6 +644,8 @@ async def _drive_full_pair_session(
             )
             return {"state": "active", "account_id": address}
         except Exception as err:
+            if replace:
+                abort_credentials_replace(kept)
             # Exception-class-only logging (2026-08-03 fix, coordinator
             # review on #592) — never %r/exc_info here. This branch
             # handles a derived-bundle-v1 payload; a ValueError from

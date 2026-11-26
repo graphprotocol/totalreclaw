@@ -46,6 +46,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Optional, Protocol
@@ -127,6 +128,40 @@ class CredentialProvider(Protocol):
         ...
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write *text* to *path* atomically with mode 0600.
+
+    Raises ``OSError`` on failure; the previous file (if any) is never
+    left half-written and the temp file is removed.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.name}.{secrets.token_hex(6)}.tmp"
+    fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:  # takes ownership of fd
+            # os.open's mode is umask-masked; force owner-only explicitly.
+            os.fchmod(f.fileno(), 0o600)
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    # Best-effort: persist the rename itself.
+    try:
+        dfd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # FileCredentialProvider — default; reads / writes credentials.json
 # ---------------------------------------------------------------------------
@@ -174,9 +209,15 @@ class FileCredentialProvider:
         return parsed
 
     def save(self, creds: CredentialsDict) -> bool:
+        """Atomically replace ``credentials.json`` (mode 0600 from byte one).
+
+        Temp file in the same directory (exclusive create), fsync, then
+        ``os.replace``: at every instant the path holds either the complete
+        old file or the complete new one. A symlinked path is replaced, not
+        written through. On failure the old file is left untouched.
+        """
         try:
-            self.credentials_path.parent.mkdir(parents=True, exist_ok=True)
-            self.credentials_path.write_text(json.dumps(creds, indent=2))
+            atomic_write_text(self.credentials_path, json.dumps(creds, indent=2))
         except OSError:
             logger.warning(
                 "FileCredentialProvider.save: failed to write %s",
@@ -184,19 +225,6 @@ class FileCredentialProvider:
                 exc_info=True,
             )
             return False
-
-        # Best-effort mode 0o600 — matches the inline pattern in
-        # hermes/cli.py (Windows / read-only FS may reject; we accept that
-        # rather than block save). Never log the payload.
-        try:
-            self.credentials_path.chmod(0o600)
-        except OSError:
-            logger.debug(
-                "FileCredentialProvider.save: chmod 0600 failed on %s",
-                self.credentials_path,
-                exc_info=True,
-            )
-
         return True
 
     def clear(self) -> bool:
