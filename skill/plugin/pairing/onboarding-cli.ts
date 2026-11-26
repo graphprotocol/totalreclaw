@@ -48,6 +48,7 @@ import { wordlist } from '@scure/bip39/wordlists/english.js';
 import {
   writeCredentialsJson,
   loadCredentialsJson,
+  hasExistingAccount,
   type CredentialsFile,
   writeOnboardingState,
   loadOnboardingState,
@@ -386,8 +387,7 @@ export async function runOnboardingWizard(deps: WizardDeps): Promise<WizardResul
 
   // If onboarding is already complete on disk, short-circuit instead of
   // letting the user overwrite an existing phrase by accident.
-  const existingCreds = loadCredentialsJson(credentialsPath);
-  if (existingCreds?.mnemonic && typeof existingCreds.mnemonic === 'string' && existingCreds.mnemonic.trim()) {
+  if (hasExistingAccount(credentialsPath)) {
     io.stdout.write(COPY.alreadyActive);
     const persisted = loadOnboardingState(statePath);
     return {

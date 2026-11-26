@@ -20,6 +20,7 @@ import {
   writeCredentialsJson,
 } from '../fs-helpers.js';
 import { runRelayPairCli } from './pair-cli-relay.js';
+import { registerPairCli } from './pair-cli.js';
 import { encryptPairingPayload, generateGatewayKeypair } from './pair-crypto.js';
 
 let n = 0;
@@ -51,6 +52,13 @@ const OLD = { mnemonic: 'dummy old phrase', userId: 'old-user', salt: 'old-salt'
   ok('mnemonic is an account', hasExistingAccount(p));
   fs.writeFileSync(p, JSON.stringify({ version: 2, account: { smart_account: '0x1' } }));
   ok('bundle shape is an account', hasExistingAccount(p));
+  fs.writeFileSync(p, JSON.stringify({ scope_address: '0x0000000000000000000000000000000000000001' }));
+  ok('scope_address only is an account', hasExistingAccount(p));
+  ok('guard refuses a scope_address-only file', existingAccountGuard(p, { replace: false }) === 'existing_account');
+  fs.writeFileSync(p, JSON.stringify({ salt: 'c2FsdA==' }));
+  ok('salt only is an account', hasExistingAccount(p));
+  fs.writeFileSync(p, JSON.stringify({ salt: '  ', scope_address: '', serverUrl: 'x' }));
+  ok('blank salt/scope_address and unrelated settings are no account', !hasExistingAccount(p));
   fs.writeFileSync(p, '{not json');
   ok('unparseable non-empty file counts as an account', hasExistingAccount(p));
   ok('guard refuses without replace', existingAccountGuard(p, { replace: false }) === 'existing_account');
@@ -201,6 +209,56 @@ async function runCli(p: string, relayUrl: string, replace: boolean) {
     const { outcome } = await runCli(p, relay.url, false);
     ok('fresh pairing still works', outcome.status === 'completed' && JSON.parse(fs.readFileSync(p, 'utf-8')).mnemonic === PHRASE);
     relay.close();
+  }
+  // leftover file with only scope_address: CLI refuses, no session, file untouched
+  {
+    const relay = await startRelay({ echoReplace: true, confirm: true });
+    const p = freshPath();
+    fs.writeFileSync(p, JSON.stringify({ scope_address: '0x0000000000000000000000000000000000000001' }));
+    const before = fs.readFileSync(p, 'utf-8');
+    const { outcome } = await runCli(p, relay.url, false);
+    ok('CLI refuses over a scope_address-only leftover', outcome.status === 'error');
+    ok('scope_address leftover: file untouched, no relay session', fs.readFileSync(p, 'utf-8') === before && relay.seen.length === 0);
+    relay.close();
+  }
+  // fresh pairing never inherits account fields from a file
+  {
+    const relay = await startRelay({ echoReplace: false, confirm: false });
+    const p = freshPath();
+    fs.writeFileSync(p, JSON.stringify({ serverUrl: 'keep-me' }));
+    const { outcome } = await runCli(p, relay.url, false);
+    const now = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    ok('fresh pairing keeps unrelated settings and writes its own salt', outcome.status === 'completed' && now.serverUrl === 'keep-me' && typeof now.salt === 'string');
+  }
+  // pair with no relay runner (effective mode = local) over an account: refused at start
+  {
+    const mk = (name: string): any => {
+      const c: any = { _name: name, _action: null, commands: [] as any[],
+        name() { return this._name; },
+        command(n: string) { const ch = mk(n); this.commands.push(ch); return ch; },
+        description() { return this; }, option() { return this; },
+        action(fn: any) { this._action = fn; return this; } };
+      return c;
+    };
+    const program = mk('openclaw');
+    let started = false;
+    registerPairCli(program, {
+      sessionsPath: path.join(tmp, 'sessions.json'),
+      renderPairingUrl: () => { started = true; return 'x'; },
+      logger: { info() {}, warn() {}, error() {} },
+      hasExistingAccount: () => true,
+    });
+    const pairCmd = program.commands[0].commands[0];
+    const err = sink();
+    const realErr = process.stderr.write.bind(process.stderr);
+    const realExit = process.exit;
+    let exitCode: number | undefined;
+    (process.stderr as any).write = (c: any) => { err.stream.write(c); return true; };
+    (process as any).exit = (code?: number) => { exitCode ??= code; throw new Error('__exit__'); };
+    try { await pairCmd._action('generate', {}, pairCmd); } catch (e) { if ((e as Error).message !== '__exit__') throw e; }
+    finally { (process.stderr as any).write = realErr; (process as any).exit = realExit; }
+    ok('pair without relay runner over an account: refused at start (exit 1)', exitCode === 1 && /already has a TotalReclaw account/.test(err.text()));
+    ok('and no local session was started', !started);
   }
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`# ${n - failed} passed, ${failed} failed`);

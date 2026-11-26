@@ -378,9 +378,10 @@ export async function runRelayPairCli(
             keptCopy = preserveCredentialsBeforeReplace(opts.credentialsPath);
           }
           const creds = loadCredentialsJson(opts.credentialsPath) ?? {};
-          // A replace starts from a clean slate: nothing of the outgoing
+          // Every pairing starts from a clean slate (a non-replace pairing only
+          // gets here when the guard found no account evidence): nothing of the outgoing
           // account (its userId, salt, address) may sit next to the new phrase.
-          const base = replace ? stripAccountFields(creds) : creds;
+          const base = stripAccountFields(creds);
           const next: typeof creds = { ...base, mnemonic, salt: saltB64 };
           if (registeredUserId) next.userId = registeredUserId;
           if (scopeAddress) next.scope_address = scopeAddress;

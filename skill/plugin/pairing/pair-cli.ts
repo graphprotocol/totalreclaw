@@ -548,7 +548,7 @@ export function registerPairCli(
             );
             process.exit(1);
           }
-          if (opts.local && deps.hasExistingAccount?.()) {
+          if (!useRelay && deps.hasExistingAccount?.()) {
             io.stderr.write(
               '\nThis machine already has a TotalReclaw account. Pairing would replace it, so it was not started.\n',
             );

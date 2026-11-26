@@ -7,6 +7,9 @@
 - **Pairing no longer overwrites an existing account (internal#610).** `openclaw totalreclaw pair` now refuses to start when `credentials.json` already holds an account. `--replace` is the explicit operator opt-in: it needs relay mode, opens a replace-mode session (the pairing page warns and the user confirms there; a relay that cannot ask for confirmation is refused), keeps the old file as `credentials.json.replaced-<UTC>` (0600, exclusive create), and writes the new credentials without carrying over the old account's `userId`, `salt` or address. `--local` cannot replace.
 - **The gateway's pairing routes refuse to overwrite an existing account.** The routes are registered with `auth: 'plugin'`, so anyone who can reach the gateway port can start a pairing; the completion step now returns `existing_account` instead of replacing `mnemonic`. Replacement is operator-only, through `--replace`. Route auth is unchanged.
 - **`credentials.json` is written atomically** (exclusive temp file with mode 0600, fsync, rename), so a crash never leaves a half-written file. `pair-remote-client` gains `replace` support matching the Python and MCP clients. Tests: `pairing/pair-existing-account-guard.test.ts`.
+- **The account guard now also counts a leftover `salt` or `scope_address` as an account** (a file that lost its phrase and `userId` but kept those fields used to pass, and the new account inherited the old Smart Account address). Every new pairing now starts from a clean slate for account fields, not only a replace.
+- **`openclaw totalreclaw onboard` no longer overwrites a bundle-shaped or otherwise non-empty account file.** Its already-active check now uses the same account detection as `pair`.
+- **`openclaw totalreclaw pair` over an existing account is refused at start whenever the effective mode is local** (not only with an explicit `--local`), for example when no relay runner is available.
 
 ### Changed
 

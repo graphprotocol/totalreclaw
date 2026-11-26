@@ -180,6 +180,7 @@ import {
   ensureMemoryHeaderFile,
   existingAccountGuard,
   hasExistingAccount,
+  stripAccountFields,
   loadCredentialsJson,
   writeCredentialsJson,
   deleteCredentialsFile,
@@ -3207,7 +3208,9 @@ const plugin = {
             );
           }
           const creds = loadCredentialsJson(CREDENTIALS_PATH) ?? {};
-          const next: typeof creds = { ...creds, mnemonic };
+          // Fresh slate for account fields: nothing of an older account
+          // (salt, address) may be inherited by the new phrase.
+          const next: typeof creds = { ...stripAccountFields(creds), mnemonic };
           if (scopeAddress) next.scope_address = scopeAddress;
           if (!writeCredentialsJson(CREDENTIALS_PATH, next)) {
             return { state: 'error', error: 'credentials_write_failed' };

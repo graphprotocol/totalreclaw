@@ -256,8 +256,9 @@ export function writeCredentialsJson(
 
 /**
  * Is there already an account in `credentials.json`? True when the file
- * carries a recovery phrase (or its legacy alias), an account `userId`, or a
- * derived-bundle account. An empty or missing file is "no account". A
+ * carries a recovery phrase (or its legacy alias), an account `userId`, a
+ * `salt` or `scope_address` (leftovers that would otherwise be inherited by a
+ * new account), or a derived-bundle account. An empty or missing file is "no account". A
  * non-empty file that does not parse is treated as an account too, so it is
  * never silently overwritten.
  */
@@ -278,6 +279,8 @@ export function hasExistingAccount(credentialsPath: string): boolean {
       str(parsed.mnemonic) ||
       str(parsed.recovery_phrase) ||
       str(parsed.userId) ||
+      str(parsed.salt) ||
+      str(parsed.scope_address) ||
       (typeof parsed.account === 'object' && parsed.account !== null)
     );
   } catch {

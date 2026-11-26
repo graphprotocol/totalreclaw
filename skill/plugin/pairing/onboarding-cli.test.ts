@@ -453,6 +453,30 @@ const INVALID_PHRASE = 'not a valid phrase for anything not a valid phrase for a
 }
 
 // ---------------------------------------------------------------------------
+// 14. Already-active guard also covers bundle-shaped / leftover account files
+// ---------------------------------------------------------------------------
+for (const [label, body] of [
+  ['bundle-shaped account', { version: 2, account: { smart_account: '0x1' } }],
+  ['userId only', { userId: 'old-user' }],
+  ['scope_address only', { scope_address: '0x0000000000000000000000000000000000000001' }],
+] as const) {
+  const tmp = mkTmp();
+  const credPath = path.join(tmp, 'credentials.json');
+  const statePath = path.join(tmp, 'state.json');
+  fs.writeFileSync(credPath, JSON.stringify(body));
+  const io = mkMockIo({ answers: ['1'] });
+
+  const result = await runOnboardingWizard({ credentialsPath: credPath, statePath, io });
+
+  assert(result.choice === 'skip', `already-active (${label}): wizard short-circuits`);
+  assert(io.stdoutBuf.includes(COPY.alreadyActive), `already-active (${label}): prints the existing message`);
+  assert(io.askCalls.length === 0, `already-active (${label}): asks nothing`);
+  assert(JSON.stringify(loadCredentialsJson(credPath)) === JSON.stringify(body), `already-active (${label}): file untouched`);
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 console.log(`# fail: ${failed}`);
