@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from totalreclaw.operations import LIVE_DECAY_SCORE, live_decay_score
-from totalreclaw.protobuf import encode_tombstone_protobuf
+from totalreclaw.protobuf import encode_tombstone_protobuf_keyed
 
 ROOT = Path(__file__).resolve().parents[2]
 MAPPING = ROOT / "subgraph" / "src" / "mapping.ts"
@@ -49,7 +49,7 @@ def test_fallback_when_core_lacks_function():
 
 
 def test_tombstone_still_writes_zero():
-    raw = encode_tombstone_protobuf("fid", "0x" + "1" * 40)
+    raw = encode_tombstone_protobuf_keyed("fid", "0x" + "1" * 40)
     assert b"\x31" + struct.pack("<d", 0.0) in raw
     assert struct.pack("<d", 1.0) not in raw
 
@@ -78,7 +78,7 @@ async def test_store_fact_writes_constant(imp):
     wallet, relay = _wallet_relay()
     seen = {}
     with patch("totalreclaw.operations.build_and_send_userop", new_callable=AsyncMock), \
-         patch("totalreclaw.operations.encode_fact_protobuf",
+         patch("totalreclaw.operations.encode_fact_protobuf_keyed",
                side_effect=lambda p: seen.setdefault("decay", p.decay_score) and b"x"):
         await store_fact(text="a fact", wallet=wallet, relay=relay, importance=imp)
     assert seen["decay"] == 1.0
@@ -96,7 +96,7 @@ async def test_store_fact_batch_writes_constant(imp):
     wallet, relay = _wallet_relay()
     captured = []
     with patch("totalreclaw.operations.build_and_send_userop_batch", new_callable=AsyncMock), \
-         patch("totalreclaw.operations.encode_fact_protobuf",
+         patch("totalreclaw.operations.encode_fact_protobuf_keyed",
                side_effect=lambda p: captured.append(p) or b""):
         await store_fact_batch(facts=[{"text": "a fact", "importance": imp}], wallet=wallet, relay=relay)
     assert len(captured) == 1

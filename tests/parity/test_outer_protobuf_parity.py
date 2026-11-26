@@ -3,16 +3,18 @@
 Loads the shared fixture ``tests/parity/fixtures/outer-protobuf-v1.json``
 (Rust-generated) and asserts, for the same inputs:
 
-1. the pure-Python encoder (``totalreclaw.protobuf.encode_fact_protobuf``,
-   the Hermes write path) and the PyO3 core encoder
-   (``totalreclaw_core.encode_fact_protobuf``) are byte-identical to the
-   fixture;
-2. the SimpleAccount calldata the Python client builds
+1. the pure-Python keyed encoder (``totalreclaw.protobuf.encode_fact_protobuf_keyed``,
+   the Hermes write path) and the PyO3 core keyed encoder
+   (``totalreclaw_core.encode_fact_protobuf_keyed``) are byte-identical to
+   each other for every fixture input (the fixture's own expected bytes are
+   the pre-keyed legacy layout, still used by the MCP and Rust legs);
+2. the SimpleAccount calldata the Python client builds, from the keyed
+   payloads, matches the core calldata builders byte for byte
    (``encode_execute_calldata_for_data_edge`` /
-   ``encode_execute_batch_calldata_for_data_edge``) is byte-identical to the
-   fixture; and
+   ``encode_execute_batch_calldata_for_data_edge``); and
 3. ABI-decoding that calldata yields outer protobufs WITHOUT field 9
-   (``source``) or field 11 (``agent_id``), addressed to the fixture DataEdge.
+   (``source``) or field 11 (``agent_id``) and WITH field 14 (index scheme),
+   addressed to the fixture DataEdge.
 
 The legacy vectors (``fixtures/legacy/outer-protobuf-mcp-pre-dep6.json``) are
 a negative control: the same walker MUST find fields 9 and 11 there.
@@ -34,7 +36,7 @@ from pathlib import Path
 import pytest
 import totalreclaw_core
 
-from totalreclaw.protobuf import FactPayload, encode_fact_protobuf
+from totalreclaw.protobuf import FactPayload, encode_fact_protobuf_keyed
 from totalreclaw.userop import (
     encode_execute_batch_calldata_for_data_edge,
     encode_execute_calldata_for_data_edge,
@@ -164,47 +166,52 @@ def _python_payload(inp: dict) -> FactPayload:
 # ---------------------------------------------------------------------------
 
 
+def _core_keyed(inp: dict) -> bytes:
+    return bytes(totalreclaw_core.encode_fact_protobuf_keyed(json.dumps(inp)))
+
+
 @pytest.mark.parametrize("name", sorted(VECTORS))
-def test_python_encoder_matches_fixture_and_omits_fields_9_11(name: str) -> None:
+def test_python_encoder_matches_core_keyed_and_omits_fields_9_11(name: str) -> None:
     vector = VECTORS[name]
-    encoded = encode_fact_protobuf(_python_payload(vector["input"]))
-    assert encoded.hex() == vector["expected_protobuf_hex"]
+    encoded = encode_fact_protobuf_keyed(_python_payload(vector["input"]))
+    assert encoded == _core_keyed(vector["input"])
     fields = field_numbers(encoded)
     assert not FORBIDDEN & set(fields), fields
-    assert fields == vector["expected_field_numbers"]
+    assert fields[-1] == 14 and fields.count(14) == 1
 
 
 @pytest.mark.parametrize("name", sorted(VECTORS))
-def test_pyo3_core_encoder_matches_fixture(name: str) -> None:
+def test_execute_calldata_matches_core_and_decodes_clean(name: str) -> None:
     vector = VECTORS[name]
-    encoded = bytes(totalreclaw_core.encode_fact_protobuf(json.dumps(vector["input"])))
-    assert encoded.hex() == vector["expected_protobuf_hex"]
-
-
-@pytest.mark.parametrize("name", sorted(VECTORS))
-def test_execute_calldata_matches_fixture_and_decodes_clean(name: str) -> None:
-    vector = VECTORS[name]
-    protobuf = encode_fact_protobuf(_python_payload(vector["input"]))
+    protobuf = encode_fact_protobuf_keyed(_python_payload(vector["input"]))
     calldata_hex = encode_execute_calldata_for_data_edge(protobuf, DATA_EDGE)
     assert calldata_hex.startswith("0x")
-    assert calldata_hex[2:] == vector["expected_execute_calldata_hex"]
+    assert bytes.fromhex(calldata_hex[2:]) == bytes(
+        totalreclaw_core.encode_single_call(protobuf, DATA_EDGE)
+    )
     dest, inner = decode_execute(bytes.fromhex(calldata_hex[2:]))
     assert dest == DATA_EDGE.lower()
     assert inner == protobuf
-    assert not FORBIDDEN & set(field_numbers(inner))
+    fields = set(field_numbers(inner))
+    assert not FORBIDDEN & fields
+    assert 14 in fields
 
 
-def test_batch_calldata_matches_fixture_and_decodes_clean() -> None:
+def test_batch_calldata_decodes_clean() -> None:
     names = FIXTURE["batch"]["vector_names"]
-    protobufs = [encode_fact_protobuf(_python_payload(VECTORS[n]["input"])) for n in names]
+    protobufs = [encode_fact_protobuf_keyed(_python_payload(VECTORS[n]["input"])) for n in names]
     calldata_hex = encode_execute_batch_calldata_for_data_edge(protobufs, DATA_EDGE)
-    assert calldata_hex[2:] == FIXTURE["batch"]["expected_calldata_hex"]
+    assert bytes.fromhex(calldata_hex[2:]) == bytes(
+        totalreclaw_core.encode_batch_call(protobufs, DATA_EDGE)
+    )
     calls = decode_execute_batch(bytes.fromhex(calldata_hex[2:]))
     assert len(calls) == len(names)
     for (dest, inner), expected in zip(calls, protobufs):
         assert dest == DATA_EDGE.lower()
         assert inner == expected
-        assert not FORBIDDEN & set(field_numbers(inner))
+        fields = set(field_numbers(inner))
+        assert not FORBIDDEN & fields
+        assert 14 in fields
 
 
 def test_legacy_negative_control_contains_fields_9_and_11() -> None:

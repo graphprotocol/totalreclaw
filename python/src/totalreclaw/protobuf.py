@@ -11,11 +11,13 @@ Field numbers match TotalReclawFact:
   10: content_fp (string),
   11: (removed in v3 -- now encrypted inside field 4),
   12: sequence_id (int64 -- assigned by subgraph, not client),
-  13: encrypted_embedding (string)
+  13: encrypted_embedding (string),
+  14: index_scheme (varint, 1 = keyed scheme 1; written last)
 """
 
 from __future__ import annotations
 
+import re
 import struct
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -111,64 +113,84 @@ class FactPayload:
 
 
 # ---------------------------------------------------------------------------
-# Encoding functions
+# Encoding functions (index scheme 1, internal#573)
 # ---------------------------------------------------------------------------
 
+_TAG_RE = re.compile(r"^[0-9a-f]{64}$")
+_HEX_BLOB_RE = re.compile(r"^(?:[0-9a-fA-F]{2})*$")
 
-def encode_fact_protobuf(fact: FactPayload) -> bytes:
-    """Encode a :class:`FactPayload` as minimal protobuf wire format.
+#: Index scheme written to outer field 14 (1 = keyed scheme 1).
+INDEX_SCHEME_KEYED: int = 1
 
-    The output is byte-compatible with the TypeScript ``encodeFactProtobuf``
-    in ``mcp/src/subgraph/protobuf.ts`` and can be decoded by any standard
-    protobuf parser using ``server/proto/totalreclaw.proto``.
+
+def _validated_tags(tags: list[str]) -> list[str]:
+    """Return the sorted, deduplicated tag list; reject any non 64-hex tag.
+
+    The error message never echoes the offending tag.
     """
+    for t in tags:
+        if not isinstance(t, str) or not _TAG_RE.match(t):
+            raise ValueError("blind index tag is not 64 lowercase hex characters")
+    return sorted(set(tags))
+
+
+def _blob_bytes(hex_blob: str) -> bytes:
+    """Decode the encrypted blob hex; reject invalid hex without echoing it."""
+    if not isinstance(hex_blob, str) or not _HEX_BLOB_RE.match(hex_blob):
+        raise ValueError("encrypted blob is not valid hex")
+    return bytes.fromhex(hex_blob)
+
+
+def encode_fact_protobuf_keyed(fact: FactPayload) -> bytes:
+    """Encode a :class:`FactPayload` as keyed-scheme-1 protobuf wire format.
+
+    Byte-identical to core ``encode_fact_protobuf_keyed``: field 5 sorted
+    ascending and deduplicated, version forced to 4, field 14 = 1 written
+    last. Raises ``ValueError`` on a tag that is not 64 lowercase hex or on
+    an invalid blob hex.
+    """
+    tags = _validated_tags(fact.blind_indices)
+    blob = _blob_bytes(fact.encrypted_blob)
     parts: list[bytes] = []
 
     _write_string(parts, 1, fact.id)
     _write_string(parts, 2, fact.timestamp)
     _write_string(parts, 3, fact.owner)
-    _write_bytes(parts, 4, bytes.fromhex(fact.encrypted_blob))
+    _write_bytes(parts, 4, blob)
 
-    for index in fact.blind_indices:
+    for index in tags:
         _write_string(parts, 5, index)
 
     _write_double(parts, 6, fact.decay_score)
     _write_varint_field(parts, 7, 1)  # is_active = true
-    version = fact.version if fact.version else DEFAULT_PROTOBUF_VERSION
-    _write_varint_field(parts, 8, version)  # 3 = legacy, 4 = v1 taxonomy
+    _write_varint_field(parts, 8, PROTOBUF_VERSION_V4)
     # Fields 9 (source) and 11 (agent_id) removed in v3 -- now encrypted inside field 4
     _write_string(parts, 10, fact.content_fp)
     # Field 12 (sequence_id) is assigned by the subgraph mapping, not the client
     if fact.encrypted_embedding:
         _write_string(parts, 13, fact.encrypted_embedding)
+    _write_varint_field(parts, 14, INDEX_SCHEME_KEYED)
 
     return b"".join(parts)
 
 
-def encode_tombstone_protobuf(
-    fact_id: str, owner: str, version: int = DEFAULT_PROTOBUF_VERSION
+def encode_tombstone_protobuf_keyed(
+    fact_id: str, owner: str, timestamp: Optional[str] = None
 ) -> bytes:
-    """Encode a tombstone payload for soft-deleting a fact on-chain.
+    """Encode a keyed-scheme-1 tombstone (soft delete) payload.
 
-    Sets ``decay_score=0`` and ``encrypted_blob`` to the bytes of
-    ``"tombstone"`` (hex-encoded), matching the managed-service delete
-    convention used by the TypeScript client.
-
-    ``version`` is the outer protobuf schema version (3 legacy, 4 v1
-    taxonomy). Tombstones don't carry v1 payloads themselves — ``v4`` is
-    only meaningful when the tombstone terminates a v1-era fact chain
-    (e.g. after a pin/unpin). Default 3 preserves pre-2.0.0 behavior.
+    Layout: empty blob, ``decay_score = 0``, ``is_active = 0``, version 4,
+    field 14 = 1; no fields 5, 10 or 13. ``timestamp`` defaults to now.
     """
-    tombstone = FactPayload(
-        id=fact_id,
-        timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-        owner=owner,
-        encrypted_blob=b"tombstone".hex(),
-        blind_indices=[],
-        decay_score=0.0,
-        source="python_forget",
-        content_fp="",
-        agent_id="python-client",
-        version=version,
-    )
-    return encode_fact_protobuf(tombstone)
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    parts: list[bytes] = []
+    _write_string(parts, 1, fact_id)
+    _write_string(parts, 2, timestamp)
+    _write_string(parts, 3, owner)
+    _write_bytes(parts, 4, b"")
+    _write_double(parts, 6, 0.0)
+    _write_varint_field(parts, 7, 0)  # is_active = false
+    _write_varint_field(parts, 8, PROTOBUF_VERSION_V4)
+    _write_varint_field(parts, 14, INDEX_SCHEME_KEYED)
+    return b"".join(parts)
