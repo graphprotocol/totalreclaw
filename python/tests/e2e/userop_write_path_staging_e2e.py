@@ -426,7 +426,13 @@ async def verify_account(acct: Account, spy: Spy, *, expect_extra_sends: Optiona
     await asyncio.sleep(35)                 # PR #87 sweeper window; harmless otherwise
     used = await acct.quota_used()
     delta = used - (acct.quota_before or 0)
-    c["5_quota_delta"] = (delta == len(seen), f"delta={delta} facts_on_subgraph={len(seen)} returned={len(want)}")
+    # An op that was accepted and then replaced (never executed) keeps its debit on a
+    # relay without revert/drop refunds: those excess units are expected, and only then.
+    excess = delta - len(seen)
+    c["5_quota_delta"] = (
+        excess == 0 or (0 < excess <= len(missing) * 30),
+        f"delta={delta} facts_on_subgraph={len(seen)} returned={len(want)} "
+        f"kept_debit_for_replaced_ops={max(excess, 0)} (replaced_ops={len(missing)})")
     res["ok"] = all(v[0] for v in c.values())
     return res
 
