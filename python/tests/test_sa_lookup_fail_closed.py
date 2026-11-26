@@ -147,7 +147,7 @@ async def test_default_order_is_gnosis_then_base_sepolia(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_configured_endpoint_goes_first_and_first_success_stops(monkeypatch):
+async def test_configured_endpoint_goes_first_and_a_failed_endpoint_is_skipped(monkeypatch):
     monkeypatch.setenv(client_mod.SA_RPC_ENV, "https://configured.invalid")
 
     async def _first_fails(url):
