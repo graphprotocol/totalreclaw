@@ -768,3 +768,24 @@ def test_eoa_valued_cache_with_rpc_failure_fails_closed(
     assert auto_migrate._resolve_smart_account(TEST_MNEMONIC, json.loads(before)) is None
     assert auto_migrate.maybe_migrate() is False
     assert path.read_text() == before  # cache and file unchanged, nothing written
+
+
+def test_migration_refuses_a_bundle_whose_smart_account_is_the_eoa(
+    isolated_home: Path, fake_keychain, monkeypatch
+) -> None:
+    """internal#679 defence in depth: even if the resolver handed back the EOA,
+    core would accept the bundle. Nothing may be persisted and the existing
+    file stays byte-identical."""
+    import totalreclaw.client as client_mod
+
+    path = _creds_dir(isolated_home) / "credentials.json"
+    path.write_text(json.dumps({"mnemonic": TEST_MNEMONIC}))
+    before = path.read_bytes()
+    monkeypatch.setattr(
+        auto_migrate, "_resolve_smart_account", lambda mnemonic, creds: client_mod._get_eoa_address(mnemonic)
+    )
+
+    assert auto_migrate.maybe_migrate() is False
+
+    assert path.read_bytes() == before
+    assert len(fake_keychain) == 0
