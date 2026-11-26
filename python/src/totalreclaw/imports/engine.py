@@ -92,6 +92,7 @@ def _import_concurrency() -> int:
 # ``totalreclaw.import_engine.{_estimate_payload_bytes,_group_payloads_by_size,
 # _MAX_BATCH_BYTES,IMPORT_MAX_BATCH_SIZE}`` keep working unchanged. The values
 # and the est>=real logic are byte-identical to the rc4 (internal#435) originals.
+from totalreclaw import blind_tags as _blind_tags  # noqa: E402
 from totalreclaw.operations import (  # noqa: E402,F401  (re-exports used by tests)
     estimate_payload_bytes as _estimate_payload_bytes,
     group_payloads_by_size as _group_payloads_by_size,
@@ -1899,6 +1900,7 @@ class ImportEngine:
                 error_limit_msg=(
                     "Error limit reached (20). Remaining facts in this batch skipped."
                 ),
+                tag_count=_blind_tags.tag_counter(getattr(client, "_keys", None)),
             )
             return len(ids), errors, dups_skipped, stored_conv_ids
 

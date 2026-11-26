@@ -217,44 +217,63 @@ def test_sim_revert_without_code_still_halves(monkeypatch):
     assert calls == [4, 2, 2]
 
 
-# ── (Finding 1) non-circular calibration: est ≥ REAL encode_fact_protobuf ──
-def _real_protobuf_bytes(text, embedding=None, extra_metadata=None):
+# ── (Finding 1) non-circular calibration: est ≥ REAL keyed protobuf ──
+def _keys():
+    from totalreclaw.crypto import DerivedKeys
+
+    # Fixture-only vault keys (not a real vault).
+    return DerivedKeys(
+        salt=b"\x01" * 32, auth_key=b"\x02" * 32,
+        encryption_key=b"\x03" * 32, dedup_key=b"\x04" * 32,
+    )
+
+
+def _real_protobuf_bytes(text, embedding=None, extra_metadata=None, entities=None):
     """Build a fact the way operations.store_fact_batch does and measure its
     actual on-chain protobuf byte length — the ground truth the estimate must
-    bound. Non-circular: measures encode_fact_protobuf, not the estimator."""
+    bound. Non-circular: measures encode_fact_protobuf_keyed, not the estimator."""
     import base64
     import os
+    from totalreclaw import blind_tags
     from totalreclaw.protobuf import (
-        FactPayload, encode_fact_protobuf, PROTOBUF_VERSION_V4,
+        FactPayload, encode_fact_protobuf_keyed, PROTOBUF_VERSION_V4,
     )
-    from totalreclaw.crypto import (
-        encrypt, encrypt_embedding, generate_blind_indices,
-        generate_content_fingerprint,
-    )
+    from totalreclaw.crypto import encrypt, encrypt_embedding
     from totalreclaw.lsh import LSHHasher
     from totalreclaw.claims_helper import build_canonical_claim_v1
 
-    key = os.urandom(32)
-    dedup = os.urandom(32)
+    keys = _keys()
+    key = keys.encryption_key
     claim = build_canonical_claim_v1(
         {"text": text, "type": "fact", "source": "external", "scope": "personal"},
         importance=8, claim_id="id-" + "x" * 32, extra_metadata=extra_metadata,
     )
     enc_hex = base64.b64decode(encrypt(claim, key)).hex()
-    indices = generate_blind_indices(text)
     enc_emb = None
+    hasher = None
     if embedding:
-        indices = indices + LSHHasher(os.urandom(32), len(embedding)).hash(embedding)
+        hasher = LSHHasher(os.urandom(32), len(embedding))
         enc_emb = encrypt_embedding(embedding, key)
+    indices = blind_tags.fact_tags(
+        keys, text, embedding=embedding, lsh_hasher=hasher,
+        entity_names=blind_tags.entity_names(entities),
+    )
     fp = FactPayload(
         id="id-" + "x" * 32, timestamp="2026-05-14T09:21:03.512Z",
         owner="0x" + "a" * 40, encrypted_blob=enc_hex, blind_indices=indices,
         decay_score=0.8, source="import",
-        content_fp=generate_content_fingerprint(text, dedup),
+        content_fp=blind_tags.content_fp(keys, text),
         agent_id="python-client", encrypted_embedding=enc_emb,
         version=PROTOBUF_VERSION_V4,
     )
-    return len(encode_fact_protobuf(fp))
+    return len(encode_fact_protobuf_keyed(fp))
+
+
+def _est(payload):
+    """Estimate as the client does: with a tag counter built from its keys."""
+    from totalreclaw import blind_tags
+
+    return _estimate_payload_bytes(payload, blind_tags.tag_counter(_keys()))
 
 
 def _payload(text, embedding=None, extra_metadata=None):
@@ -282,7 +301,7 @@ def test_estimate_bounds_real_protobuf_bytes(nchars, with_embedding):
     embedding = [0.01 * i for i in range(640)] if with_embedding else None
 
     real = _real_protobuf_bytes(text, embedding)
-    est = _estimate_payload_bytes(_payload(text, embedding))
+    est = _est(_payload(text, embedding))
     assert est >= real, (
         f"estimate {est} under-counts real {real} for {nchars} chars "
         f"embedding={with_embedding}"
@@ -295,7 +314,7 @@ def test_estimate_bounds_real_for_all_unique_tokens():
     text = " ".join(f"tok{i}word" for i in range(120))
     embedding = [0.01 * i for i in range(640)]
     real = _real_protobuf_bytes(text, embedding)
-    est = _estimate_payload_bytes(_payload(text, embedding))
+    est = _est(_payload(text, embedding))
     assert est >= real, f"estimate {est} under-counts real {real} for all-unique tokens"
 
 
@@ -320,7 +339,7 @@ def test_estimate_bounds_real_non_ascii(script, nchars, with_embedding):
     text = text[:nchars]
     embedding = [0.01 * i for i in range(640)] if with_embedding else None
     real = _real_protobuf_bytes(text, embedding)
-    est = _estimate_payload_bytes(_payload(text, embedding))
+    est = _est(_payload(text, embedding))
     assert est >= real, (
         f"estimate {est} under-counts real {real} for {script} {nchars} chars "
         f"({len(text.encode('utf-8'))} utf-8 bytes) embedding={with_embedding}"
@@ -341,7 +360,7 @@ def test_estimate_bounds_real_for_crystal_metadata():
     }
     embedding = [0.01 * i for i in range(640)]
     real = _real_protobuf_bytes(text, embedding, meta)
-    est = _estimate_payload_bytes(_payload(text, embedding, meta))
+    est = _est(_payload(text, embedding, meta))
     assert est >= real, f"estimate {est} under-counts real {real} for a Crystal fact"
 
 
@@ -419,3 +438,19 @@ async def test_splitter_still_splits_a_real_size_revert():
 
     ids, errs = await _store_group_adaptive(store, [1, 2])
     assert calls == [2, 1, 1] and ids == ["id", "id"] and errs == []
+
+
+def test_estimate_counts_entity_tags():
+    text = "Short fact about Alice and Bob"
+    ents = [{"name": "Alice"}, {"name": "Bob"}, {"name": "Acme Corp"}]
+    p = _payload(text)
+    p["entities"] = ents
+    real = _real_protobuf_bytes(text, None, None, ents)
+    assert _est(p) >= real
+    plain = _est(_payload(text))
+    assert _est(p) > plain  # entity tags are counted
+
+
+def test_estimate_without_tag_count_falls_back_conservatively():
+    text = "The user moved to Berlin in May 2026 for a new engineering role."
+    assert _estimate_payload_bytes(_payload(text)) >= _real_protobuf_bytes(text)

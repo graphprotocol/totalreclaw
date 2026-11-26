@@ -13,7 +13,9 @@ import base64
 
 import pytest
 
-from totalreclaw.crypto import derive_keys_from_mnemonic, encrypt, generate_blind_indices
+from totalreclaw import blind_tags
+from totalreclaw.crypto import derive_keys_from_mnemonic, encrypt
+from totalreclaw.entity_extract import extract_query_entities
 from totalreclaw.operations import (
     BROADENED_SEARCH_QUERY,
     DEFAULT_TRAPDOOR_BATCH_SIZE,
@@ -80,14 +82,17 @@ def keys():
     return derive_keys_from_mnemonic(TEST_MNEMONIC)
 
 
-def _chunk_count(query: str) -> int:
-    return -(-len(generate_blind_indices(query)) // DEFAULT_TRAPDOOR_BATCH_SIZE)
+def _chunk_count(query: str, keys) -> int:
+    n = len(blind_tags.query_trapdoors(
+        keys, query, entity_names=extract_query_entities(query)
+    ))
+    return -(-n // DEFAULT_TRAPDOOR_BATCH_SIZE)
 
 
 @pytest.mark.asyncio
 async def test_batches_run_concurrently_and_bounded(keys):
-    n_chunks = _chunk_count(LONG_QUERY)
-    assert n_chunks >= 8  # precondition: a realistic multi-batch query
+    n_chunks = _chunk_count(LONG_QUERY, keys)
+    assert n_chunks >= 5  # precondition (keyed stems-only tags roughly halve the old count): a realistic multi-batch query
     relay = _SlowRelay(keys)
 
     loop = asyncio.get_running_loop()
@@ -154,7 +159,7 @@ async def test_payloads_fetched_once_per_unique_fact(keys):
     relay = _IdsOnlyRelay(keys)
     results = await search_facts(query=LONG_QUERY, keys=keys, owner="0xabc", relay=relay, top_k=50)
 
-    assert relay.calls["batch"] >= 8
+    assert relay.calls["batch"] >= 5
     # Only the 20 facts the broadened query didn't already carry are fetched,
     # each exactly once, however many batches matched them.
     assert sorted(relay.fetched) == [f"f{i:02d}" for i in range(10, 30)]

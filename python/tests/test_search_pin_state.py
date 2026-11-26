@@ -56,7 +56,7 @@ async def test_search_facts_marks_pinned_and_carries_entity_refs() -> None:
         _fact("f-plain", "Pedro likes coffee", False,
               [{"name": "Pedro", "type": "person"}, {"name": "Rex", "type": "animal"}]),
     ])
-    with mock.patch.object(operations, "generate_blind_indices", return_value=["td"]):
+    with mock.patch.object(operations.blind_tags, "query_trapdoors", return_value=["td"]):
         results = await operations.search_facts(
             query="where does Pedro live", keys=_keys(), owner="0x" + "ab" * 20,
             relay=relay, max_candidates=10, top_k=8,
@@ -70,7 +70,7 @@ async def test_search_facts_marks_pinned_and_carries_entity_refs() -> None:
 
 async def test_search_facts_passes_core_pin_boost_to_rerank() -> None:
     relay = _FakeRelay([_fact("f-pinned", "Pedro lives in Lisbon", True, [])])
-    with mock.patch.object(operations, "generate_blind_indices", return_value=["td"]), \
+    with mock.patch.object(operations.blind_tags, "query_trapdoors", return_value=["td"]), \
          mock.patch.object(operations, "rerank", wraps=operations.rerank) as spy:
         await operations.search_facts(
             query="where does Pedro live", keys=_keys(), owner="0x" + "ab" * 20,

@@ -77,37 +77,6 @@ def decrypt(encrypted_base64: str, encryption_key: bytes) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Blind Indices + Stemming
-# ---------------------------------------------------------------------------
-
-
-def generate_blind_indices(text: str) -> list[str]:
-    """Generate blind indices (SHA-256 hashes of tokens).
-
-    Tokenization rules (matches canonical TypeScript/Rust implementation):
-      1. Lowercase
-      2. Remove punctuation (keep Unicode letters, numbers, whitespace)
-      3. Split on whitespace
-      4. Filter tokens shorter than 2 characters
-
-    Each surviving token is SHA-256 hashed and returned as a hex string.
-    Stemmed variants are prefixed with "stem:" before hashing.
-    The returned array is deduplicated.
-    """
-    return totalreclaw_core.generate_blind_indices(text)
-
-
-# ---------------------------------------------------------------------------
-# Content Fingerprint (Dedup)
-# ---------------------------------------------------------------------------
-
-
-def generate_content_fingerprint(plaintext: str, dedup_key: bytes) -> str:
-    """HMAC-SHA256 content fingerprint. Returns 64-char hex string."""
-    return totalreclaw_core.generate_content_fingerprint(plaintext, dedup_key)
-
-
-# ---------------------------------------------------------------------------
 # Embedding Encryption
 # ---------------------------------------------------------------------------
 
