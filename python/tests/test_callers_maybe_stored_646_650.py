@@ -383,13 +383,15 @@ async def test_randomized_drain_schedule_never_writes_a_fact_twice(stack, seed):
     if rng.random() < 0.3:
         w.drop_next = 1
     texts = [f"randomized fact {seed}-{i}" for i in range(rng.randint(1, 3))]
+    failed_plain: list[str] = []         # calls that returned a plain error (caller knows)
     for t in texts:
         try:
             await client.remember_batch([_fact(t)], deadline_s=rng.choice([6, 10]))
         except BatchStoreError as e:
-            lifecycle._queue_unconfirmed_chunk(client, _chunk(t), [None], e)
+            if not lifecycle._queue_unconfirmed_chunk(client, _chunk(t), [None], e):
+                failed_plain.append(t)
         except Exception:
-            pass
+            failed_plain.append(t)
     loop = asyncio.get_running_loop()
     for _ in range(5):
         await loop.run_in_executor(None, lambda: lifecycle.drain_pending_stores(state, client))
@@ -402,3 +404,14 @@ async def test_randomized_drain_schedule_never_writes_a_fact_twice(stack, seed):
     # a re-store builds a NEW payload (new fact id), so count facts, not bytes:
     # each fact is on-chain at most once
     assert len(w.executed_payloads) <= len(texts), "a fact was written twice"
+    # nothing silently missing either: every fact either executed, or is still queued
+    # (maybe_stored / not_sent), or its op is still live or tracked in the pending registry
+    stored_or_open = len(w.executed_payloads)
+    queued = client.pending_store.count()
+    live = sum(1 for o in w.ops.values() if o.status in ("outstanding", "submitted"))
+    tracked = len(userop.pending_records(SA))
+    if stored_or_open + queued + live + tracked < len(texts):
+        # the only other legitimate end: the batch call itself returned a plain error
+        assert len(failed_plain) >= len(texts) - (stored_or_open + queued + live + tracked), (
+            "a fact is neither executed, queued nor tracked"
+        )
