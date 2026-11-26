@@ -252,12 +252,21 @@ def _resolve_smart_account(mnemonic: str, creds: dict) -> Optional[str]:
     function uses, with the same ``asyncio.run`` / nested-loop fallback
     (this function runs from a synchronous call site — plugin ``register()``).
     """
+    from totalreclaw.agent.loop_runner import run_sync
+    from totalreclaw.client import _derive_smart_account_address, is_eoa_address
+
     cached = creds.get("scope_address") or creds.get("wallet_address")
     if isinstance(cached, str) and cached.strip():
-        return cached.strip()
-
-    from totalreclaw.agent.loop_runner import run_sync
-    from totalreclaw.client import _derive_smart_account_address
+        if not is_eoa_address(mnemonic, cached):
+            return cached.strip()
+        # internal#679: installs that ran setup during an RPC outage under the
+        # old fallback can hold the EOA here. Never trust it; re-resolve (and
+        # fail closed if the lookup fails). The cache is only replaced by the
+        # bundle written after a confirmed Smart Account.
+        logger.warning(
+            "auto_migrate: cached scope_address equals the EOA (stale fallback "
+            "value); re-resolving the Smart Account"
+        )
 
     # Use the process-wide background loop rather than asyncio.run here.
     # This call site is sync but is NOT guaranteed to be outside a running

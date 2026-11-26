@@ -116,6 +116,20 @@ class TestDoctor:
         assert "0x1234567890abcdef1234567890abcdef12345678" in captured.out.lower() or \
                "0x1234567890abcdef1234567890abcdef12345678" in captured.out
 
+    def test_eoa_valued_cached_address_is_a_failure(self, tmp_path: Path, capsys) -> None:
+        """internal#679: a cached 'Smart Account' equal to the EOA is stale fallback data."""
+        from totalreclaw.client import _get_eoa_address
+
+        creds = tmp_path / "credentials.json"
+        creds.write_text(
+            json.dumps({"mnemonic": VALID_MNEMONIC, "scope_address": _get_eoa_address(VALID_MNEMONIC)})
+        )
+        rc = tr_cli.run_doctor(credentials_path=creds)
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "is your EOA address" in out and "Fix:" in out
+        assert "Smart Account address cached" not in out
+
     def test_rc_bug_report_status_surfaced(self, tmp_path: Path, capsys) -> None:
         """Doctor surfaces whether the RC bug-report tool is active."""
         creds = tmp_path / "credentials.json"

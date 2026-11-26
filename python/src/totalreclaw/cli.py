@@ -208,7 +208,20 @@ def run_doctor(credentials_path: Optional[Path] = None, relay_url: Optional[str]
     # Check 3 — Smart Account address
     # --------------------------------------------------------------------
     cached_sa = data.get("scope_address") or data.get("wallet_address")
-    if cached_sa and isinstance(cached_sa, str):
+    cached_is_eoa = False
+    if cached_sa and isinstance(cached_sa, str) and isinstance(mnemonic, str) and mnemonic.strip():
+        try:
+            from totalreclaw.client import is_eoa_address
+
+            cached_is_eoa = is_eoa_address(mnemonic.strip(), cached_sa)
+        except Exception:
+            cached_is_eoa = False
+    if cached_is_eoa:
+        print(_fail("Cached Smart Account address is your EOA address (a leftover of a failed lookup)"))
+        print("        Fix: delete the `scope_address` / `wallet_address` field from credentials.json,")
+        print("        then re-run `totalreclaw setup` or any memory command to resolve the real address.")
+        issues += 1
+    elif cached_sa and isinstance(cached_sa, str):
         print(_ok(f"Smart Account address cached: {cached_sa}"))
     elif isinstance(mnemonic, str) and mnemonic.strip():
         # Derive on-the-fly

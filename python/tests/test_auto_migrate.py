@@ -719,3 +719,52 @@ def test_eager_resolve_does_not_persist_the_eoa(tmp_path: Path, failing_sa_rpc) 
     assert path.read_text() == before
     assert "scope_address" not in path.read_text()
     assert "could not be resolved" in err.getvalue()
+
+
+def _eoa_of_test_mnemonic() -> str:
+    from totalreclaw.client import _get_eoa_address
+
+    return _get_eoa_address(TEST_MNEMONIC)
+
+
+def test_eoa_valued_cache_is_re_resolved(isolated_home, stub_sa_rpc) -> None:
+    creds = {"mnemonic": TEST_MNEMONIC, "scope_address": _eoa_of_test_mnemonic().lower()}
+    assert auto_migrate._resolve_smart_account(TEST_MNEMONIC, creds) == TEST_SMART_ACCOUNT
+    legacy = {"mnemonic": TEST_MNEMONIC, "wallet_address": _eoa_of_test_mnemonic()}
+    assert auto_migrate._resolve_smart_account(TEST_MNEMONIC, legacy) == TEST_SMART_ACCOUNT
+
+
+def test_confirmed_cached_smart_account_is_still_trusted(isolated_home, failing_sa_rpc) -> None:
+    creds = {"scope_address": TEST_SMART_ACCOUNT}
+    assert auto_migrate._resolve_smart_account(TEST_MNEMONIC, creds) == TEST_SMART_ACCOUNT
+
+
+def test_eoa_valued_cache_replaced_by_the_confirmed_account_on_migration(
+    isolated_home: Path, fake_keychain, stub_sa_rpc
+) -> None:
+    path = _creds_dir(isolated_home) / "credentials.json"
+    path.write_text(json.dumps({"mnemonic": TEST_MNEMONIC, "scope_address": _eoa_of_test_mnemonic()}))
+
+    assert auto_migrate.maybe_migrate() is True
+
+    from totalreclaw.bundle import parse_bundle_v1
+
+    v2 = json.loads(path.read_text())
+    secret = json.loads(cw.unwrap_bundle(v2["account"]["smart_account"]))
+    full = {k: v2[k] for k in ("version", "schema", "account", "provisioned_at", "provisioned_by")}
+    full["vault"], full["signing"] = secret["vault"], secret["signing"]
+    bundle = parse_bundle_v1(json.dumps(full))
+    assert bundle.account.smart_account.lower() == TEST_SMART_ACCOUNT.lower()
+    assert bundle.account.smart_account.lower() != _eoa_of_test_mnemonic().lower()
+
+
+def test_eoa_valued_cache_with_rpc_failure_fails_closed(
+    isolated_home: Path, fake_keychain, failing_sa_rpc
+) -> None:
+    path = _creds_dir(isolated_home) / "credentials.json"
+    path.write_text(json.dumps({"mnemonic": TEST_MNEMONIC, "scope_address": _eoa_of_test_mnemonic()}))
+    before = path.read_text()
+
+    assert auto_migrate._resolve_smart_account(TEST_MNEMONIC, json.loads(before)) is None
+    assert auto_migrate.maybe_migrate() is False
+    assert path.read_text() == before  # cache and file unchanged, nothing written

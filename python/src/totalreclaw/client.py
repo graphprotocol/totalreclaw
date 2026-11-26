@@ -16,6 +16,7 @@ Legacy parameter names (mnemonic, relay_url) are still accepted for
 backwards compatibility but are deprecated.
 """
 from __future__ import annotations
+import asyncio
 import logging
 import os
 from typing import TYPE_CHECKING, Optional
@@ -214,7 +215,9 @@ def _get_eoa_address(mnemonic: str) -> str:
     return _get_eoa_account(mnemonic).address
 
 
-async def _query_smart_account_for_owner(eoa_address: str, rpc_url: str) -> Optional[str]:
+async def _query_smart_account_for_owner(
+    eoa_address: str, rpc_url: str, timeout: float = 15.0
+) -> Optional[str]:
     """``SimpleAccountFactory.getAddress(owner, 0)`` via ``eth_call``.
 
     Returns the lowercased Smart Account address, or ``None`` when the RPC
@@ -235,7 +238,7 @@ async def _query_smart_account_for_owner(eoa_address: str, rpc_url: str) -> Opti
 
     calldata = f"0x{selector}{owner_padded}{salt_padded}"
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             rpc_url,
             json={
@@ -265,32 +268,88 @@ class SmartAccountLookupError(RuntimeError):
     """
 
 
-async def _derive_smart_account_address(mnemonic: str, rpc_url: str = "https://sepolia.base.org") -> str:
+# The factory (SimpleAccountFactory v0.7) is deployed at the same address on
+# Gnosis (chain 100) and Base Sepolia (84532) and ``getAddress(owner, 0)`` is a
+# pure CREATE2 view, so every endpoint below returns the same Smart Account for
+# a given owner (verified with a dummy owner on both chains, 2026-11-26). The
+# chain queried only changes reachability, never the answer.
+SA_RPC_ENV = "TOTALRECLAW_SA_RPC_URL"
+_SA_RPC_FALLBACKS = (
+    "https://rpc.gnosischain.com",  # product chain (userop.py maps 100 to this)
+    "https://sepolia.base.org",
+)
+_SA_ATTEMPT_TIMEOUT = 8.0  # seconds per endpoint
+_SA_TOTAL_TIMEOUT = 20.0  # seconds across all endpoints
+
+
+def _smart_account_rpc_urls(rpc_url: Optional[str] = None) -> list[str]:
+    """Ordered RPC endpoints: explicit/configured first, then the fallbacks."""
+    urls: list[str] = []
+    for u in (rpc_url, os.environ.get(SA_RPC_ENV, "").strip() or None, *_SA_RPC_FALLBACKS):
+        if u and u not in urls:
+            urls.append(u)
+    return urls
+
+
+def is_eoa_address(mnemonic: str, address: object) -> bool:
+    """True when ``address`` is the phrase's own EOA (case-insensitive).
+
+    A cached "Smart Account" equal to the EOA is a leftover of the pre-#679
+    fallback and must never be trusted.
+    """
+    if not isinstance(address, str):
+        return False
+    return address.strip().lower() == _get_eoa_address(mnemonic).lower()
+
+
+async def _lookup_over_endpoints(eoa_address: str, urls: list[str]) -> Optional[str]:
+    for url in urls:
+        try:
+            address = await _query_smart_account_for_owner(
+                eoa_address, url, timeout=_SA_ATTEMPT_TIMEOUT
+            )
+        except Exception:  # network error, bad JSON, timeout: try the next endpoint
+            continue
+        if address is not None and address != eoa_address.lower():
+            return address
+    return None
+
+
+async def _derive_smart_account_address(mnemonic: str, rpc_url: Optional[str] = None) -> str:
     """Derive the CREATE2 Smart Account address by querying the factory contract.
 
-    Calls SimpleAccountFactory.getAddress(owner, 0) via eth_call on a public RPC.
-    This matches the `toSimpleSmartAccount` logic in permissionless/viem.
+    Calls SimpleAccountFactory.getAddress(owner, 0) via eth_call, trying the
+    configured endpoint (``rpc_url`` or ``TOTALRECLAW_SA_RPC_URL``), then
+    Gnosis, then Base Sepolia, within a bounded total time. This matches the
+    `toSimpleSmartAccount` logic in permissionless/viem.
 
-    Fails closed: raises :class:`SmartAccountLookupError` when the RPC errors
-    or returns no usable result. It never returns the EOA address (callers
-    that need the EOA call :func:`_get_eoa_address` explicitly).
+    Fails closed: raises :class:`SmartAccountLookupError` when every endpoint
+    errors or returns no usable result. It never returns the EOA address
+    (callers that need the EOA call :func:`_get_eoa_address` explicitly).
     """
     eoa_address = _get_eoa_address(mnemonic)
+    urls = _smart_account_rpc_urls(rpc_url)
     try:
-        address = await _query_smart_account_for_owner(eoa_address, rpc_url)
-    except Exception as err:  # network error, bad JSON, timeout
+        address = await asyncio.wait_for(
+            _lookup_over_endpoints(eoa_address, urls), timeout=_SA_TOTAL_TIMEOUT
+        )
+    except asyncio.TimeoutError as err:
+        raise SmartAccountLookupError(
+            "Smart Account lookup timed out; try again shortly"
+        ) from err
+    except Exception as err:
         raise SmartAccountLookupError(
             f"Smart Account lookup failed ({type(err).__name__}); try again shortly"
-        ) from None
+        ) from err
     if address is None:
         raise SmartAccountLookupError(
-            "Smart Account lookup returned no usable address from the RPC; try again shortly"
+            "Smart Account lookup returned no usable address from any RPC; try again shortly"
         )
     return address
 
 
 async def derive_smart_account_address_strict(
-    mnemonic: str, rpc_url: str = "https://sepolia.base.org"
+    mnemonic: str, rpc_url: Optional[str] = None
 ) -> Optional[str]:
     """Like :func:`_derive_smart_account_address` but returns ``None`` on ANY
     failure instead of raising: for callers that only *report* the address
@@ -442,6 +501,13 @@ class TotalReclaw:
         # We intentionally do NOT fall back to the EOA placeholder here: silently
         # exposing the EOA misled QA tooling in v2.0.0 into querying the subgraph
         # with the wrong address. See DIAG-PYTHON-V2-20260418.md.
+        if wallet_address is not None and wallet_address.strip().lower() == self._eoa_address.lower():
+            # internal#679: a "Smart Account" equal to the EOA is a leftover of
+            # the old RPC-failure fallback. Never trust it: resolve over RPC.
+            logger.warning(
+                "wallet_address equals the EOA address; ignoring it and resolving the Smart Account"
+            )
+            wallet_address = None
         if wallet_address is not None:
             self._wallet_address: Optional[str] = wallet_address.lower()
             self._address_resolved = True
