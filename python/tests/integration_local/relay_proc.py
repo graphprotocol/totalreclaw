@@ -89,3 +89,7 @@ class Relay:
         except ProcessLookupError:
             pass
         self.log.close()
+        try:
+            os.unlink(self.log.name)
+        except OSError:
+            pass
