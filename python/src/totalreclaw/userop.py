@@ -104,6 +104,9 @@ _MAX_BUILD_ATTEMPTS: int = 6
 #: The gate gives it this long to turn "dead" (re-send) or terminal before it
 #: releases the facts without a re-send.
 GONE_GRACE_S: float = 20.0
+#: A stale record that stays unresolved this long (a live op answers submitted /
+#: queued, so 24 h of not_found is not a real state) stops being tracked.
+STALE_MAX_AGE_S: float = 24 * 3600.0
 #: Bound for a wait on someone else's op (foreign nonce holder / deployment).
 FOREIGN_WAIT_S: float = 15.0
 
@@ -1131,6 +1134,18 @@ async def _settle_pending(
                     gone_first = _now()
                 await _sleep(_poll_delay(0.0))
                 continue
+            if fate.kind == "gone" and not fate.terminal:
+                # Only "not_found": a lagging index (or a replacement that has not
+                # mined yet) says it too. NOT proof, so the facts are neither
+                # released nor re-sent. Keep tracking the record as stale: a later
+                # gate re-checks it and releases / re-sends only on proof.
+                logger.warning(
+                    "write %s: the bundler no longer knows it but that is not proof; "
+                    "tracking it as stale (facts %s)", rec.hashes[-1], rec.fact_ids,
+                )
+                _drop_record(_pending, key, rec)
+                _stale.setdefault(key, []).append(rec)
+                break
             if fate.kind in ("dead", "gone"):
                 proven = fate.kind == "dead" or fate.terminal
                 if fate.kind == "dead":
@@ -1178,6 +1193,13 @@ async def _settle_pending(
             await _sleep(_poll_delay(now - rec.accepted_at))
     # Stale records: one cheap, non-blocking check each.
     for rec in list(_stale.get(key, [])):
+        if _now() - rec.accepted_at > STALE_MAX_AGE_S:
+            logger.error(
+                "stale write %s unresolved after %.0f h; no longer tracked (facts %s)",
+                rec.hashes[-1], (_now() - rec.accepted_at) / 3600, rec.fact_ids,
+            )
+            _drop_record(_stale, key, rec)
+            continue
         try:
             fate = await resolve_fate(http, ctx, rec.hashes, rec.nonce, rec.sent_block)
         except Exception as e:
@@ -1189,6 +1211,8 @@ async def _settle_pending(
             if fate.success is False:
                 await _call_on_lost(rec.on_lost, rec.fact_ids)
             _drop_record(_stale, key, rec)
+        elif fate.kind == "gone" and not fate.terminal:
+            continue            # still only not_found: not proof, keep tracking
         elif fate.kind in ("dead", "gone"):
             logger.error(
                 "stale write %s is %s; facts %s were not stored",

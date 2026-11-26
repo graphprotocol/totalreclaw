@@ -810,6 +810,7 @@ async def test_u34_randomized_fault_schedule(monkeypatch, seed):
     w.sim_lag_blocks = rng.choice([0, 0, 1])
     n_writes = rng.randint(3, 7)
     ids_stored: list[bytes] = []
+    reported_lost: set[str] = set()      # facts a gate proved lost and told on_lost about
     errors = 0
     for i in range(n_writes):
         w.send_faults = [rng.choice(_SEND_FAULTS)]
@@ -830,9 +831,10 @@ async def test_u34_randomized_fault_schedule(monkeypatch, seed):
         t0 = w.now()
         try:
             if kind == "single":
-                await one(payload, confirm=rng.choice(["accept", "receipt"]))
+                await one(payload, confirm=rng.choice(["accept", "receipt"]),
+                          on_lost=lambda ids: reported_lost.update(ids))
             else:
-                await many([payload, payload + b"-b"])
+                await many([payload, payload + b"-b"], on_lost=lambda ids: reported_lost.update(ids))
             ids_stored.append(payload)
         except (NothingSentError, UserOpAmbiguousError, UserOpDroppedError, UserOpRevertedError, RuntimeError):
             errors += 1
@@ -847,6 +849,17 @@ async def test_u34_randomized_fault_schedule(monkeypatch, seed):
         seen.add(p)
     # invariant 2: the quota ledger agrees with the op states in the active mode
     w.assert_invariants()
+    # nothing silently missing: every write that returned success either executed, or its
+    # op is still live in the mempool, or is still tracked (pending / stale record)
+    tracked = {h for r in userop.pending_records(S) for h in r.hashes}
+    live = {o.hash for o in w.ops.values() if o.status in ("outstanding", "submitted")}
+    for payload in ids_stored:
+        carriers = [o for o in w.ops.values() if payload in o.payloads]
+        assert (
+            payload in w.executed_payloads
+            or payload.decode(errors="replace") in reported_lost
+            or any(o.hash in tracked or o.hash in live for o in carriers)
+        ), "a write that returned success is neither executed, tracked nor reported lost"
     # invariant 3: a send happens at most _MAX_NONCE_RETRIES times per logical write
     assert w.send_count <= n_writes * userop._MAX_NONCE_RETRIES + 4 * n_writes
 
@@ -927,3 +940,43 @@ async def test_batch_with_only_not_found_is_ambiguous_never_dropped(monkeypatch)
     assert ei.value.fact_ids == ["a", "b"]
     assert len(w.ops) == 1, "same op, same nonce: never rebuilt at another nonce"
     assert len(userop.pending_records(S)) == 1, "still tracked"
+
+
+@pytest.mark.asyncio
+async def test_replaced_then_not_found_is_not_released_until_proof(monkeypatch):
+    """Our accepted op was replaced by a foreign fee bump that has not mined: the
+    bundler says not_found, which is not proof. After the grace the record is kept as
+    stale (nothing released, nothing re-sent); once the foreign op mines the verdict is
+    dead and the write is released and sent again exactly once."""
+    w = make(monkeypatch, bundle_delay=1000)
+    deploy(w)
+    lost: list[list[str]] = []
+    await one(b"pf-a", fact_ids=["a"], on_lost=lambda ids: lost.append(ids))
+    w.inject_foreign(S, 5, fee_mult=1.5)               # replaces ours; nothing mines yet
+    kw = dict(
+        sender=S, relay_url="http://relay.test", auth_key_hex=AUTH, wallet_address=S,
+        chain_id=100, eoa_address="0x" + "22" * 20, eoa_private_key=KEY,
+    )
+    await userop.settle_pending_writes(**kw)           # grace, then stale: no release, no send
+    assert lost == [], "not_found alone releases nothing"
+    assert len(userop.pending_records(S)) == 1 and w.send_count == 1
+    w.bundle_delay = 1
+    w.advance(30)                                      # the foreign op mines: ours is dead
+    await userop.settle_pending_writes(**kw)
+    settle(w)
+    assert lost == [["a"]]
+    assert w.executed_payloads.count(b"pf-a") == 1, "re-sent once on proof"
+    assert [r.resends for r in userop.pending_records(S)] == [1], "only the re-sent op is still tracked"
+
+
+@pytest.mark.asyncio
+async def test_batch_record_gets_no_release_on_bare_not_found(monkeypatch):
+    w = make(monkeypatch, mine_delay=100_000)
+    deploy(w)
+    lost: list = []
+    with pytest.raises(UserOpAmbiguousError):
+        await many([b"bn-a"], fact_ids=["a"], on_lost=lambda ids: lost.append(ids), deadline_s=8)
+    w.status_lies = {"*": 10**6}
+    await userop.settle_pending_writes(
+        sender=S, relay_url="http://relay.test", auth_key_hex=AUTH, wallet_address=S, chain_id=100)
+    assert lost == [] and len(userop.pending_records(S)) == 1
