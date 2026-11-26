@@ -394,6 +394,35 @@ async def test_wrong_chain_rejects_without_persisting_anything(
 
 
 @pytest.mark.asyncio
+async def test_bundle_with_eoa_smart_account_is_not_persisted_and_nacks(
+    isolated_home: Path, fake_keychain, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """internal#679: core accepts smart_account == EOA, but the EOA has no
+    code. The sidecar must write nothing and the relay gets a nack, never an
+    ack carrying the EOA."""
+    from totalreclaw.client import _get_eoa_address
+    from totalreclaw.pair.completion_sidecar import run_sidecar_inline
+
+    eoa = _get_eoa_address(TEST_MNEMONIC)
+    eoa_bundle = totalreclaw_core.derive_bundle_from_mnemonic(TEST_MNEMONIC, 100, "spa", eoa)
+    relay = _BundleRelayStub(token="tok-eoa-bundle")
+    relay.set_bundle_payload("derived-bundle-v1", eoa_bundle.encode("utf-8"))
+    await relay.start()
+    monkeypatch.setenv("TOTALRECLAW_PAIR_RELAY_URL", relay.url)
+    try:
+        await asyncio.to_thread(
+            run_sidecar_inline, handshake_id="sidecar-bundle-eoa", mode="either", relay_url=None
+        )
+    finally:
+        await relay.stop()
+
+    assert not (isolated_home / ".totalreclaw" / "credentials.json").exists()
+    assert len(fake_keychain) == 0
+    assert relay.ack_received is None
+    assert relay.nack_received is not None and relay.nack_received.get("type") == "nack"
+
+
+@pytest.mark.asyncio
 async def test_sidecar_completed_client_never_eagerly_resolves_data_edge(
     isolated_home: Path, fake_keychain, monkeypatch: pytest.MonkeyPatch
 ) -> None:

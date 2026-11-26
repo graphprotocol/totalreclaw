@@ -220,7 +220,11 @@ def _try_eager_resolve_scope_address(credentials_path: Path, mnemonic: str, io: 
 
         try:
             sa = asyncio.run(_derive_smart_account_address(mnemonic))
-        except RuntimeError:
+        except RuntimeError as err:
+            from totalreclaw.client import SmartAccountLookupError
+
+            if isinstance(err, SmartAccountLookupError):
+                raise
             # Already inside an event loop (rare but possible if the wizard is
             # driven programmatically). Fall back to loop.run_until_complete.
             loop = asyncio.new_event_loop()

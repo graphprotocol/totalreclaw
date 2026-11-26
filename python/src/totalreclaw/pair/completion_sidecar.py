@@ -596,6 +596,13 @@ async def _drive_full_pair_session(
                     f"single-chain Gnosis policy)"
                 )
 
+            if bundle.account.smart_account.strip().lower() == bundle.signing.address.strip().lower():
+                # internal#679: core accepts smart_account == EOA; the EOA has
+                # no code, so a bundle carrying it must never be persisted.
+                raise ValueError(
+                    "pair completion: bundle account.smart_account equals the owner EOA"
+                )
+
             secret_subtree = bundle_secret_subtree_json(bundle)
             wrapped_ok = credentials_wrap.wrap_bundle(
                 bundle.account.smart_account, secret_subtree

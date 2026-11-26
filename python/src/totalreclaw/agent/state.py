@@ -568,13 +568,20 @@ class AgentState:
             except AttributeError:
                 pass
 
-        # Unlike configure(), the Smart Account address IS already known
-        # here (bundle mode resolves it at construction — see
-        # TotalReclaw.from_bundle) — safe to log immediately.
-        logger.info(
-            "TotalReclaw configured from derived-bundle-v1: smart_account=%s",
-            self._client.wallet_address,
-        )
+        # Bundle mode usually knows the Smart Account at construction
+        # (TotalReclaw.from_bundle). It does not when the bundle's
+        # smart_account equals the owner EOA (#679): from_bundle then
+        # ignores it and resolves over RPC later, so log "pending".
+        if self._client._address_resolved:
+            logger.info(
+                "TotalReclaw configured from derived-bundle-v1: smart_account=%s",
+                self._client.wallet_address,
+            )
+        else:
+            logger.info(
+                "TotalReclaw configured from derived-bundle-v1: Smart Account "
+                "address pending (the stored one was the EOA; resolving on first use)"
+            )
 
     def is_configured(self) -> bool:
         """Return True if the client is configured and ready."""

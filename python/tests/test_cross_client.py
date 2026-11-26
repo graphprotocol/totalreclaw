@@ -45,12 +45,12 @@ class TestCrossClientPortability:
     @pytest.mark.asyncio
     async def test_same_wallet_address(self):
         """Python derives the same EOA address deterministically."""
-        addr = _derive_smart_account_address(MNEMONIC)
+        addr = await _derive_smart_account_address(MNEMONIC)
         assert addr.startswith("0x")
         assert len(addr) == 42  # 0x + 40 hex chars
 
         # Deterministic: calling again yields the same address
-        addr2 = _derive_smart_account_address(MNEMONIC)
+        addr2 = await _derive_smart_account_address(MNEMONIC)
         assert addr == addr2
 
     @pytest.mark.asyncio

@@ -16,8 +16,10 @@ Legacy parameter names (mnemonic, relay_url) are still accepted for
 backwards compatibility but are deprecated.
 """
 from __future__ import annotations
+import asyncio
 import logging
 import os
+import re
 from typing import TYPE_CHECKING, Optional
 
 import httpx as _httpx
@@ -214,7 +216,9 @@ def _get_eoa_address(mnemonic: str) -> str:
     return _get_eoa_account(mnemonic).address
 
 
-async def _query_smart_account_for_owner(eoa_address: str, rpc_url: str) -> Optional[str]:
+async def _query_smart_account_for_owner(
+    eoa_address: str, rpc_url: str, timeout: float = 15.0
+) -> Optional[str]:
     """``SimpleAccountFactory.getAddress(owner, 0)`` via ``eth_call``.
 
     Returns the lowercased Smart Account address, or ``None`` when the RPC
@@ -235,7 +239,7 @@ async def _query_smart_account_for_owner(eoa_address: str, rpc_url: str) -> Opti
 
     calldata = f"0x{selector}{owner_padded}{salt_padded}"
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             rpc_url,
             json={
@@ -248,46 +252,181 @@ async def _query_smart_account_for_owner(eoa_address: str, rpc_url: str) -> Opti
                 "id": 1,
             },
         )
-        result = resp.json().get("result", "")
-        if not result or result == "0x" or len(result) < 66:
-            return None
-        # Result is ABI-encoded address (32 bytes, last 20 bytes are the address)
-        return ("0x" + result[-40:]).lower()
+        # Result is an ABI-encoded address (32 bytes, last 20 bytes).
+        return _parse_factory_result(resp.json().get("result", ""))
 
 
-async def _derive_smart_account_address(mnemonic: str, rpc_url: str = "https://sepolia.base.org") -> str:
-    """Derive the CREATE2 Smart Account address by querying the factory contract.
+class SmartAccountLookupError(RuntimeError):
+    """The Smart Account address could not be resolved (RPC error, empty or
+    malformed answer).
 
-    Calls SimpleAccountFactory.getAddress(owner, 0) via eth_call on a public RPC.
-    This matches the `toSimpleSmartAccount` logic in permissionless/viem.
-    Falls back to the EOA address when the RPC returns no usable result.
+    Retryable: nothing was cached and nothing was written. The EOA address is
+    NEVER a substitute for the Smart Account: the EOA has no code, so a write
+    sent from it fails, and a read keyed on it returns nothing (internal#679).
     """
-    eoa_address = _get_eoa_address(mnemonic)
-    address = await _query_smart_account_for_owner(eoa_address, rpc_url)
+
+
+# The factory (SimpleAccountFactory v0.7) is deployed at the same address on
+# Gnosis (chain 100) and Base Sepolia (84532) and ``getAddress(owner, 0)`` is a
+# pure CREATE2 view, so every endpoint below returns the same Smart Account for
+# a given owner (verified with a dummy owner on both chains, 2026-11-26). The
+# chain queried only changes reachability, never the answer.
+SA_RPC_ENV = "TOTALRECLAW_SA_RPC_URL"
+_SA_RPC_FALLBACKS = (
+    "https://rpc.gnosischain.com",  # product chain (userop.py maps 100 to this)
+    "https://sepolia.base.org",
+)
+_SA_ATTEMPT_TIMEOUT = 8.0  # seconds per endpoint
+_SA_TOTAL_TIMEOUT = 20.0  # seconds across all endpoints
+
+
+def _smart_account_rpc_urls(rpc_url: Optional[str] = None) -> list[str]:
+    """Ordered RPC endpoints: explicit/configured first, then the fallbacks."""
+    urls: list[str] = []
+    for u in (rpc_url, os.environ.get(SA_RPC_ENV, "").strip() or None, *_SA_RPC_FALLBACKS):
+        if u and u not in urls:
+            urls.append(u)
+    return urls
+
+
+def is_eoa_address(mnemonic: str, address: object) -> bool:
+    """True when ``address`` is the phrase's own EOA (case-insensitive).
+
+    A cached "Smart Account" equal to the EOA is a leftover of the pre-#679
+    fallback and must never be trusted.
+    """
+    if not isinstance(address, str):
+        return False
+    return address.strip().lower() == _get_eoa_address(mnemonic).lower()
+
+
+def _parse_factory_result(result: object) -> Optional[str]:
+    """The address from a ``getAddress`` answer, or ``None`` when malformed.
+
+    Needs a ``0x`` hex string of at least 66 chars (32-byte word) whose last
+    40 hex chars are a non-zero address.
+    """
+    if not isinstance(result, str) or len(result) < 66 or not result.startswith("0x"):
+        return None
+    tail = result[-40:]
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", tail) or int(tail, 16) == 0:
+        return None
+    if not re.fullmatch(r"0x[0-9a-fA-F]+", result):
+        return None
+    return ("0x" + tail).lower()
+
+
+def _endpoint_label(url: str) -> str:
+    from urllib.parse import urlsplit
+
+    return urlsplit(url).hostname or "unknown-host"
+
+
+async def _query_one_endpoint(
+    eoa_address: str, url: str
+) -> "tuple[Optional[str], Optional[BaseException]]":
+    """(address, None) on a usable answer; (None, error-or-None) otherwise.
+    Logs the host and exception class only (never the owner or the phrase)."""
+    try:
+        address = await _query_smart_account_for_owner(
+            eoa_address, url, timeout=_SA_ATTEMPT_TIMEOUT
+        )
+    except Exception as err:  # network error, bad JSON, timeout
+        logger.warning(
+            "Smart Account lookup: endpoint %s failed (%s)",
+            _endpoint_label(url), type(err).__name__,
+        )
+        return None, err
+    if address is None or address == eoa_address.lower():
+        # An answer equal to the owner EOA is never a Smart Account.
+        logger.warning(
+            "Smart Account lookup: endpoint %s returned no usable address",
+            _endpoint_label(url),
+        )
+        return None, None
+    return address, None
+
+
+async def _lookup_over_endpoints(eoa_address: str, urls: list[str]) -> Optional[str]:
+    """Query the first two usable endpoints concurrently.
+
+    Two answers must agree (else :class:`SmartAccountLookupError`); one
+    answer is accepted. The next endpoint is only tried while fewer than two
+    have answered, in order (configured endpoint first).
+    """
+    answers: list[str] = []
+    last_err: Optional[BaseException] = None
+    remaining = list(urls)
+    while remaining and len(answers) < 2:
+        batch = remaining[: 2 - len(answers)]
+        remaining = remaining[len(batch):]
+        for address, err in await asyncio.gather(
+            *(_query_one_endpoint(eoa_address, u) for u in batch)
+        ):
+            if address is not None:
+                answers.append(address)
+            elif err is not None:
+                last_err = err
+    if len(set(answers)) > 1:
+        raise SmartAccountLookupError("Smart Account lookup: endpoints disagree")
+    if answers:
+        return answers[0]
+    if last_err is not None:
+        raise last_err
+    return None
+
+
+async def _derive_smart_account_for_owner(eoa_address: str, rpc_url: Optional[str] = None) -> str:
+    """Smart Account for a known owner EOA (bundle mode has no phrase).
+
+    Tries the configured endpoint (``rpc_url`` or ``TOTALRECLAW_SA_RPC_URL``),
+    then Gnosis, then Base Sepolia, within a bounded total time; the first two
+    usable answers must agree. Fails closed: raises
+    :class:`SmartAccountLookupError`, never returns the EOA.
+    """
+    urls = _smart_account_rpc_urls(rpc_url)
+    try:
+        address = await asyncio.wait_for(
+            _lookup_over_endpoints(eoa_address, urls), timeout=_SA_TOTAL_TIMEOUT
+        )
+    except SmartAccountLookupError:
+        raise
+    except asyncio.TimeoutError as err:
+        raise SmartAccountLookupError(
+            "Smart Account lookup timed out; try again shortly"
+        ) from err
+    except Exception as err:
+        raise SmartAccountLookupError(
+            f"Smart Account lookup failed ({type(err).__name__}); try again shortly"
+        ) from err
     if address is None:
-        # Fallback to EOA if RPC fails
-        return eoa_address.lower()
+        raise SmartAccountLookupError(
+            "Smart Account lookup returned no usable address from any RPC; try again shortly"
+        )
     return address
 
 
-async def derive_smart_account_address_strict(
-    mnemonic: str, rpc_url: str = "https://sepolia.base.org"
-) -> Optional[str]:
-    """Like :func:`_derive_smart_account_address` but never falls back.
+async def _derive_smart_account_address(mnemonic: str, rpc_url: Optional[str] = None) -> str:
+    """Derive the CREATE2 Smart Account address by querying the factory contract.
 
-    Returns ``None`` on ANY failure (RPC error, empty result) instead of the
-    EOA address — for callers that report the address to someone else and
-    must never present the EOA as the Smart Account (e.g. the pair ``ack``
-    frame, which the relay uses to look up billing). The EOA is derived
-    synchronously before the first ``await``, so the phrase is only needed
-    for that instant.
+    Calls SimpleAccountFactory.getAddress(owner, 0) via eth_call; matches the
+    `toSimpleSmartAccount` logic in permissionless/viem. Fails closed: raises
+    :class:`SmartAccountLookupError` and never returns the EOA address
+    (callers that need the EOA call :func:`_get_eoa_address` explicitly).
+    """
+    return await _derive_smart_account_for_owner(_get_eoa_address(mnemonic), rpc_url)
+
+
+async def derive_smart_account_address_strict(
+    mnemonic: str, rpc_url: Optional[str] = None
+) -> Optional[str]:
+    """Like :func:`_derive_smart_account_address` but returns ``None`` on ANY
+    failure instead of raising: for callers that only *report* the address
+    (e.g. the pair ``ack`` frame, which the relay uses to look up billing) and
+    must simply omit it when unknown. Never returns the EOA address.
     """
     try:
-        eoa_address = _get_eoa_address(mnemonic)
-    except Exception:
-        return None
-    try:
-        return await _query_smart_account_for_owner(eoa_address, rpc_url)
+        return await _derive_smart_account_address(mnemonic, rpc_url)
     except Exception:
         return None
 
@@ -431,6 +570,13 @@ class TotalReclaw:
         # We intentionally do NOT fall back to the EOA placeholder here: silently
         # exposing the EOA misled QA tooling in v2.0.0 into querying the subgraph
         # with the wrong address. See DIAG-PYTHON-V2-20260418.md.
+        if wallet_address is not None and wallet_address.strip().lower() == self._eoa_address.lower():
+            # internal#679: a "Smart Account" equal to the EOA is a leftover of
+            # the old RPC-failure fallback. Never trust it: resolve over RPC.
+            logger.warning(
+                "wallet_address equals the EOA address; ignoring it and resolving the Smart Account"
+            )
+            wallet_address = None
         if wallet_address is not None:
             self._wallet_address: Optional[str] = wallet_address.lower()
             self._address_resolved = True
@@ -561,9 +707,21 @@ class TotalReclaw:
         self._signing_priv_key: bytes = bundle.signing.private_key
         self._eoa_address: str = bundle.signing.address
 
-        # account.smart_account is already resolved — no RPC round-trip.
-        self._wallet_address: Optional[str] = bundle.account.smart_account.lower()
-        self._address_resolved = True
+        # account.smart_account is already resolved — no RPC round-trip —
+        # unless it equals the owner EOA (core accepts that, but it is a
+        # leftover of the pre-#679 fallback: the EOA has no code). Then it is
+        # never used: the address is re-resolved over RPC on first use and
+        # fails closed if the lookup fails.
+        if bundle.account.smart_account.strip().lower() == bundle.signing.address.strip().lower():
+            logger.warning(
+                "bundle account.smart_account equals the owner EOA; ignoring it "
+                "and resolving the Smart Account over RPC"
+            )
+            self._wallet_address: Optional[str] = None
+            self._address_resolved = False
+        else:
+            self._wallet_address = bundle.account.smart_account.lower()
+            self._address_resolved = True
 
         self._relay = RelayClient(
             relay_url=resolved_url,
@@ -596,7 +754,10 @@ class TotalReclaw:
         if self._address_resolved and self._wallet_address is not None:
             return self._wallet_address
 
-        self._wallet_address = await _derive_smart_account_address(self._mnemonic)
+        if self._mnemonic is not None:
+            self._wallet_address = await _derive_smart_account_address(self._mnemonic)
+        else:  # bundle mode: only the owner EOA is known
+            self._wallet_address = await _derive_smart_account_for_owner(self._eoa_address)
         self._address_resolved = True
         # Hand the resolved address to the relay through its explicit setter
         # rather than mutating its private ``_wallet_address`` across the seam.

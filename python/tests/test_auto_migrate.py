@@ -671,3 +671,121 @@ def test_register_vault_reports_failure_from_inside_a_running_loop(
         return auto_migrate._register_vault(TEST_MNEMONIC)
 
     assert asyncio.run(driver()) is False
+
+
+# ---------------------------------------------------------------------------
+# internal#679: a failed Smart Account lookup fails closed (no EOA, no bundle)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def failing_sa_rpc(monkeypatch):
+    """The RPC answers nothing usable, through the real derivation function."""
+    import totalreclaw.client as client_mod
+
+    async def _nothing(eoa_address: str, rpc_url: str):
+        return None
+
+    monkeypatch.setattr(client_mod, "_query_smart_account_for_owner", _nothing)
+
+
+def test_failed_sa_lookup_does_not_migrate_or_use_the_eoa(
+    isolated_home: Path, fake_keychain, failing_sa_rpc
+) -> None:
+    creds_path = _write_legacy_plaintext_uncached(isolated_home)
+    before = creds_path.read_text()
+
+    assert auto_migrate._resolve_smart_account(TEST_MNEMONIC, {}) is None
+    assert auto_migrate.maybe_migrate() is False
+
+    # Install left on the legacy path, untouched; retried on the next boot.
+    assert creds_path.read_text() == before
+
+
+def test_eager_resolve_does_not_persist_the_eoa(tmp_path: Path, failing_sa_rpc) -> None:
+    import io as _io
+
+    from totalreclaw.hermes import cli as hermes_cli
+
+    path = tmp_path / "credentials.json"
+    path.write_text(json.dumps({"mnemonic": TEST_MNEMONIC}))
+    before = path.read_text()
+    out, err = _io.StringIO(), _io.StringIO()
+    stub_io = type("IO", (), {"write": lambda self, s: out.write(s),
+                              "write_err": lambda self, s: err.write(s)})()
+
+    hermes_cli._try_eager_resolve_scope_address(path, TEST_MNEMONIC, stub_io)
+
+    assert path.read_text() == before
+    assert "scope_address" not in path.read_text()
+    assert "could not be resolved" in err.getvalue()
+
+
+def _eoa_of_test_mnemonic() -> str:
+    from totalreclaw.client import _get_eoa_address
+
+    return _get_eoa_address(TEST_MNEMONIC)
+
+
+def test_eoa_valued_cache_is_re_resolved(isolated_home, stub_sa_rpc) -> None:
+    creds = {"mnemonic": TEST_MNEMONIC, "scope_address": _eoa_of_test_mnemonic().lower()}
+    assert auto_migrate._resolve_smart_account(TEST_MNEMONIC, creds) == TEST_SMART_ACCOUNT
+    legacy = {"mnemonic": TEST_MNEMONIC, "wallet_address": _eoa_of_test_mnemonic()}
+    assert auto_migrate._resolve_smart_account(TEST_MNEMONIC, legacy) == TEST_SMART_ACCOUNT
+
+
+def test_confirmed_cached_smart_account_is_still_trusted(isolated_home, failing_sa_rpc) -> None:
+    creds = {"scope_address": TEST_SMART_ACCOUNT}
+    assert auto_migrate._resolve_smart_account(TEST_MNEMONIC, creds) == TEST_SMART_ACCOUNT
+
+
+def test_eoa_valued_cache_replaced_by_the_confirmed_account_on_migration(
+    isolated_home: Path, fake_keychain, stub_sa_rpc
+) -> None:
+    path = _creds_dir(isolated_home) / "credentials.json"
+    path.write_text(json.dumps({"mnemonic": TEST_MNEMONIC, "scope_address": _eoa_of_test_mnemonic()}))
+
+    assert auto_migrate.maybe_migrate() is True
+
+    from totalreclaw.bundle import parse_bundle_v1
+
+    v2 = json.loads(path.read_text())
+    secret = json.loads(cw.unwrap_bundle(v2["account"]["smart_account"]))
+    full = {k: v2[k] for k in ("version", "schema", "account", "provisioned_at", "provisioned_by")}
+    full["vault"], full["signing"] = secret["vault"], secret["signing"]
+    bundle = parse_bundle_v1(json.dumps(full))
+    assert bundle.account.smart_account.lower() == TEST_SMART_ACCOUNT.lower()
+    assert bundle.account.smart_account.lower() != _eoa_of_test_mnemonic().lower()
+
+
+def test_eoa_valued_cache_with_rpc_failure_fails_closed(
+    isolated_home: Path, fake_keychain, failing_sa_rpc
+) -> None:
+    path = _creds_dir(isolated_home) / "credentials.json"
+    path.write_text(json.dumps({"mnemonic": TEST_MNEMONIC, "scope_address": _eoa_of_test_mnemonic()}))
+    before = path.read_text()
+
+    assert auto_migrate._resolve_smart_account(TEST_MNEMONIC, json.loads(before)) is None
+    assert auto_migrate.maybe_migrate() is False
+    assert path.read_text() == before  # cache and file unchanged, nothing written
+
+
+def test_migration_refuses_a_bundle_whose_smart_account_is_the_eoa(
+    isolated_home: Path, fake_keychain, monkeypatch
+) -> None:
+    """internal#679 defence in depth: even if the resolver handed back the EOA,
+    core would accept the bundle. Nothing may be persisted and the existing
+    file stays byte-identical."""
+    import totalreclaw.client as client_mod
+
+    path = _creds_dir(isolated_home) / "credentials.json"
+    path.write_text(json.dumps({"mnemonic": TEST_MNEMONIC}))
+    before = path.read_bytes()
+    monkeypatch.setattr(
+        auto_migrate, "_resolve_smart_account", lambda mnemonic, creds: client_mod._get_eoa_address(mnemonic)
+    )
+
+    assert auto_migrate.maybe_migrate() is False
+
+    assert path.read_bytes() == before
+    assert len(fake_keychain) == 0
