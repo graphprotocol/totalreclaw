@@ -540,7 +540,7 @@ async def _drive_full_pair_session(
 
         state = AgentState()
         try:
-            state.configure(phrase)
+            state.configure(phrase, require_save=True) if replace else state.configure(phrase)
             if replace:
                 from totalreclaw.hermes.auto_migrate import (
                     finish_credentials_replace,

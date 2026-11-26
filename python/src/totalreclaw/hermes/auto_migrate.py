@@ -346,6 +346,7 @@ def preserve_credentials_before_replace() -> Optional[ReplacePreservation]:
         data = creds_path.read_bytes()
         fd = os.open(str(dest), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, "wb") as f:
+            os.fchmod(f.fileno(), 0o600)  # os.open's mode is umask-masked
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
@@ -613,6 +614,7 @@ def _do_migrate(creds_path: Path) -> bool:
     try:
         fd = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:  # takes ownership of fd
+            os.fchmod(f.fileno(), 0o600)  # os.open's mode is umask-masked
             f.write(json.dumps(v2_creds, indent=2))
             f.flush()
             os.fsync(f.fileno())

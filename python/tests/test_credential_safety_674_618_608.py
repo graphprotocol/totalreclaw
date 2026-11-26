@@ -209,3 +209,101 @@ def test_doctor_still_fails_on_missing_mnemonic_in_legacy_file(tmp_path, capsys)
     p.write_text(json.dumps({"scope_address": "0x" + "f" * 40}))
     tr_cli.run_doctor(credentials_path=p, relay_url="https://invalid.invalid")
     assert "no mnemonic field" in capsys.readouterr().out
+
+
+def test_doctor_warns_when_bundle_has_no_smart_account(tmp_path, capsys):
+    from totalreclaw import cli as tr_cli
+
+    p = tmp_path / "credentials.json"
+    p.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "schema": "derived-bundle-v1",
+                "account": {"chain_id": 100},
+                "keychain_wrapped": True,
+                "signing": {"kind": "eoa", "address": "0x" + "d" * 40},
+            }
+        )
+    )
+    tr_cli.run_doctor(credentials_path=p, relay_url="https://invalid.invalid")
+    out = capsys.readouterr().out
+    assert "no account.smart_account" in out
+
+
+# --- review fixes: failed save stops the switch, mode, read-only reload ----
+
+
+def _break_replace(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cp.os, "replace", boom)
+
+
+def test_replace_with_failed_save_does_not_switch_account(creds_path, monkeypatch):
+    """The replace sequence used by the pair tool and the sidecar: a failed
+    credentials.json write raises, the in-memory client keeps the old
+    account, the old file and .bak stay, and the stray copy is removed. The
+    raise makes the handler return state=error, which nacks the relay."""
+    from totalreclaw.agent.state import AgentState
+
+    state = AgentState()
+    state.configure(M2)
+    old_eoa = state.get_client().eoa_address
+    bak = creds_path.parent / "credentials.json.bak"
+    bak.write_text('{"mnemonic": "older"}')
+    before = creds_path.read_text()
+
+    kept = am.preserve_credentials_before_replace()
+    _break_replace(monkeypatch)
+    with pytest.raises(RuntimeError):
+        state.configure(M1, require_save=True)
+    monkeypatch.undo()
+    monkeypatch.setenv("TOTALRECLAW_CREDENTIALS_PATH", str(creds_path))
+    am.abort_credentials_replace(kept)
+
+    assert state.get_client().eoa_address == old_eoa
+    assert creds_path.read_text() == before
+    assert bak.exists()
+    assert list(creds_path.parent.glob("*.replaced-*")) == []
+
+
+def test_replace_with_good_save_switches_account(creds_path):
+    from totalreclaw.agent.state import AgentState
+
+    state = AgentState()
+    state.configure(M2)
+    old_eoa = state.get_client().eoa_address
+    state.configure(M1, require_save=True)
+    assert state.get_client().eoa_address != old_eoa
+    assert cp.get_credential_provider().load()
+
+
+@pytest.mark.parametrize("mask", [0o077, 0o000, 0o277])
+def test_credentials_file_mode_is_0600_under_any_umask(creds_path, mask):
+    old = os.umask(mask)
+    try:
+        assert cp.get_credential_provider().save({"mnemonic": "x"})
+        assert stat.S_IMODE(creds_path.stat().st_mode) == 0o600
+        creds_path.write_text('{"mnemonic": "old"}')
+        kept = am.preserve_credentials_before_replace()
+        assert stat.S_IMODE(kept.copy_path.stat().st_mode) == 0o600
+    finally:
+        os.umask(old)
+
+
+def test_reload_does_not_write_credentials(creds_path):
+    from totalreclaw.agent.state import AgentState
+
+    state = AgentState()
+    state.configure(M1)
+    first = state.get_client().eoa_address
+    # Another process replaces the file in a plain (unwrapped) legacy shape.
+    cp.get_credential_provider().save({"recovery_phrase": M2})
+    st = creds_path.stat()
+    before = (st.st_ino, st.st_mtime_ns, creds_path.read_text())
+
+    assert state.get_client().eoa_address != first  # reloaded
+    st = creds_path.stat()
+    assert (st.st_ino, st.st_mtime_ns, creds_path.read_text()) == before

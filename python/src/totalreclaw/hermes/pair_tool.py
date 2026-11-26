@@ -300,7 +300,7 @@ def _run_relay_pair_on_thread(
 
             kept = preserve_credentials_before_replace()
         try:
-            state.configure(phrase)
+            state.configure(phrase, require_save=True) if replace else state.configure(phrase)
             if replace:
                 from .auto_migrate import finish_credentials_replace
 

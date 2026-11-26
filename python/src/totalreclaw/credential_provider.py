@@ -139,6 +139,8 @@ def atomic_write_text(path: Path, text: str) -> None:
     fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:  # takes ownership of fd
+            # os.open's mode is umask-masked; force owner-only explicitly.
+            os.fchmod(f.fileno(), 0o600)
             f.write(text)
             f.flush()
             os.fsync(f.fileno())

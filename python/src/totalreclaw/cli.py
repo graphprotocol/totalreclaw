@@ -225,6 +225,8 @@ def run_doctor(credentials_path: Optional[Path] = None, relay_url: Optional[str]
         cached_sa = account.get("smart_account") if isinstance(account, dict) else None
     if cached_sa and isinstance(cached_sa, str):
         print(_ok(f"Smart Account address cached: {cached_sa}"))
+    elif is_bundle:
+        print(_warn("Smart Account address not checked: credentials.json is a derived bundle with no account.smart_account"))
     elif isinstance(mnemonic, str) and mnemonic.strip():
         # Derive on-the-fly
         try:

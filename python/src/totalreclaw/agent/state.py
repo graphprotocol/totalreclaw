@@ -319,7 +319,7 @@ class AgentState:
         self._env_recall_top_k_override = recall_top_k_env is not None
         self._env_max_facts_override = max_facts_env is not None
 
-    def _try_auto_configure(self) -> None:
+    def _try_auto_configure(self, persist: bool = True) -> None:
         """Try to configure from env vars or config file.
 
         Four-state credential precedence (Option E Phase 2 / #581,
@@ -352,7 +352,7 @@ class AgentState:
                 "that can read this host's environment for as long as it "
                 "is set. See docs/guides/headless-deployment.md."
             )
-            self.configure(mnemonic)
+            self.configure(mnemonic, persist=persist)
             return
 
         # cred-3 stage 3 — route credential discovery through the
@@ -402,7 +402,7 @@ class AgentState:
             logger.warning("%s", str(err))
             return
         if mnemonic:
-            self.configure(mnemonic)
+            self.configure(mnemonic, persist=persist)
 
     def _configure_from_v2_credentials(self, creds: dict) -> None:
         """Build a ``DerivedBundle`` from a ``version: 2`` credentials dict
@@ -463,7 +463,9 @@ class AgentState:
         parsed_bundle = bundle_module.parse_bundle_v1(_json.dumps(full))
         self.configure_from_bundle(parsed_bundle)
 
-    def configure(self, mnemonic: str) -> None:
+    def configure(
+        self, mnemonic: str, *, persist: bool = True, require_save: bool = False
+    ) -> None:
         """Configure the TotalReclaw client with a mnemonic.
 
         Write policy (Bug #7 / Wave 2a):
@@ -475,6 +477,12 @@ class AgentState:
           * Otherwise (file missing, or already has ``mnemonic``), emit
             the canonical ``{"mnemonic": ...}`` shape. Matches what
             plugin 3.2.0 writes, giving cross-client portability.
+
+        ``persist=False`` skips every credentials write (used by the
+        read-only reload path). ``require_save=True`` (replace-mode
+        pairing) makes a failed ``credentials.json`` write raise
+        ``RuntimeError`` BEFORE the in-memory client is switched, so the
+        process never runs on a phrase the file does not hold.
         """
         from totalreclaw.client import TotalReclaw
         # 2.3.3-rc.1 — single-source-of-truth default URL resolution.
@@ -483,7 +491,7 @@ class AgentState:
         from totalreclaw.relay import _default_relay_url
 
         relay_url = self._server_url or _default_relay_url()
-        self._client = TotalReclaw(mnemonic=mnemonic, relay_url=relay_url)
+        new_client = TotalReclaw(mnemonic=mnemonic, relay_url=relay_url)
 
         # cred-3 stage 3 — route the credential write through the
         # credential-provider abstraction. In default ``file`` mode this is
@@ -510,7 +518,7 @@ class AgentState:
                 # untouched (Bug #7 / Wave 2a write policy).
                 should_preserve_legacy = True
 
-        if not should_preserve_legacy:
+        if not should_preserve_legacy and persist:
             if provider.mode == "file":
                 # cred-2 (internal#262): keychain-wrap the mnemonic at rest.
                 # ``wrap_credentials`` stores the phrase in the OS keychain and
@@ -522,12 +530,19 @@ class AgentState:
                 # wrapped on first boot (best-effort, silent on failure).
                 from totalreclaw.credentials_wrap import wrap_credentials
 
-                provider.save(wrap_credentials({"mnemonic": mnemonic}))
+                saved = provider.save(wrap_credentials({"mnemonic": mnemonic}))
+                if require_save and not saved:
+                    raise RuntimeError(
+                        "failed to write credentials.json; the previous "
+                        "account was kept"
+                    )
             else:
                 # ``external`` mode is a no-op (read-only provider) — the
                 # secret manager owns the mnemonic. Do NOT additionally wrap
                 # it into the local keychain (would split the source of truth).
                 provider.save({"mnemonic": mnemonic})
+
+        self._client = new_client
 
         # 2.3.2-rc.1 (#192): clear any stale eager-account-register
         # latch attached by ``totalreclaw.hermes.hooks._eager_account_
@@ -631,7 +646,7 @@ class AgentState:
         self._creds_fingerprint = current
         try:
             old_client = self._client
-            self._try_auto_configure()
+            self._try_auto_configure(persist=False)
             if self._client is not old_client:
                 self._billing_cache = None
                 self._billing_cache_time = 0.0
