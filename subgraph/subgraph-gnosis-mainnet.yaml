@@ -1,17 +1,26 @@
 # PROD — Gnosis mainnet (chain 100). Deploy via `npm run deploy:prod`.
+#
+# Audit 1.1: indexes EventfulDataEdgeV2 (`Log(address indexed sender, bytes)`)
+# ONLY, from its deploy block — a clean break. There is no legacy data source:
+# production is pre-launch and every existing on-chain write is our own test
+# data, so nothing is carried over. Existing production facts drop out of the
+# product when the relay repoints to V2 (intentional).
 specVersion: 0.0.5
-description: TotalReclaw — End-to-end encrypted memory vault subgraph (Gnosis mainnet, test instance)
+description: TotalReclaw — End-to-end encrypted memory vault subgraph (Gnosis mainnet, DataEdge V2, sender-authenticated).
 repository: https://github.com/graphprotocol/totalreclaw
 schema:
   file: ./schema.graphql
 dataSources:
   - kind: ethereum
-    name: EventfulDataEdge
+    name: EventfulDataEdgeV2
     network: gnosis
     source:
-      address: "0xC445af1D4EB9fce4e1E61fE96ea7B8feBF03c5ca"
-      abi: EventfulDataEdge
-      startBlock: 45217698
+      # TODO(deploy): set to the prod V2 address from
+      # `TR_DATAEDGE_V2_TARGET=prod forge script script/DeployDataEdgeV2.s.sol`
+      # and its deploy block. Placeholder until the V2 contract is deployed.
+      address: "0x0000000000000000000000000000000000000000"
+      abi: EventfulDataEdgeV2
+      startBlock: 0
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -21,9 +30,9 @@ dataSources:
         - BlindIndex
         - GlobalState
       abis:
-        - name: EventfulDataEdge
-          file: ./abis/EventfulDataEdge.json
+        - name: EventfulDataEdgeV2
+          file: ./abis/EventfulDataEdgeV2.json
       eventHandlers:
-        - event: Log(bytes)
+        - event: Log(indexed address,bytes)
           handler: handleLog
       file: ./src/mapping.ts
