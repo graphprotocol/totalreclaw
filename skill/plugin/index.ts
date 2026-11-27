@@ -178,6 +178,9 @@ import {
 import { formatQuotaWarning } from './billing/quota-warning.js';
 import {
   ensureMemoryHeaderFile,
+  existingAccountGuard,
+  hasExistingAccount,
+  stripAccountFields,
   loadCredentialsJson,
   writeCredentialsJson,
   deleteCredentialsFile,
@@ -2832,6 +2835,7 @@ const plugin = {
             sessionsPath: CONFIG.pairSessionsPath,
             renderPairingUrl: (session) => buildPairingUrl(api, session),
             logger: api.logger,
+            hasExistingAccount: () => hasExistingAccount(CREDENTIALS_PATH),
             runRelayPairCli: async (cliMode, runOpts) => {
               const { runRelayPairCli } = await import('./pairing/pair-cli-relay.js');
               return runRelayPairCli(cliMode, {
@@ -3169,6 +3173,16 @@ const plugin = {
         initPairMode: 'either',
         validateMnemonic: (p) => validateMnemonic(p, wordlist),
         completePairing: async ({ mnemonic }) => {
+          // Existing-account guard. These routes are `auth: 'plugin'`, so
+          // anyone who can reach the gateway port can start a pairing; an
+          // existing account must never be overwritten from here. A
+          // replacement is operator-only: `openclaw totalreclaw pair --replace`.
+          if (existingAccountGuard(CREDENTIALS_PATH, { replace: false })) {
+            api.logger.warn(
+              'pair: refused to overwrite the existing account. To replace it on purpose, run `openclaw totalreclaw pair --replace` on the gateway host.',
+            );
+            return { state: 'error', error: 'existing_account' };
+          }
           // Write credentials.json + flip state to 'active' via
           // fs-helpers. This centralizes disk I/O off the
           // pair-http surface (scanner isolation).
@@ -3194,7 +3208,9 @@ const plugin = {
             );
           }
           const creds = loadCredentialsJson(CREDENTIALS_PATH) ?? {};
-          const next: typeof creds = { ...creds, mnemonic };
+          // Fresh slate for account fields: nothing of an older account
+          // (salt, address) may be inherited by the new phrase.
+          const next: typeof creds = { ...stripAccountFields(creds), mnemonic };
           if (scopeAddress) next.scope_address = scopeAddress;
           if (!writeCredentialsJson(CREDENTIALS_PATH, next)) {
             return { state: 'error', error: 'credentials_write_failed' };

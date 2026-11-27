@@ -215,10 +215,11 @@ export function loadCredentialsJson(credentialsPath: string): CredentialsFile | 
 }
 
 /**
- * Write `credentials.json` atomically-ish (single `writeFileSync`). Creates
- * the parent directory if missing. Uses mode `0o600` so the file is
- * user-readable only — this file holds the BIP-39 mnemonic and must never
- * be world-readable.
+ * Write `credentials.json` atomically: a temp file in the same directory is
+ * created exclusively (mode `0o600` from the first byte), fsynced, then
+ * renamed over the target. At every instant the path holds either the
+ * complete old file or the complete new one, and a symlinked target is
+ * replaced rather than written through. The temp file is removed on failure.
  *
  * Returns `true` on success, `false` on any I/O error (caller decides
  * whether to surface to user or best-effort log).
@@ -227,13 +228,113 @@ export function writeCredentialsJson(
   credentialsPath: string,
   creds: CredentialsFile,
 ): boolean {
+  const dir = path.dirname(credentialsPath);
+  const tmp = path.join(
+    dir,
+    `.${path.basename(credentialsPath)}.${process.pid}.${Math.random().toString(16).slice(2, 10)}.tmp`,
+  );
   try {
-    const dir = path.dirname(credentialsPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(credentialsPath, JSON.stringify(creds), { mode: 0o600 });
+    const fd = fs.openSync(tmp, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, JSON.stringify(creds));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, credentialsPath);
     return true;
   } catch {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* temp may not exist */
+    }
     return false;
+  }
+}
+
+/**
+ * Is there already an account in `credentials.json`? True when the file
+ * carries a recovery phrase (or its legacy alias), an account `userId`, a
+ * `salt` or `scope_address` (leftovers that would otherwise be inherited by a
+ * new account), or a derived-bundle account. An empty or missing file is "no account". A
+ * non-empty file that does not parse is treated as an account too, so it is
+ * never silently overwritten.
+ */
+export function hasExistingAccount(credentialsPath: string): boolean {
+  let raw: string;
+  try {
+    if (!fs.existsSync(credentialsPath)) return false;
+    raw = fs.readFileSync(credentialsPath, 'utf-8');
+  } catch {
+    return false;
+  }
+  if (!raw.trim()) return false;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown> | null;
+    if (!parsed || typeof parsed !== 'object') return true;
+    const str = (v: unknown): boolean => typeof v === 'string' && v.trim() !== '';
+    return (
+      str(parsed.mnemonic) ||
+      str(parsed.recovery_phrase) ||
+      str(parsed.userId) ||
+      str(parsed.salt) ||
+      str(parsed.scope_address) ||
+      (typeof parsed.account === 'object' && parsed.account !== null)
+    );
+  } catch {
+    return true;
+  }
+}
+
+/** Fields that identify an account. A replace drops all of them so nothing
+ *  from the outgoing account (e.g. its `userId`) lands next to the new phrase. */
+export function stripAccountFields(creds: CredentialsFile): CredentialsFile {
+  const rest: Record<string, unknown> = { ...(creds as Record<string, unknown>) };
+  for (const k of [
+    'mnemonic', 'recovery_phrase', 'userId', 'salt', 'scope_address',
+    'account', 'vault', 'signing', 'schema', 'version', 'keychain_wrapped',
+    'provisioned_at', 'provisioned_by',
+  ]) {
+    delete rest[k];
+  }
+  return rest as CredentialsFile;
+}
+
+/**
+ * Step 1 of an operator-confirmed replacement: copy `credentials.json` to
+ * `credentials.json.replaced-<stamp>` (exclusive create, mode 0600). Copies
+ * only; the original stays in place until the new file is renamed over it.
+ * Returns the copy's path, or `null` when there was nothing to keep. Throws
+ * if the copy cannot be made, so the caller refuses to overwrite.
+ */
+export function preserveCredentialsBeforeReplace(credentialsPath: string): string | null {
+  if (!fs.existsSync(credentialsPath)) return null;
+  const stamp =
+    new Date().toISOString().replace(/[-:]/g, '') + '-' + Math.random().toString(16).slice(2, 8);
+  const dest = `${credentialsPath}.replaced-${stamp}`;
+  const data = fs.readFileSync(credentialsPath);
+  const fd = fs.openSync(dest, 'wx', 0o600);
+  try {
+    fs.writeFileSync(fd, data);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return dest;
+}
+
+/** The replacement failed before the new file was written: drop the copy,
+ *  but only while `credentials.json` is still byte-identical to it. */
+export function discardReplaceCopy(credentialsPath: string, copyPath: string | null): void {
+  if (!copyPath) return;
+  try {
+    if (fs.readFileSync(credentialsPath).equals(fs.readFileSync(copyPath))) {
+      fs.unlinkSync(copyPath);
+    }
+  } catch {
+    /* keep the copy if in doubt */
   }
 }
 
@@ -1225,3 +1326,16 @@ export function checkCredentialsFileMode(
 // per the native-integration design — the auto-pair-on-load state machine
 // that wrote + consumed this sentinel is gone.
 
+
+/**
+ * Guard for every pairing completion: an existing account is only replaced
+ * when replace mode was explicitly requested by the operator. Returns the
+ * error code to hand back to the pairing flow, or `null` when allowed.
+ */
+export function existingAccountGuard(
+  credentialsPath: string,
+  opts: { replace: boolean },
+): 'existing_account' | null {
+  if (opts.replace) return null;
+  return hasExistingAccount(credentialsPath) ? 'existing_account' : null;
+}
