@@ -141,3 +141,11 @@ contracts/account/lib/
 contracts/account/out/
 contracts/account/cache/
 .desloppify/
+
+# Subgraph matchstick vectors (generated from tests/parity/fixtures)
+subgraph/tests/vectors.generated.ts
+
+# matchstick artifacts
+subgraph/tests/.bin/
+subgraph/tests/.docker/
+subgraph/tests/.latest.json

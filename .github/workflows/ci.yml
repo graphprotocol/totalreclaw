@@ -33,6 +33,7 @@ jobs:
       pair-crypto: ${{ steps.filter.outputs.pair-crypto }}
       docs: ${{ steps.filter.outputs.docs }}
       enclave: ${{ steps.filter.outputs.enclave }}
+      subgraph: ${{ steps.filter.outputs.subgraph }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
@@ -60,6 +61,11 @@ jobs:
               - 'scripts/check-docs.sh'
             # The enclave imports the in-repo Python client and core, so
             # changes there must re-run its tests too.
+            subgraph:
+              - 'subgraph/**'
+              - 'tests/parity/fixtures/protobuf-index-scheme-vectors.json'
+              - 'rust/totalreclaw-core/src/protobuf.rs'
+              - 'rust/totalreclaw-core/examples/generate_index_scheme_vectors.rs'
             enclave:
               - 'enclave/**'
               - 'python/**'
@@ -434,6 +440,41 @@ jobs:
           ruff format --check src tests
       - name: Test
         run: cd enclave && python -m pytest tests/ -v
+
+  # Subgraph build + matchstick tests (index_scheme gate, internal#573).
+  # matchstick runs in Docker: graph-cli 0.80 does not recognise Ubuntu 24.04
+  # runners for the native binary. `script` supplies the TTY docker run wants.
+  subgraph-tests:
+    name: Subgraph tests
+    needs: changes
+    if: needs.changes.outputs.subgraph == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Shared protobuf vectors are up to date with the core encoder
+        run: cd rust/totalreclaw-core && cargo run --example generate_index_scheme_vectors -- --check
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Install
+        run: cd subgraph && npm ci --no-audit --no-fund
+      - name: Codegen + build (all three manifests)
+        run: |
+          cd subgraph
+          npx graph codegen
+          npx graph build
+          npx graph build subgraph-gnosis-staging.yaml
+          npx graph build subgraph-gnosis-mainnet.yaml
+      - name: Matchstick tests
+        run: |
+          cd subgraph
+          node scripts/gen-vector-tests.mjs
+          set -o pipefail
+          script -qec "npx graph test -d" /dev/null | tee /tmp/matchstick.log
+          grep -q "tests passed" /tmp/matchstick.log
+          ! grep -qiE "\b[1-9][0-9]* (tests? )?failed" /tmp/matchstick.log
 
   cross-language-parity:
     name: Cross-Language Parity Tests

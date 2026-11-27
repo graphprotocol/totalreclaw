@@ -6,6 +6,13 @@
  * The mapping extracts metadata fields and stores them as Fact records
  * with inverted BlindIndex entities for efficient hash_in queries.
  *
+ * Index scheme gate (internal#573, design v2.1 section 6): the rule is total.
+ * A payload counts only if outer protobuf field 14 (index_scheme) == 1. Anything
+ * else (no field 14, wrong wire type, any other value, truncated) creates no
+ * Fact, no BlindIndex rows and has no tombstone effect. There is no liveness
+ * exception. A marked tombstone for an id this subgraph has never seen is
+ * ignored too (it no longer creates an empty Fact row).
+ *
  * IMPORTANT: The subgraph stores encrypted data. It never sees plaintext.
  * The blind_indices are SHA-256 hashes — the subgraph can match them but
  * cannot reverse them to learn the original content.
@@ -14,7 +21,7 @@
 import { Bytes, BigDecimal, BigInt, log } from "@graphprotocol/graph-ts";
 import { Log } from "../generated/EventfulDataEdge/EventfulDataEdge";
 import { Fact, BlindIndex, GlobalState } from "../generated/schema";
-import { decodeFact, DecodedFact } from "./protobuf";
+import { decodeFact, DecodedFact, isKeyedScheme, isTombstone } from "./protobuf";
 
 const GLOBAL_STATE_ID = "global";
 const INACTIVE_THRESHOLD = BigDecimal.fromString("0.3");
@@ -91,6 +98,16 @@ export function handleLog(event: Log): void {
 
   let decoded = decodeFact(data);
 
+  // Total rule: no field 14 = 1, no effect at all. Checked before anything
+  // else, including the liveness (decayScore) logic below.
+  if (!isKeyedScheme(decoded)) {
+    log.info("Ignoring unmarked payload (index_scheme {}) in tx {}", [
+      decoded.indexScheme.toString(),
+      event.transaction.hash.toHexString()
+    ]);
+    return;
+  }
+
   // Use Protobuf ID or fall back to tx hash + log index
   let factId = decoded.id;
   if (factId == "") {
@@ -100,6 +117,14 @@ export function handleLog(event: Log): void {
   let fact = Fact.load(factId);
   let isNew = fact == null;
   if (fact == null) {
+    // A tombstone cannot create a fact: nothing to deactivate.
+    if (isTombstone(decoded)) {
+      log.info("Ignoring tombstone for unknown fact {} in tx {}", [
+        factId,
+        event.transaction.hash.toHexString()
+      ]);
+      return;
+    }
     fact = new Fact(factId);
   }
 
@@ -118,6 +143,7 @@ export function handleLog(event: Log): void {
   fact!.isActive = decoded.decayScore.ge(INACTIVE_THRESHOLD);
   fact!.contentFp = decoded.contentFp;
   fact!.version = decoded.version;
+  fact!.indexScheme = decoded.indexScheme as i32;
   fact!.blockNumber = event.block.number;
   fact!.timestamp = event.block.timestamp;
   fact!.txHash = event.transaction.hash;

@@ -1,6 +1,7 @@
 """
 TotalReclaw Subgraph Schema v3
 Key change: agentId and source removed — now encrypted inside blob (v3 privacy).
+vNext (internal#573): Fact.indexScheme added; only payloads with protobuf field 14 = 1 are indexed.
 """
 
 type Fact @entity(immutable: false) {
@@ -21,6 +22,8 @@ type Fact @entity(immutable: false) {
   sequenceId: BigInt!
   "Protobuf schema version"
   version: Int!
+  "Blind-index scheme from protobuf field 14. Always 1 (keyed HMAC v1) on this subgraph: payloads without field 14 = 1 are never indexed. Non-null because every indexed row carries it; adding it is additive and does not change any existing query."
+  indexScheme: Int!
   "Block number when this fact was written"
   blockNumber: BigInt!
   "Block timestamp"
